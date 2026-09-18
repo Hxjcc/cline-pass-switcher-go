@@ -1,0 +1,10 @@
+.git
+.github
+data
+web/node_modules
+web/dist
+config.json
+metadata.json
+*.tmp
+Thumbs.db
+.DS_Store

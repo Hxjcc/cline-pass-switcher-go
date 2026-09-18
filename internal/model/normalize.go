@@ -1,0 +1,205 @@
+package model
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+func LoadConfig(path string) (Config, error) {
+	cfg := DefaultConfig()
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		if err := DecodeStrict(raw, &cfg); err != nil {
+			return Config{}, err
+		}
+	} else if !os.IsNotExist(err) {
+		return Config{}, err
+	}
+	applyEnvironment(&cfg)
+	NormalizeConfig(&cfg)
+	return cfg, nil
+}
+
+func LoadMetadata(path string) (Metadata, error) {
+	meta := EmptyMetadata()
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		if err := DecodeStrict(raw, &meta); err != nil {
+			return Metadata{}, err
+		}
+	} else if !os.IsNotExist(err) {
+		return Metadata{}, err
+	}
+	NormalizeMetadata(&meta)
+	return meta, nil
+}
+
+func applyEnvironment(cfg *Config) {
+	if key := strings.TrimSpace(os.Getenv("CLINE_PASS_KEY")); key != "" {
+		found := false
+		for _, account := range cfg.Accounts {
+			if account.Key == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Accounts = append([]Account{{Name: "env-account", Key: key, Enabled: true}}, cfg.Accounts...)
+		}
+	}
+	if key := strings.TrimSpace(os.Getenv("PROXY_KEY")); key != "" {
+		cfg.ProxyKey = key
+	}
+	if baseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); baseURL != "" {
+		cfg.PublicBaseURL = strings.TrimRight(baseURL, "/")
+	}
+	if rawPort := strings.TrimSpace(os.Getenv("PORT")); rawPort != "" {
+		if port, err := strconv.Atoi(rawPort); err == nil && port > 0 && port <= 65535 {
+			cfg.Port = port
+		}
+	}
+}
+
+func NormalizeConfig(cfg *Config) {
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		cfg.Port = 3123
+	}
+	if strings.TrimSpace(cfg.UpstreamBase) == "" {
+		cfg.UpstreamBase = DefaultUpstreamBase
+	}
+	cfg.UpstreamBase = strings.TrimRight(strings.TrimSpace(cfg.UpstreamBase), "/")
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
+
+	if len(cfg.Accounts) == 0 && strings.TrimSpace(cfg.APIKey) != "" {
+		cfg.Accounts = []Account{{Name: "默认账号", Key: strings.TrimSpace(cfg.APIKey), Enabled: true}}
+		cfg.AccountMode = "single"
+		cfg.ActiveAccount = 0
+	}
+	if cfg.AccountMode != "roundrobin" {
+		cfg.AccountMode = "single"
+	}
+	if cfg.ActiveAccount < 0 {
+		cfg.ActiveAccount = 0
+	}
+	if len(cfg.Accounts) == 0 {
+		cfg.ActiveAccount = 0
+	} else if cfg.ActiveAccount >= len(cfg.Accounts) {
+		cfg.ActiveAccount = len(cfg.Accounts) - 1
+	}
+	if cfg.Accounts == nil {
+		cfg.Accounts = []Account{}
+	}
+	if cfg.KnownModels == nil {
+		cfg.KnownModels = append([]string(nil), DefaultKnownModels...)
+	}
+	cfg.KnownModels = uniqueStrings(cfg.KnownModels)
+	// A model that is subscribed again (live request, explicit re-add) wins
+	// over an earlier removal.
+	known := make(map[string]struct{}, len(cfg.KnownModels))
+	for _, id := range cfg.KnownModels {
+		known[id] = struct{}{}
+	}
+	removed := make([]string, 0, len(cfg.RemovedModels))
+	for _, id := range uniqueStrings(cfg.RemovedModels) {
+		if _, found := known[id]; !found {
+			removed = append(removed, id)
+		}
+	}
+	cfg.RemovedModels = removed
+	if cfg.PerModel == nil {
+		cfg.PerModel = map[string]PerModelConfig{}
+	}
+	for id, modelConfig := range cfg.PerModel {
+		if modelConfig.Upstreams == nil && modelConfig.Upstream != "" {
+			modelConfig.Upstreams = []string{modelConfig.Upstream}
+		}
+		modelConfig.Upstreams = uniqueStrings(modelConfig.Upstreams)
+		modelConfig.Exclude = uniqueStrings(modelConfig.Exclude)
+		excluded := make(map[string]struct{}, len(modelConfig.Exclude))
+		for _, upstream := range modelConfig.Exclude {
+			excluded[upstream] = struct{}{}
+		}
+		filtered := make([]string, 0, len(modelConfig.Upstreams))
+		for _, upstream := range modelConfig.Upstreams {
+			if _, found := excluded[upstream]; !found {
+				filtered = append(filtered, upstream)
+			}
+		}
+		modelConfig.Upstreams = filtered
+		if len(modelConfig.Upstreams) > 10 {
+			modelConfig.Upstreams = modelConfig.Upstreams[:10]
+		}
+		if len(modelConfig.Exclude) > 10 {
+			modelConfig.Exclude = modelConfig.Exclude[:10]
+		}
+		if modelConfig.PinMode != "preferred" {
+			modelConfig.PinMode = "strict"
+		}
+		if modelConfig.Sort != nil {
+			switch *modelConfig.Sort {
+			case "cost", "ttft", "tps":
+			default:
+				modelConfig.Sort = nil
+			}
+		}
+		modelConfig.Upstream = ""
+		if len(modelConfig.Upstreams) > 0 {
+			modelConfig.Upstream = modelConfig.Upstreams[0]
+		}
+		cfg.PerModel[id] = modelConfig
+	}
+}
+
+func NormalizeMetadata(meta *Metadata) {
+	if meta.Models == nil {
+		meta.Models = map[string]ModelMeta{}
+	}
+	if meta.History == nil {
+		meta.History = []HistoryEntry{}
+	}
+	if meta.Catalog == nil {
+		meta.Catalog = []string{}
+	}
+	if meta.Stats == nil {
+		meta.Stats = map[string]AccountStats{}
+	}
+	if len(meta.History) > 100 {
+		meta.History = meta.History[:100]
+	}
+	for id, modelMeta := range meta.Models {
+		if modelMeta.UpstreamDetail == nil {
+			modelMeta.UpstreamDetail = map[string]UpstreamDetail{}
+		}
+		if modelMeta.UpstreamStatus == nil {
+			modelMeta.UpstreamStatus = map[string]UpstreamStatus{}
+		}
+		meta.Models[id] = modelMeta
+	}
+}
+
+func EnsureDataDir(dataDir string) error {
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "."
+	}
+	return os.MkdirAll(filepath.Clean(dataDir), 0o755)
+}
+
+func uniqueStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, found := seen[value]; found {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
