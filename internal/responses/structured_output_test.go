@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func strictContext(t *testing.T, schema string) *Context {
@@ -68,7 +70,7 @@ func TestStrictStructuredOutputSchemaSemantics(t *testing.T) {
 				if err != nil || out["status"] != "completed" || responseOutputText(out) != strings.TrimSpace(tc.text) {
 					t.Fatalf("valid output rejected or changed: %#v %v", out, err)
 				}
-				if textFromParts(asMap(asSlice(out["output"])[0])["content"]) != tc.text {
+				if textFromParts(jsonx.Map(jsonx.Slice(out["output"])[0])["content"]) != tc.text {
 					t.Fatal("validation rewrote original text")
 				}
 			} else {

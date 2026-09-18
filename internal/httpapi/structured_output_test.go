@@ -61,7 +61,7 @@ func TestResponsesStrictSchemaEndToEnd(t *testing.T) {
 				}
 				body := fmt.Sprintf(`{"model":"test","input":"hi","stream":%v,%s}`, mode != "buffered", strictOutputFormat)
 				w := httptest.NewRecorder()
-				server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)))
+				server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(body)))
 				if mode == "buffered" {
 					var result map[string]any
 					if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
@@ -116,7 +116,7 @@ func TestInvalidStrictSchemaIsClientError(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","text":{"format":{"type":"json_schema","strict":true,"schema":{"type":"invalid"}}}}`)))
+	server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","text":{"format":{"type":"json_schema","strict":true,"schema":{"type":"invalid"}}}}`)))
 	var result struct {
 		Error struct{ Code, Type, Param string }
 	}

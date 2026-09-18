@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestCustomToolNamespacesRoundTrip(t *testing.T) {
@@ -30,20 +32,20 @@ func TestCustomToolNamespacesRoundTrip(t *testing.T) {
 		}
 		for _, event := range events {
 			if event.Type == "response.output_item.added" || event.Type == "response.output_item.done" {
-				item := asMap(event.Data["item"])
+				item := jsonx.Map(event.Data["item"])
 				if item["namespace"] != namespace || item["name"] != "apply_patch" {
 					t.Fatalf("tool identity lost: %#v", item)
 				}
 			}
 		}
-		response := asMap(events[len(events)-1].Data["response"])
-		input := append(asSlice(response["output"]), map[string]any{"type": "custom_tool_call_output", "call_id": "call1", "output": "done"})
+		response := jsonx.Map(events[len(events)-1].Data["response"])
+		input := append(jsonx.Slice(response["output"]), map[string]any{"type": "custom_tool_call_output", "call_id": "call1", "output": "done"})
 		replay, _, err := ToChat(map[string]any{"model": "test", "tools": tools, "input": input})
 		if err != nil {
 			t.Fatal(err)
 		}
-		call := asMap(asSlice(asMap(asSlice(replay["messages"])[0])["tool_calls"])[0])
-		if asMap(call["function"])["name"] != namespace+"__apply_patch" {
+		call := jsonx.Map(jsonx.Slice(jsonx.Map(jsonx.Slice(replay["messages"])[0])["tool_calls"])[0])
+		if jsonx.Map(call["function"])["name"] != namespace+"__apply_patch" {
 			t.Fatalf("replay selected wrong tool: %#v", call)
 		}
 	}
@@ -59,13 +61,13 @@ func TestRefusalHasDedicatedLifecycleAndReplays(t *testing.T) {
 		events = append(events, state.HandleChunk(map[string]any{"choices": []any{map[string]any{"delta": delta}}})...)
 	}
 	events = append(events, state.Finalize(true, nil)...)
-	response := asMap(events[len(events)-1].Data["response"])
-	output := asSlice(response["output"])
+	response := jsonx.Map(events[len(events)-1].Data["response"])
+	output := jsonx.Slice(response["output"])
 	if response["status"] != "completed" || len(output) != 1 {
 		t.Fatalf("invalid result: %#v", response)
 	}
-	parts := asSlice(asMap(output[0])["content"])
-	if len(parts) != 3 || asMap(parts[0])["text"] != "prefix" || asMap(parts[1])["type"] != "refusal" || asMap(parts[1])["refusal"] != "Cannot comply" || asMap(parts[2])["text"] != "suffix" {
+	parts := jsonx.Slice(jsonx.Map(output[0])["content"])
+	if len(parts) != 3 || jsonx.Map(parts[0])["text"] != "prefix" || jsonx.Map(parts[1])["type"] != "refusal" || jsonx.Map(parts[1])["refusal"] != "Cannot comply" || jsonx.Map(parts[2])["text"] != "suffix" {
 		t.Fatalf("part order or types lost: %#v", parts)
 	}
 	var refusal strings.Builder
@@ -75,12 +77,12 @@ func TestRefusalHasDedicatedLifecycleAndReplays(t *testing.T) {
 			if event.Data["content_index"] != 1 {
 				t.Fatalf("wrong refusal index: %#v", event)
 			}
-			refusal.WriteString(asString(event.Data["delta"]))
+			refusal.WriteString(jsonx.String(event.Data["delta"]))
 		}
 		if event.Type == "response.refusal.done" {
 			seenDone = event.Data["refusal"] == "Cannot comply" && event.Data["content_index"] == 1
 		}
-		if event.Type == "response.output_text.delta" && strings.Contains(asString(event.Data["delta"]), "Cannot") {
+		if event.Type == "response.output_text.delta" && strings.Contains(jsonx.String(event.Data["delta"]), "Cannot") {
 			t.Fatal("refusal became plain text")
 		}
 	}
@@ -91,7 +93,7 @@ func TestRefusalHasDedicatedLifecycleAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := asMap(asSlice(replay["messages"])[0])
+	message := jsonx.Map(jsonx.Slice(replay["messages"])[0])
 	if message["refusal"] != "Cannot comply" || message["content"] != "prefixsuffix" {
 		t.Fatalf("refusal replay flattened: %#v", message)
 	}
@@ -110,10 +112,10 @@ func TestBufferedAndStreamedRefusalMatch(t *testing.T) {
 		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": message, "finish_reason": "stop"}}})
 		adapter := NewStreamAdapter(context)
 		events := adapter.Feed([]byte("data: " + string(chunk) + "\n\ndata: [DONE]\n\n"))
-		streamed := asMap(events[len(events)-1].Data["response"])
-		left := asMap(asSlice(buffered["output"])[0])["content"]
-		right := asMap(asSlice(streamed["output"])[0])["content"]
-		if !reflect.DeepEqual(left, right) || asMap(asSlice(left)[0])["type"] != "refusal" {
+		streamed := jsonx.Map(events[len(events)-1].Data["response"])
+		left := jsonx.Map(jsonx.Slice(buffered["output"])[0])["content"]
+		right := jsonx.Map(jsonx.Slice(streamed["output"])[0])["content"]
+		if !reflect.DeepEqual(left, right) || jsonx.Map(jsonx.Slice(left)[0])["type"] != "refusal" {
 			t.Fatalf("refusal changed: %#v %#v", left, right)
 		}
 	}

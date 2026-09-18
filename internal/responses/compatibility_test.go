@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestToChatPreservesOpaqueToolOutput(t *testing.T) {
@@ -25,7 +27,7 @@ func TestToChatPreservesOpaqueToolOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := asMap(asSlice(chat["messages"])[1])["content"]
+			got := jsonx.Map(jsonx.Slice(chat["messages"])[1])["content"]
 			if got != original {
 				t.Fatalf("tool output changed: want %q, got %q", original, got)
 			}
@@ -58,7 +60,7 @@ func TestToolMediaRetainsWrapperMetadata(t *testing.T) {
 	}
 	for _, value := range []any{encoded, structured} {
 		parts := parseToolOutput(value)
-		if len(parts.Images) != 1 || asMap(asMap(parts.Images[0])["image_url"])["url"] != "data:image/png;base64,QUJD" {
+		if len(parts.Images) != 1 || jsonx.Map(jsonx.Map(parts.Images[0])["image_url"])["url"] != "data:image/png;base64,QUJD" {
 			t.Fatalf("image lost: %#v", parts)
 		}
 		if len(parts.Text) != 2 || parts.Text[0] != " image loaded\n" {
@@ -144,8 +146,8 @@ func TestCompactionPreservesUsersAndOnlyVisibleSummary(t *testing.T) {
 			t.Fatalf("compaction still has generation option %s", key)
 		}
 	}
-	messages := asSlice(chat["messages"])
-	if !strings.Contains(asString(asMap(messages[len(messages)-1])["content"]), "handoff summary") {
+	messages := jsonx.Slice(chat["messages"])
+	if !strings.Contains(jsonx.String(jsonx.Map(messages[len(messages)-1])["content"]), "handoff summary") {
 		t.Fatal("missing explicit summary task")
 	}
 	response, err := CompactionResponse(map[string]any{"choices": []any{map[string]any{
@@ -154,25 +156,25 @@ func TestCompactionPreservesUsersAndOnlyVisibleSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := asSlice(response["output"])
+	output := jsonx.Slice(response["output"])
 	if response["object"] != "response.compaction" || len(output) != 3 {
 		t.Fatalf("invalid compaction output: %#v", response)
 	}
-	if textFromParts(asMap(output[0])["content"]) != "Build a page" || !reflect.DeepEqual(asMap(output[1])["content"], asMap(users[2])["content"]) {
+	if textFromParts(jsonx.Map(output[0])["content"]) != "Build a page" || !reflect.DeepEqual(jsonx.Map(output[1])["content"], jsonx.Map(users[2])["content"]) {
 		t.Fatalf("user messages changed: %#v", output)
 	}
-	item := asMap(output[2])
-	summary, ok := compactionSummaryFromEnvelope(asString(item["encrypted_content"]))
-	if !ok || summary != "Completed page skeleton. Styling pending." || asString(item["id"]) == "" {
+	item := jsonx.Map(output[2])
+	summary, ok := compactionSummaryFromEnvelope(jsonx.String(item["encrypted_content"]))
+	if !ok || summary != "Completed page skeleton. Styling pending." || jsonx.String(item["id"]) == "" {
 		t.Fatalf("invalid summary: %#v", item)
 	}
 	events := CompactionEvents(response, context)
-	completed := asMap(events[len(events)-1].Data["response"])
-	if completed["object"] != "response" || completed["status"] != "completed" || completed["tool_choice"] != "none" || len(asSlice(completed["tools"])) != 0 || asMap(asMap(completed["text"])["format"])["type"] != "text" {
+	completed := jsonx.Map(events[len(events)-1].Data["response"])
+	if completed["object"] != "response" || completed["status"] != "completed" || completed["tool_choice"] != "none" || len(jsonx.Slice(completed["tools"])) != 0 || jsonx.Map(jsonx.Map(completed["text"])["format"])["type"] != "text" {
 		t.Fatalf("streaming compaction describes the wrong generation: %#v", completed)
 	}
 	replay, _, err := ToChat(map[string]any{"model": "test", "input": output})
-	if err != nil || len(asSlice(replay["messages"])) != 3 {
+	if err != nil || len(jsonx.Slice(replay["messages"])) != 3 {
 		t.Fatalf("compaction cannot be replayed: %#v, %v", replay, err)
 	}
 	after, _ := json.Marshal(body)

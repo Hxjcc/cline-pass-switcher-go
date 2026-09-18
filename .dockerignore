@@ -5,6 +5,8 @@ web/node_modules
 web/dist
 config.json
 metadata.json
+store.journal
+.store.lock
 *.tmp
 Thumbs.db
 .DS_Store

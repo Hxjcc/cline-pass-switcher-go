@@ -18,10 +18,18 @@ import (
 // newStreamTestStore wires a store pointing at the given upstream server.
 func newStreamTestStore(t *testing.T, baseURL string) *store.Store {
 	t.Helper()
+	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT"} {
+		t.Setenv(name, "")
+	}
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := st.UpdateConfig(func(cfg *model.Config) {
 		cfg.UpstreamBase = baseURL
 		cfg.Accounts = []model.Account{{Name: "main", Key: "sk_test", Enabled: true}}

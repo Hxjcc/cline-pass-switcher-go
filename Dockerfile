@@ -23,7 +23,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && mkdir -p /data
+    && addgroup -g 10001 app \
+    && adduser -D -H -u 10001 -G app app \
+    && mkdir -p /data \
+    && chown app:app /data
 
 WORKDIR /app
 COPY --from=backend /out/cline-pass-switcher /app/cline-pass-switcher
@@ -34,5 +37,7 @@ ENV PORT=3123
 
 VOLUME ["/data"]
 EXPOSE 3123
+
+USER 10001:10001
 
 ENTRYPOINT ["/app/cline-pass-switcher"]

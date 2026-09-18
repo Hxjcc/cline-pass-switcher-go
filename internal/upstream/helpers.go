@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/apierr"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
 
 const maxResponseBytes = 64 << 20
@@ -45,32 +47,18 @@ type AttemptResult struct {
 	Account model.Account
 }
 
-func asMap(value any) map[string]any {
-	if result, ok := value.(map[string]any); ok {
-		return result
-	}
-	return nil
-}
-
-func asSlice(value any) []any {
-	if result, ok := value.([]any); ok {
-		return result
-	}
-	return nil
-}
-
 func getMap(value map[string]any, key string) map[string]any {
 	if value == nil {
 		return nil
 	}
-	return asMap(value[key])
+	return jsonx.Map(value[key])
 }
 
 func getSlice(value map[string]any, key string) []any {
 	if value == nil {
 		return nil
 	}
-	return asSlice(value[key])
+	return jsonx.Slice(value[key])
 }
 
 func getString(value map[string]any, key string) string {
@@ -114,14 +102,14 @@ func parseModelCapability(value map[string]any, updatedAt int64) model.ModelMeta
 		CapabilityUpdatedAt: updatedAt,
 	}
 	for _, raw := range getSlice(value, "reasoning_options") {
-		option := asMap(raw)
+		option := jsonx.Map(raw)
 		if getString(option, "type") == "effort" {
-			result.ReasoningEfforts = unique(append(result.ReasoningEfforts, getStringSlice(option, "values")...))
+			result.ReasoningEfforts = strx.Unique(append(result.ReasoningEfforts, getStringSlice(option, "values")...))
 		}
 	}
 	modalities := getMap(value, "modalities")
-	result.InputModalities = unique(getStringSlice(modalities, "input"))
-	result.OutputModalities = unique(getStringSlice(modalities, "output"))
+	result.InputModalities = strx.Unique(getStringSlice(modalities, "input"))
+	result.OutputModalities = strx.Unique(getStringSlice(modalities, "output"))
 	limits := getMap(value, "limit")
 	result.ContextWindow = formatInt(limits["context"])
 	result.OutputLimit = formatInt(limits["output"])
@@ -185,31 +173,6 @@ func mergeModelCapability(current model.ModelMeta, capability model.ModelMeta) m
 	return current
 }
 
-func containsID(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
-func unique(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, found := seen[value]; found {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
-}
-
 func errorText(value any) string {
 	switch typed := value.(type) {
 	case nil:
@@ -259,7 +222,7 @@ func reasoningTokensDisabled(body map[string]any) bool {
 	if effort, ok := body["reasoning_effort"].(string); ok && reasoningEffortDisabled(effort) {
 		return true
 	}
-	if reasoning := asMap(body["reasoning"]); reasoning != nil {
+	if reasoning := jsonx.Map(body["reasoning"]); reasoning != nil {
 		if exclude, ok := reasoning["exclude"].(bool); ok && exclude {
 			return true
 		}
@@ -277,7 +240,7 @@ func ensureIncludeReasoning(body map[string]any, meta model.ModelMeta) {
 	if _, found := body["include_reasoning"]; found || reasoningTokensDisabled(body) {
 		return
 	}
-	if body["reasoning_effort"] != nil || asMap(body["reasoning"]) != nil || meta.Reasoning {
+	if body["reasoning_effort"] != nil || jsonx.Map(body["reasoning"]) != nil || meta.Reasoning {
 		body["include_reasoning"] = true
 	}
 }
@@ -301,7 +264,7 @@ func ParseRouting(root map[string]any) Routing {
 	var message map[string]any
 	choices := getSlice(data, "choices")
 	if len(choices) > 0 {
-		message = getMap(asMap(choices[0]), "message")
+		message = getMap(jsonx.Map(choices[0]), "message")
 	}
 	messageMetadata := getMap(message, "provider_metadata")
 	rootMetadata := getMap(data, "provider_metadata")
@@ -442,7 +405,7 @@ func parseAvailableProviders(message string) []string {
 			result = append(result, token)
 		}
 	}
-	return unique(result)
+	return strx.Unique(result)
 }
 
 func parseTier0(plan string) []string {
@@ -459,7 +422,7 @@ func parseTier0(plan string) []string {
 			result = append(result, part)
 		}
 	}
-	return unique(result)
+	return strx.Unique(result)
 }
 
 func (s *Service) fetchJSON(ctx context.Context, method, endpoint string, headers map[string]string, body any, timeout time.Duration) (int, any, error) {

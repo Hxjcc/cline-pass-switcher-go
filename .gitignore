@@ -1,6 +1,8 @@
 # Runtime data and secrets
 config.json
 metadata.json
+store.journal
+.store.lock
 data/
 *.tmp
 .env
@@ -14,6 +16,7 @@ docs/acceptance-*.json
 # Frontend dependencies and coverage
 web/node_modules/
 web/coverage/
+web/.vitest/
 
 # Local build output
 /cline-pass-switcher

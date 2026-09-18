@@ -69,7 +69,7 @@ func TestManualStreamPastLegacy120sDeadline(t *testing.T) {
 	server.upstream.SetStreamHeadTimeout(30 * time.Second)
 	server.upstream.SetStreamIdleTimeout(30 * time.Second)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"keep thinking","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Check, Copy, Eye, EyeOff, Globe2, KeyRound, Save, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { errorMessage } from "@/lib/api"
+import { useDraft } from "@/lib/use-draft"
 import type { SecurityResponse } from "@/types"
 
 interface SecurityPanelProps {
@@ -26,14 +27,10 @@ interface SecurityPanelProps {
 }
 
 export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
-  const [draft, setDraft] = useState(data)
+  const [draft, setDraft] = useDraft(data)
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    setDraft(data)
-  }, [data])
 
   const copyProxyBase = async () => {
     try {

@@ -59,7 +59,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
-		_ = s.store.Record(model.HistoryEntry{
+		s.record(model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(result.Started).Milliseconds(),
 			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
@@ -74,7 +74,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	response, err := responsesbridge.FromChat(result.Out, bridgeContext)
 	if err != nil {
 		message := err.Error()
-		_ = s.store.Record(model.HistoryEntry{
+		s.record(model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, Provider: result.Routing.FinalProvider,
 			Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
@@ -94,7 +94,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)
-	_ = s.store.Record(entry)
+	s.record(entry)
 	writeJSON(writer, http.StatusOK, response)
 }
 
@@ -162,7 +162,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		if message == "" {
 			message = "upstream returned no response"
 		}
-		_ = s.store.Record(model.HistoryEntry{
+		s.record(model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
@@ -194,7 +194,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	compaction, err := responsesbridge.CompactionResponse(result.Out, bridgeContext)
 	if err != nil {
 		message := err.Error()
-		_ = s.store.Record(model.HistoryEntry{
+		s.record(model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
@@ -217,7 +217,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&compactEntry, result.Out, compactEntry.MS)
-	_ = s.store.Record(compactEntry)
+	s.record(compactEntry)
 	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
 	if !stream {
 		setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
@@ -260,13 +260,16 @@ func positiveInt(value any) int {
 }
 
 func writeResponseEvents(writer http.ResponseWriter, sink *responsesbridge.EventWriter, events []responsesbridge.Event) error {
+	controller := http.NewResponseController(writer)
+	defer clearStreamDeadline(writer)
 	for _, event := range events {
+		_ = controller.SetWriteDeadline(time.Now().Add(streamClientWriteTimeout))
 		if err := sink.Write(event); err != nil {
 			return err
 		}
-	}
-	if flusher, ok := writer.(http.Flusher); ok && len(events) > 0 {
-		flusher.Flush()
+		if err := controller.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
 	}
 	return nil
 }

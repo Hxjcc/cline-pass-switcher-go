@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("open data store: %v", err)
 	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Printf("close data store: %v", err)
+		}
+	}()
 	service := upstream.New(st)
 	handler, err := httpapi.New(st, service, webassets.FS())
 	if err != nil {
@@ -30,7 +36,7 @@ func main() {
 	}
 	cfg := st.Config()
 	host := stringsOrDefault(os.Getenv("BIND_HOST"), "127.0.0.1")
-	address := host + ":" + strconv.Itoa(cfg.Port)
+	address := net.JoinHostPort(host, strconv.Itoa(cfg.Port))
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
@@ -42,8 +48,17 @@ func main() {
 		log.Print("[提示] 尚未配置上游 API Key：打开控制台“账号管理”添加账号并保存即可；服务已启动。")
 	}
 	go func() {
-		log.Printf("Cline Pass 上游控制台: http://127.0.0.1:%d/", cfg.Port)
-		log.Printf("OpenAI 兼容代理地址: http://127.0.0.1:%d/v1", cfg.Port)
+		log.Printf("HTTP 监听地址: %s", address)
+		base := cfg.PublicBaseURL
+		if base == "" {
+			accessHost := host
+			if host == "0.0.0.0" || host == "::" {
+				accessHost = "127.0.0.1"
+			}
+			base = "http://" + net.JoinHostPort(accessHost, strconv.Itoa(cfg.Port))
+		}
+		log.Printf("Cline Pass 上游控制台访问地址: %s/", base)
+		log.Printf("OpenAI 兼容代理地址: %s/v1", base)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen: %v", err)
 		}

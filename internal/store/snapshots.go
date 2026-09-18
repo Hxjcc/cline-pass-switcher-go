@@ -43,6 +43,12 @@ func (s *Store) ProxyKey() string {
 	return s.config.ProxyKey
 }
 
+func (s *Store) AccessSettings() (key, publicBase string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.ProxyKey, s.config.PublicBaseURL
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

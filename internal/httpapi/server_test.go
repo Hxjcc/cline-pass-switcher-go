@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,12 +20,28 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
+// Production only permits loopback hosts before a proxy key is configured.
+func localRequest(method, target string, body io.Reader) *http.Request {
+	if strings.HasPrefix(target, "/") {
+		target = "http://localhost" + target
+	}
+	return httptest.NewRequest(method, target, body)
+}
+
 func newTestServer(t *testing.T) (*store.Store, *Server) {
 	t.Helper()
+	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT"} {
+		t.Setenv(name, "")
+	}
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := upstream.New(st)
 	assets := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>test</title>"), Mode: 0o644},
@@ -44,21 +61,21 @@ func TestMetaIsPublicAndProtectedRoutesRequireKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metaRequest := httptest.NewRequest(http.MethodGet, "/api/meta", nil)
+	metaRequest := localRequest(http.MethodGet, "/api/meta", nil)
 	metaResponse := httptest.NewRecorder()
 	server.ServeHTTP(metaResponse, metaRequest)
 	if metaResponse.Code != http.StatusOK {
 		t.Fatalf("meta should be public, got %d", metaResponse.Code)
 	}
 
-	unauthorizedRequest := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	unauthorizedRequest := localRequest(http.MethodGet, "/api/models", nil)
 	unauthorizedResponse := httptest.NewRecorder()
 	server.ServeHTTP(unauthorizedResponse, unauthorizedRequest)
 	if unauthorizedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("protected route should reject missing key, got %d", unauthorizedResponse.Code)
 	}
 
-	authorizedRequest := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	authorizedRequest := localRequest(http.MethodGet, "/api/models", nil)
 	authorizedRequest.Header.Set("X-Admin-Key", "secret")
 	authorizedResponse := httptest.NewRecorder()
 	server.ServeHTTP(authorizedResponse, authorizedRequest)
@@ -121,7 +138,7 @@ func TestServerFallsBackAcrossUpstreamsAndRecordsTrace(t *testing.T) {
 	}
 
 	body := strings.NewReader(`{"model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	request := localRequest(http.MethodPost, "/v1/chat/completions", body)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -153,7 +170,7 @@ func TestServerFallsBackAcrossUpstreamsAndRecordsTrace(t *testing.T) {
 
 func TestStaticFallbackServesSPAIndex(t *testing.T) {
 	_, server := newTestServer(t)
-	request := httptest.NewRequest(http.MethodGet, "/models/cline-pass/test", nil)
+	request := localRequest(http.MethodGet, "/models/cline-pass/test", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -176,7 +193,7 @@ func TestConfigEndpointNormalizesExclude(t *testing.T) {
 	    }
 	  }
 	}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/config", body)
+	request := localRequest(http.MethodPost, "/api/config", body)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -203,7 +220,7 @@ func TestRemoveModelDropsSubscriptionConfigAndMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/models/remove", strings.NewReader(`{"model":"`+modelID+`"}`))
+	request := localRequest(http.MethodPost, "/api/models/remove", strings.NewReader(`{"model":"`+modelID+`"}`))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -211,20 +228,20 @@ func TestRemoveModelDropsSubscriptionConfigAndMeta(t *testing.T) {
 	}
 
 	config := st.Config()
-	if containsString(config.KnownModels, modelID) {
+	if slices.Contains(config.KnownModels, modelID) {
 		t.Fatal("model should leave the subscription list")
 	}
 	if _, found := config.PerModel[modelID]; found {
 		t.Fatal("pin configuration should be dropped with the model")
 	}
-	if !containsString(config.RemovedModels, modelID) {
+	if !slices.Contains(config.RemovedModels, modelID) {
 		t.Fatal("removal should be remembered for the official sync")
 	}
 	if _, found := st.Metadata().Models[modelID]; found {
 		t.Fatal("probe data should be dropped with the model")
 	}
 
-	listRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	listRequest := localRequest(http.MethodGet, "/v1/models", nil)
 	listResponse := httptest.NewRecorder()
 	server.ServeHTTP(listResponse, listRequest)
 	if strings.Contains(listResponse.Body.String(), modelID) {
@@ -237,17 +254,17 @@ func TestRemoveModelDropsSubscriptionConfigAndMeta(t *testing.T) {
 	if err := st.Record(model.HistoryEntry{TS: 1, Model: modelID, MS: 5, Error: &failure}); err != nil {
 		t.Fatal(err)
 	}
-	if containsString(st.Config().KnownModels, modelID) {
+	if slices.Contains(st.Config().KnownModels, modelID) {
 		t.Fatal("a failed request should not re-subscribe a removed model")
 	}
 	if err := st.Record(model.HistoryEntry{TS: 2, Model: modelID, MS: 5, Stream: true}); err != nil {
 		t.Fatal(err)
 	}
 	config = st.Config()
-	if !containsString(config.KnownModels, modelID) {
+	if !slices.Contains(config.KnownModels, modelID) {
 		t.Fatal("a successful request should re-subscribe the model")
 	}
-	if containsString(config.RemovedModels, modelID) {
+	if slices.Contains(config.RemovedModels, modelID) {
 		t.Fatal("re-subscribing should clear the removal")
 	}
 }
@@ -257,7 +274,7 @@ func TestClearHistoryKeepsAccountStats(t *testing.T) {
 	if err := st.Record(model.HistoryEntry{TS: 1, Model: "cline-pass/test", MS: 5, Account: "账号1"}); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/history/clear", nil)
+	request := localRequest(http.MethodPost, "/api/history/clear", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -274,7 +291,7 @@ func TestClearHistoryKeepsAccountStats(t *testing.T) {
 
 func TestModelsEndpointDoesNotLimitSubscriptionModels(t *testing.T) {
 	_, server := newTestServer(t)
-	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request := localRequest(http.MethodGet, "/v1/models", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -362,7 +379,7 @@ func TestResponsesEndpointConvertsRequestAndResponse(t *testing.T) {
 	    {"type":"input_image","image_url":"data:image/png;base64,AAAA","detail":"high"}
 	  ]}]
 	}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", body)
+	request := localRequest(http.MethodPost, "/v1/responses", body)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -390,7 +407,7 @@ func TestSingularResponsePathIsNotRouted(t *testing.T) {
 	_, server := newTestServer(t)
 	for _, path := range []string{"/response", "/v1/response", "/api/v1/response"} {
 		response := httptest.NewRecorder()
-		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test","input":"hi"}`)))
+		server.ServeHTTP(response, localRequest(http.MethodPost, path, strings.NewReader(`{"model":"test","input":"hi"}`)))
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("%s should not be a Responses alias: %d %s", path, response.Code, response.Body.String())
 		}
@@ -424,7 +441,7 @@ func TestStreamingResponsesEndpointEmitsResponsesEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"hello","stream":true,"reasoning":{"effort":"high"}
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -490,7 +507,7 @@ func TestStreamingResponsesReplaysBufferedCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"hello","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -542,7 +559,7 @@ func TestStreamingChatSynthesizesChunkFromBufferedCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 	  "model":"cline-pass/test","messages":[{"role":"user","content":"hello"}],"stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -634,7 +651,7 @@ func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+			request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 			  "model":"cline-pass/test","input":"share-me","stream":true,"reasoning":{"effort":"low"}
 			}`))
 			request.Header.Set("Content-Type", "application/json")
@@ -699,7 +716,7 @@ func TestStreamingResponsesFailsOverToHealthyAccountOn401(t *testing.T) {
 	}
 
 	send := func() *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+		request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 		  "model":"cline-pass/test","input":"hello","stream":true
 		}`))
 		request.Header.Set("Content-Type", "application/json")
@@ -751,7 +768,7 @@ func TestNonStreamChainStopsOnAuthFailureWithoutAlternateAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 	  "model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -809,7 +826,7 @@ func TestStreamingResponsesOutlivesIdleWindowWhileDataFlows(t *testing.T) {
 	server.upstream.SetStreamHeadTimeout(200 * time.Millisecond)
 	server.upstream.SetStreamIdleTimeout(120 * time.Millisecond)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"think for a while","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -866,7 +883,7 @@ func TestStreamingResponsesEmitsKeepaliveDuringUpstreamSilence(t *testing.T) {
 	server.upstream.SetStreamHeadTimeout(2 * time.Second)
 	server.upstream.SetStreamIdleTimeout(900 * time.Millisecond)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"think silently","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -916,7 +933,7 @@ func TestStreamingChatEmitsKeepaliveDuringUpstreamSilence(t *testing.T) {
 	server.upstream.SetStreamHeadTimeout(2 * time.Second)
 	server.upstream.SetStreamIdleTimeout(900 * time.Millisecond)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 	  "model":"cline-pass/test","messages":[{"role":"user","content":"think silently"}],"stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -963,7 +980,7 @@ func TestResponsesCompactEndpointWrapsChatSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"summarize the conversation"
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -1007,7 +1024,7 @@ func TestResponsesCompactStreamEmitsCompactionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"summarize the conversation","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -1056,7 +1073,7 @@ func TestResponsesCompactUsesMinimumOutputBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"summarize"
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -1104,7 +1121,7 @@ func TestResponsesReasoningEffortMappingIsForwardedAndVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"hi","reasoning":{"effort":"max"},"max_output_tokens":32
 	}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -1164,7 +1181,7 @@ func TestResponsesPreservesUpstreamErrorDetails(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+			request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 			  "model":"cline-pass/test","input":"hi"
 			}`))
 			request.Header.Set("Content-Type", "application/json")
@@ -1205,7 +1222,7 @@ func TestStreamingResponsesPreservesUpstreamErrorDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 	  "model":"cline-pass/test","input":"hi","stream":true
 	}`))
 	request.Header.Set("Content-Type", "application/json")

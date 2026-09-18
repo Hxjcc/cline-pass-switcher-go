@@ -26,6 +26,9 @@ var DefaultKnownModels = []string{
 }
 
 type Account struct {
+	// ID identifies one account across renames and reordering. It is assigned
+	// on load for configurations written before the field existed.
+	ID      string `json:"id,omitempty"`
 	Name    string `json:"name"`
 	Key     string `json:"key"`
 	Enabled bool   `json:"enabled"`
@@ -33,6 +36,7 @@ type Account struct {
 
 func (a *Account) UnmarshalJSON(data []byte) error {
 	type accountAlias struct {
+		ID      string `json:"id"`
 		Name    string `json:"name"`
 		Key     string `json:"key"`
 		Enabled *bool  `json:"enabled"`
@@ -41,6 +45,7 @@ func (a *Account) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	a.ID = raw.ID
 	a.Name = raw.Name
 	a.Key = raw.Key
 	a.Enabled = true
@@ -59,16 +64,16 @@ type PerModelConfig struct {
 }
 
 type Config struct {
-	Port          int                       `json:"port"`
-	APIKey        string                    `json:"apiKey,omitempty"`
-	ProxyKey      string                    `json:"proxyKey"`
-	PublicBaseURL string                    `json:"publicBaseUrl"`
-	ExposeCatalog bool                      `json:"exposeCatalog"`
-	UpstreamBase  string                    `json:"upstreamBase"`
-	Accounts      []Account                 `json:"accounts"`
-	AccountMode   string                    `json:"accountMode"`
-	ActiveAccount int                       `json:"activeAccount"`
-	KnownModels   []string                  `json:"knownModels"`
+	Port          int       `json:"port"`
+	APIKey        string    `json:"apiKey,omitempty"`
+	ProxyKey      string    `json:"proxyKey"`
+	PublicBaseURL string    `json:"publicBaseUrl"`
+	ExposeCatalog bool      `json:"exposeCatalog"`
+	UpstreamBase  string    `json:"upstreamBase"`
+	Accounts      []Account `json:"accounts"`
+	AccountMode   string    `json:"accountMode"`
+	ActiveAccount int       `json:"activeAccount"`
+	KnownModels   []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
@@ -175,6 +180,8 @@ type OfficialFetch struct {
 }
 
 type Metadata struct {
+	// Last durable journal entry included in this snapshot.
+	StoreSequence       uint64                  `json:"storeSequence,omitempty"`
 	Models              map[string]ModelMeta    `json:"models"`
 	History             []HistoryEntry          `json:"history"`
 	Catalog             []string                `json:"catalog"`

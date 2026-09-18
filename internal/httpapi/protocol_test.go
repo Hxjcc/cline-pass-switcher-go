@@ -31,7 +31,7 @@ func TestUnsupportedResponsesNeverReachUpstream(t *testing.T) {
 			`{"model":"test","input":[{"role":"user","content":[{"type":"input_file","file_id":"file_123"}]}]}`,
 		} {
 			w := httptest.NewRecorder()
-			server.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+			server.ServeHTTP(w, localRequest("POST", path, strings.NewReader(body)))
 			var payload struct {
 				Error struct{ Type, Code, Param string }
 			}
@@ -91,7 +91,7 @@ func TestGreetingWithAutomaticallyAdvertisedWebSearch(t *testing.T) {
 			tools = append(tools, map[string]any{"type": "web_search"})
 			body, _ := json.Marshal(map[string]any{"model": "test", "input": "你好", "tools": tools, "tool_choice": "auto", "stream": stream})
 			w := httptest.NewRecorder()
-			server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(string(body))))
+			server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(string(body))))
 			if w.Code != 200 || !strings.Contains(w.Body.String(), "你好！") || hits.Load() != 1 {
 				t.Fatalf("greeting blocked: %d %s hits=%d", w.Code, w.Body.String(), hits.Load())
 			}

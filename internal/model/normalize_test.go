@@ -49,6 +49,30 @@ func TestLoadConfigMigratesLegacyFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigAssignsStableAccountIDs(t *testing.T) {
+	config := DefaultConfig()
+	config.APIKey = "legacy-key"
+	NormalizeConfig(&config)
+	if len(config.Accounts) != 1 || config.Accounts[0].ID == "" {
+		t.Fatalf("expected an identity for the migrated account: %#v", config.Accounts)
+	}
+	assigned := config.Accounts[0].ID
+	NormalizeConfig(&config)
+	if config.Accounts[0].ID != assigned {
+		t.Fatalf("identity must survive repeated normalization: %#v", config.Accounts)
+	}
+	config.Accounts = append(config.Accounts, Account{ID: assigned, Name: "copy", Key: "other"})
+	NormalizeConfig(&config)
+	if len(config.Accounts) != 2 {
+		t.Fatalf("accounts lost: %#v", config.Accounts)
+	}
+	if config.Accounts[0].ID != assigned {
+		t.Fatalf("first identity changed: %#v", config.Accounts)
+	}
+	if config.Accounts[1].ID == "" || config.Accounts[1].ID == assigned {
+		t.Fatalf("duplicate identity was not replaced: %#v", config.Accounts)
+	}
+}
 func TestNormalizeConfigExcludeWins(t *testing.T) {
 	sortMode := "tps"
 	config := DefaultConfig()

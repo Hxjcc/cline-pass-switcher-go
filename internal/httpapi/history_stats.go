@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
 )
 
 // streamStats is fed by the goroutine pumping the upstream stream and read
@@ -14,7 +16,7 @@ import (
 type streamStats struct {
 	mu           sync.Mutex
 	started      time.Time
-	buf          string
+	parser       sse.Parser
 	firstTokenAt time.Time
 	usage        *model.UsageStats
 	finishReason string
@@ -30,17 +32,12 @@ func (stats *streamStats) Observe(data []byte) {
 	}
 	stats.mu.Lock()
 	defer stats.mu.Unlock()
-	stats.buf += string(data)
-	stats.buf = strings.ReplaceAll(stats.buf, "\r\n", "\n")
-	for {
-		index := strings.Index(stats.buf, "\n\n")
-		if index < 0 {
-			break
-		}
-		block := stats.buf[:index]
-		stats.buf = stats.buf[index+2:]
+	// The protocol parser owns reporting oversize errors. Statistics stop
+	// collecting after the same bound is exceeded, without retaining the input.
+	_ = stats.parser.Feed(data, func(block string) bool {
 		stats.consumeBlock(block)
-	}
+		return true
+	})
 }
 
 func (stats *streamStats) TTFTMs() int64 {
@@ -95,7 +92,7 @@ func (stats *streamStats) consumeChunk(chunk map[string]any) {
 	if usage := usageFromValue(chunk["usage"]); usage != nil {
 		stats.usage = usage
 	}
-	if nested := statsMap(chunk["response"]); nested != nil {
+	if nested := jsonx.Map(chunk["response"]); nested != nil {
 		if usage := usageFromValue(nested["usage"]); usage != nil {
 			stats.usage = usage
 		}
@@ -175,26 +172,26 @@ func effortFromChatBody(body map[string]any) string {
 	if body == nil {
 		return ""
 	}
-	if value := strings.TrimSpace(statsString(body["reasoning_effort"])); value != "" {
+	if value := strings.TrimSpace(jsonx.String(body["reasoning_effort"])); value != "" {
 		return value
 	}
-	return strings.TrimSpace(statsString(statsMap(body["reasoning"])["effort"]))
+	return strings.TrimSpace(jsonx.String(jsonx.Map(body["reasoning"])["effort"]))
 }
 
 func usageFromValue(value any) *model.UsageStats {
-	usage := statsMap(value)
+	usage := jsonx.Map(value)
 	if usage == nil {
 		return nil
 	}
 	prompt := firstInt64(usage["prompt_tokens"], usage["input_tokens"])
 	completion := firstInt64(usage["completion_tokens"], usage["output_tokens"])
 	cached := firstInt64(
-		statsMap(usage["prompt_tokens_details"])["cached_tokens"],
-		statsMap(usage["input_tokens_details"])["cached_tokens"],
+		jsonx.Map(usage["prompt_tokens_details"])["cached_tokens"],
+		jsonx.Map(usage["input_tokens_details"])["cached_tokens"],
 	)
 	reasoning := firstInt64(
-		statsMap(usage["completion_tokens_details"])["reasoning_tokens"],
-		statsMap(usage["output_tokens_details"])["reasoning_tokens"],
+		jsonx.Map(usage["completion_tokens_details"])["reasoning_tokens"],
+		jsonx.Map(usage["output_tokens_details"])["reasoning_tokens"],
 	)
 	total := int64Value(usage["total_tokens"])
 	if total == 0 {
@@ -220,9 +217,9 @@ func usageFromValue(value any) *model.UsageStats {
 }
 
 func finishReasonFromChat(value map[string]any) string {
-	for _, raw := range statsSlice(value["choices"]) {
-		choice := statsMap(raw)
-		reason := strings.TrimSpace(statsString(choice["finish_reason"]))
+	for _, raw := range jsonx.Slice(value["choices"]) {
+		choice := jsonx.Map(raw)
+		reason := strings.TrimSpace(jsonx.String(choice["finish_reason"]))
 		if reason != "" && reason != "null" {
 			return reason
 		}
@@ -231,12 +228,12 @@ func finishReasonFromChat(value map[string]any) string {
 }
 
 func chatChunkHasToken(chunk map[string]any) bool {
-	if hasOutputToken(statsMap(chunk["delta"])) || hasOutputToken(statsMap(chunk["message"])) {
+	if hasOutputToken(jsonx.Map(chunk["delta"])) || hasOutputToken(jsonx.Map(chunk["message"])) {
 		return true
 	}
-	for _, raw := range statsSlice(chunk["choices"]) {
-		choice := statsMap(raw)
-		if hasOutputToken(statsMap(choice["delta"])) || hasOutputToken(statsMap(choice["message"])) {
+	for _, raw := range jsonx.Slice(chunk["choices"]) {
+		choice := jsonx.Map(raw)
+		if hasOutputToken(jsonx.Map(choice["delta"])) || hasOutputToken(jsonx.Map(choice["message"])) {
 			return true
 		}
 	}
@@ -247,19 +244,19 @@ func hasOutputToken(object map[string]any) bool {
 	if object == nil {
 		return false
 	}
-	if strings.TrimSpace(statsString(object["content"])) != "" {
+	if strings.TrimSpace(jsonx.String(object["content"])) != "" {
 		return true
 	}
-	if strings.TrimSpace(statsString(object["reasoning"])) != "" {
+	if strings.TrimSpace(jsonx.String(object["reasoning"])) != "" {
 		return true
 	}
-	if strings.TrimSpace(statsString(object["reasoning_content"])) != "" {
+	if strings.TrimSpace(jsonx.String(object["reasoning_content"])) != "" {
 		return true
 	}
-	if strings.TrimSpace(statsString(object["refusal"])) != "" {
+	if strings.TrimSpace(jsonx.String(object["refusal"])) != "" {
 		return true
 	}
-	if len(statsSlice(object["tool_calls"])) > 0 {
+	if len(jsonx.Slice(object["tool_calls"])) > 0 {
 		return true
 	}
 	switch typed := object["content"].(type) {
@@ -279,21 +276,6 @@ func hasOutputToken(object map[string]any) bool {
 		return strings.TrimSpace(typed) != ""
 	}
 	return false
-}
-
-func statsMap(value any) map[string]any {
-	result, _ := value.(map[string]any)
-	return result
-}
-
-func statsSlice(value any) []any {
-	result, _ := value.([]any)
-	return result
-}
-
-func statsString(value any) string {
-	result, _ := value.(string)
-	return result
 }
 
 func int64Value(value any) int64 {
