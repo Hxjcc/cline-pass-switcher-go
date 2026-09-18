@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Eye, EyeOff, KeyRound, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -25,6 +25,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { errorMessage } from "@/lib/api"
+import { useDraft } from "@/lib/use-draft"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Account, AccountTestResponse, AccountsResponse } from "@/types"
@@ -35,6 +36,7 @@ interface AccountsPanelProps {
   data: AccountsResponse
   onSave: (value: AccountsResponse) => Promise<void>
   onTest: (key: string) => Promise<AccountTestResponse>
+  onReveal: () => Promise<AccountsResponse>
 }
 
 // Base UI renders the raw value in the trigger unless it knows the labels.
@@ -43,15 +45,13 @@ const modeItems: Record<AccountsResponse["mode"], string> = {
   roundrobin: "账号池轮询",
 }
 
-export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
-  const [draft, setDraft] = useState<AccountsResponse>(data)
+export function AccountsPanel({ data, onSave, onTest, onReveal }: AccountsPanelProps) {
+  const [draft, setDraft] = useDraft(data)
   const [showKeys, setShowKeys] = useState(false)
+  const [revealed, setRevealed] = useState<Record<string, string>>({})
+  const [revealing, setRevealing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<number | null>(null)
-
-  useEffect(() => {
-    setDraft(data)
-  }, [data])
 
   const updateAccount = (index: number, patch: Partial<Account>) => {
     setDraft((current) => ({
@@ -67,7 +67,14 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
       ...current,
       accounts: [
         ...current.accounts,
-        { name: `账号${current.accounts.length + 1}`, key: "", enabled: true },
+        {
+          id: "",
+          name: `账号${current.accounts.length + 1}`,
+          key: "",
+          keyPreview: "",
+          hasKey: false,
+          enabled: true,
+        },
       ],
     }))
   }
@@ -84,13 +91,16 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
   }
 
   const save = async () => {
-    if (!draft.accounts.some((account) => account.key.trim())) {
-      toast.error("至少需要一个 key 非空的账号")
+    // Rows the user left untouched keep their stored key, so only accounts
+    // that never had one are dropped here.
+    const accounts = draft.accounts.filter((account) => account.key.trim() || account.hasKey)
+    if (!accounts.length) {
+      toast.error("至少需要一个填写了 key 的账号")
       return
     }
     setSaving(true)
     try {
-      await onSave({ ...draft, accounts: draft.accounts.filter((account) => account.key.trim()) })
+      await onSave({ ...draft, accounts })
       toast.success("账号池已保存")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -101,13 +111,14 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
 
   const testAccount = async (index: number) => {
     const account = draft.accounts[index]
-    if (!account.key.trim()) {
-      toast.error("请先填写该账号的 Key")
+    const key = account.key.trim() || revealed[account.id] || ""
+    if (!key) {
+      toast.error("请先显示该账号的密钥，或填写一个新的 Key")
       return
     }
     setTesting(index)
     try {
-      const result = await onTest(account.key.trim())
+      const result = await onTest(key)
       if (result.ok) {
         toast.success(
           `${account.name || `账号${index + 1}`} 可用 · ${result.ms} ms${result.note ? ` · ${result.note}` : ""}`,
@@ -122,13 +133,40 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
     }
   }
 
+  const toggleKeys = async () => {
+    if (showKeys) {
+      setShowKeys(false)
+      setRevealed({})
+      return
+    }
+    setRevealing(true)
+    try {
+      const response = await onReveal()
+      const keys: Record<string, string> = {}
+      for (const account of response.accounts) {
+        keys[account.id] = account.key
+      }
+      setRevealed(keys)
+      setShowKeys(true)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setRevealing(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>账号池</CardTitle>
         <CardDescription>单账号或轮询模式，所有请求实时读取当前配置。</CardDescription>
         <CardAction className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowKeys((value) => !value)}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={revealing}
+            onClick={() => void toggleKeys()}
+          >
             {showKeys ? <EyeOff data-icon="inline-start" /> : <Eye data-icon="inline-start" />}
             {showKeys ? "隐藏密钥" : "显示密钥"}
           </Button>
@@ -174,7 +212,7 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
           </div>
           <div className="text-muted-foreground flex h-8 -translate-y-1.5 items-center gap-2 text-sm">
             <KeyRound className="size-3.5" />
-            {draft.accounts.filter((account) => account.key).length} 个已配置账号
+            {draft.accounts.filter((account) => account.key || account.hasKey).length} 个已配置账号
           </div>
         </div>
 
@@ -186,7 +224,7 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
               const inPool = draft.mode === "roundrobin" && account.enabled
               return (
                 <div
-                  key={index}
+                  key={account.id || `new-${index}`}
                   className={cn(
                     "flex items-center gap-3 rounded-lg border px-3 py-2.5",
                     isActive && "border-primary/30 bg-primary/[0.04] dark:bg-primary/[0.07]",
@@ -217,10 +255,10 @@ export function AccountsPanel({ data, onSave, onTest }: AccountsPanelProps) {
                         className="h-8 w-36"
                       />
                       <Input
-                        value={account.key}
+                        value={showKeys ? account.key || revealed[account.id] || "" : account.key}
                         type={showKeys ? "text" : "password"}
                         autoComplete="off"
-                        placeholder="Cline API Key"
+                        placeholder={account.hasKey ? `已保存 ${account.keyPreview}` : "Cline API Key"}
                         aria-label="API Key"
                         onChange={(event) => updateAccount(index, { key: event.target.value })}
                         className="h-8 min-w-64 flex-1 font-mono text-xs"

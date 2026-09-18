@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 // Details is the normalized error shape shared by upstream adapters.
@@ -16,11 +18,6 @@ type Details struct {
 	Code    any
 	Param   any
 	Message string
-}
-
-func asMap(value any) map[string]any {
-	result, _ := value.(map[string]any)
-	return result
 }
 
 func StringValue(value any) string {
@@ -173,7 +170,7 @@ func FromBody(root map[string]any, status int) (Details, bool) {
 	if details.Param == nil {
 		details.Param = root["param"]
 	}
-	if base := asMap(root["base_resp"]); base != nil {
+	if base := jsonx.Map(root["base_resp"]); base != nil {
 		found = true
 		if details.Message == "" {
 			details.Message = firstNonEmpty(base["status_msg"], base["message"])

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { KeyRound, LogIn, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -26,13 +26,12 @@ export function LoginDialog({
   const [key, setKey] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-
-  useEffect(() => {
-    if (!open) {
-      setKey("")
-      setError("")
-    }
-  }, [open])
+  const [previousOpen, setPreviousOpen] = useState(open)
+  if (previousOpen !== open) {
+    setPreviousOpen(open)
+    setKey("")
+    setError("")
+  }
 
   const submit = async () => {
     if (!key.trim()) return

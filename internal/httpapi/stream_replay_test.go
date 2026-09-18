@@ -361,7 +361,7 @@ func TestSlowSubscriberTimesOutWithoutInterruptingHealthyClient(t *testing.T) {
 	body := `{"model":"test","input":"hi","stream":true}`
 	slowDone := make(chan struct{})
 	go func() {
-		server.ServeHTTP(slow, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)))
+		server.ServeHTTP(slow, localRequest("POST", "/v1/responses", strings.NewReader(body)))
 		close(slowDone)
 	}()
 	select {
@@ -373,7 +373,7 @@ func TestSlowSubscriberTimesOutWithoutInterruptingHealthyClient(t *testing.T) {
 	healthyDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		writer := httptest.NewRecorder()
-		server.ServeHTTP(writer, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)))
+		server.ServeHTTP(writer, localRequest("POST", "/v1/responses", strings.NewReader(body)))
 		healthyDone <- writer
 	}()
 	select {
@@ -420,7 +420,7 @@ func TestReplayOverflowFailsClientAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := httptest.NewRecorder()
-	server.ServeHTTP(writer, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
+	server.ServeHTTP(writer, localRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
 	if !strings.Contains(writer.Body.String(), "replay_storage_error") || strings.Contains(writer.Body.String(), "response.completed") {
 		t.Fatalf("overflow reported success: %s", writer.Body.String())
 	}

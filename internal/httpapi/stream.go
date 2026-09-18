@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -11,6 +11,8 @@ import (
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
@@ -20,6 +22,7 @@ var (
 )
 
 func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.Request, modelID string, body map[string]any, modelConfig model.PerModelConfig) {
+	defer clearStreamDeadline(writer)
 	attempts := s.upstream.BuildAttempts(modelID, modelConfig)
 	targets := attemptTargets(attempts)
 	var last chainResult
@@ -51,7 +54,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 				Upstream: attempt.Upstream,
 				Status:   result.Status,
 				MS:       time.Since(started).Milliseconds(),
-				Note:     truncate(message, 160),
+				Note:     strx.Truncate(message, 160),
 			}
 			last.Trace = append(last.Trace, trace)
 			last.Status = result.Status
@@ -88,24 +91,27 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		stats := newStreamStats(started)
 		writeChunk := func(data []byte) error {
 			stats.Observe(data)
-			rewritten := rewriter.push(data, rewriteChatReasoningBlock)
+			rewritten, err := rewriter.push(data, rewriteChatReasoningBlock)
+			if err != nil {
+				return err
+			}
 			if len(rewritten) == 0 {
 				return nil
 			}
-			_, err := tap.Write(rewritten)
+			_, err = tap.Write(rewritten)
 			return err
 		}
-		if len(result.FirstChunk) > 0 {
-			_ = writeChunk(result.FirstChunk)
+		copyErr := writeChunk(result.FirstChunk)
+		if copyErr == nil {
+			copyErr = consumeStream(
+				request.Context(),
+				result.Body,
+				streamKeepaliveInterval(s.upstream.StreamIdleTimeout()),
+				nil,
+				writeChunk,
+				func() error { return writeSSEKeepalive(tap) },
+			)
 		}
-		copyErr := consumeStream(
-			request.Context(),
-			result.Body,
-			streamKeepaliveInterval(s.upstream.StreamIdleTimeout()),
-			nil,
-			writeChunk,
-			func() error { return writeSSEKeepalive(tap) },
-		)
 		if leftover := rewriter.flush(); len(leftover) > 0 && copyErr == nil {
 			_, copyErr = tap.Write(leftover)
 		}
@@ -115,7 +121,12 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		provider = s.upstream.CanonicalProvider(modelID, provider)
 		errorMessage := (*string)(nil)
 		if copyErr != nil {
+			// The parser fails the stream from the upstream side; say so instead
+			// of letting it look like a client write error.
 			message := copyErr.Error()
+			if errors.Is(copyErr, sse.ErrEventTooLarge) {
+				message = "上游流事件超限: " + message
+			}
 			errorMessage = &message
 		}
 		entry := model.HistoryEntry{
@@ -133,7 +144,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			Trace:     last.Trace,
 		}
 		applyStreamStats(&entry, stats)
-		_ = s.store.Record(entry)
+		s.record(entry)
 		return
 	}
 
@@ -156,6 +167,7 @@ func (s *Server) writeBufferedChatStream(
 	modelID string,
 	body map[string]any,
 ) {
+	defer clearStreamDeadline(writer)
 	routing := s.upstream.RoutingFor(modelID, result.Out)
 	responsesbridge.AliasChatReasoning(result.Out)
 	raw, err := json.Marshal(responsesbridge.ChatCompletionAsChunk(result.Out))
@@ -174,10 +186,7 @@ func (s *Server) writeBufferedChatStream(
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(last.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
 	writer.WriteHeader(http.StatusOK)
-	_, writeErr := io.WriteString(writer, "data: "+string(raw)+"\n\ndata: [DONE]\n\n")
-	if flusher, ok := writer.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	_, writeErr := writeStreamChunk(writer, []byte("data: "+string(raw)+"\n\ndata: [DONE]\n\n"))
 
 	errorMessage := (*string)(nil)
 	if writeErr != nil {
@@ -199,7 +208,7 @@ func (s *Server) writeBufferedChatStream(
 		Trace:     last.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
-	_ = s.store.Record(entry)
+	s.record(entry)
 }
 
 type streamTapWriter struct {
@@ -213,11 +222,7 @@ func (writer *streamTapWriter) Write(data []byte) (int, error) {
 	if len(writer.tail) > maxTail {
 		writer.tail = writer.tail[len(writer.tail)-maxTail:]
 	}
-	count, err := writer.writer.Write(data)
-	if flusher, ok := writer.writer.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return count, err
+	return writeStreamChunk(writer.writer, data)
 }
 
 func (writer *streamTapWriter) tailText() string {
@@ -252,33 +257,21 @@ func parseStreamRouting(text string) (string, string) {
 }
 
 type sseJSONRewriter struct {
-	buf string
+	parser sse.Parser
 }
 
-func (rewriter *sseJSONRewriter) push(data []byte, rewrite func(string) string) []byte {
-	rewriter.buf += string(data)
-	rewriter.buf = strings.ReplaceAll(rewriter.buf, "\r\n", "\n")
+func (rewriter *sseJSONRewriter) push(data []byte, rewrite func(string) string) ([]byte, error) {
 	var out strings.Builder
-	for {
-		index := strings.Index(rewriter.buf, "\n\n")
-		if index < 0 {
-			break
-		}
-		block := rewriter.buf[:index]
-		rewriter.buf = rewriter.buf[index+2:]
+	err := rewriter.parser.Feed(data, func(block string) bool {
 		out.WriteString(rewrite(block))
 		out.WriteString("\n\n")
-	}
-	return []byte(out.String())
+		return true
+	})
+	return []byte(out.String()), err
 }
 
 func (rewriter *sseJSONRewriter) flush() []byte {
-	leftover := rewriter.buf
-	rewriter.buf = ""
-	if leftover == "" {
-		return nil
-	}
-	return []byte(leftover)
+	return []byte(rewriter.parser.Finish())
 }
 
 func rewriteChatReasoningBlock(block string) string {

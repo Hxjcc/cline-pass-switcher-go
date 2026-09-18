@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -19,8 +20,8 @@ func (localSchemaOnly) Load(string) (any, error) {
 // Compile once per request using the same effective strict setting forwarded
 // to Chat. Plain text, JSON mode and explicit strict:false keep their behavior.
 func compileOutputSchema(text any) (*jsonschema.Schema, error) {
-	format := asMap(asMap(text)["format"])
-	if asString(format["type"]) != "json_schema" {
+	format := jsonx.Map(jsonx.Map(text)["format"])
+	if jsonx.String(format["type"]) != "json_schema" {
 		return nil, nil
 	}
 	if strict, found := format["strict"]; found && strict != nil {
@@ -35,7 +36,7 @@ func compileOutputSchema(text any) (*jsonschema.Schema, error) {
 	invalid := func(message string) (*jsonschema.Schema, error) {
 		return nil, &RequestError{Code: "invalid_json_schema", Param: "text.format.schema", Message: message}
 	}
-	if asMap(format["schema"]) == nil {
+	if jsonx.Map(format["schema"]) == nil {
 		return invalid("text.format.schema must be a JSON Schema object for strict output")
 	}
 	raw, err := json.Marshal(format["schema"])
@@ -78,18 +79,18 @@ func (state *StreamState) validateStructuredOutput() error {
 	}
 	var text strings.Builder
 	for _, item := range state.outputItems() {
-		output := asMap(item)
-		switch asString(output["type"]) {
+		output := jsonx.Map(item)
+		switch jsonx.String(output["type"]) {
 		case "function_call", "custom_tool_call", "tool_search_call":
 			return nil
 		case "message":
-			for _, raw := range asSlice(output["content"]) {
-				part := asMap(raw)
-				switch asString(part["type"]) {
+			for _, raw := range jsonx.Slice(output["content"]) {
+				part := jsonx.Map(raw)
+				switch jsonx.String(part["type"]) {
 				case "refusal":
 					return nil
 				case "output_text":
-					text.WriteString(asString(part["text"]))
+					text.WriteString(jsonx.String(part["text"]))
 				}
 			}
 		}

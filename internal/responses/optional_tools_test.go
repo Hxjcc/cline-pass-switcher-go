@@ -3,6 +3,8 @@ package responses
 import (
 	"fmt"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestOptionalHostedToolsDoNotBlockOrdinaryChat(t *testing.T) {
@@ -17,7 +19,7 @@ func TestOptionalHostedToolsDoNotBlockOrdinaryChat(t *testing.T) {
 				if chat["tools"] != nil || chat["tool_choice"] != nil || chat["parallel_tool_calls"] != nil {
 					t.Fatalf("hosted tool leaked to Chat: %#v", chat)
 				}
-				if asMap(asSlice(chat["messages"])[0])["content"] != "你好" {
+				if jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"] != "你好" {
 					t.Fatal("ordinary input changed")
 				}
 			})
@@ -38,7 +40,7 @@ func TestOptionalHostedToolsKeepClientToolsAndRequiredChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(asSlice(chat["tools"])) != 2 || chat["tool_choice"] != "required" {
+	if len(jsonx.Slice(chat["tools"])) != 2 || chat["tool_choice"] != "required" {
 		t.Fatalf("client tool selection changed: %#v", chat)
 	}
 	chatFunctionByName(t, chat, "read")

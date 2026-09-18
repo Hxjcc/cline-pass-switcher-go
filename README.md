@@ -24,7 +24,7 @@ Linux / macOS：
 ```bash
 mkdir -p data
 cp config.example.json data/config.json
-docker compose up -d --build
+PUID=$(id -u) PGID=$(id -g) docker compose up -d --build
 ```
 
 Windows PowerShell：
@@ -38,6 +38,8 @@ docker compose up -d --build
 打开 <http://127.0.0.1:3123/>，在「账号管理」里填入 Cline Pass API Key 并保存。
 
 配置和运行数据都在 `./data`。默认只监听本机 `127.0.0.1:3123`，不会暴露到局域网。
+
+容器默认以非 root 用户运行。Linux / macOS 上的命令使用当前用户身份，后续重建时也需保留 `PUID` 和 `PGID`。从旧版本升级时，请先停止容器，确认 `data` 目录及文件对运行用户可写。
 
 ### 从源码运行
 
@@ -59,6 +61,15 @@ go build -o cline-pass-switcher ./cmd/cline-pass-switcher
 ```
 
 默认读取当前目录下的 `config.json`，监听 `127.0.0.1:3123`。用 Docker 时请走上面的 `./data` 目录。
+
+## 从旧版本升级
+
+- **访问控制变严**：未设置代理密钥（`proxyKey` / `PROXY_KEY`）时，只有通过回环地址（`127.0.0.1`、`localhost`）且同源的请求才被接受。用域名、局域网 IP 或反向代理访问会收到 403。HTTPS 反向代理部署必须设置 `PUBLIC_BASE_URL`，否则控制台请求会被判为跨源。
+- **账号密钥默认脱敏**：`GET /api/accounts` 只返回 `keyPreview` 前后缀，需要完整密钥时显式请求 `GET /api/accounts?reveal=1`。控制台的「显示密钥」按钮就是这条路。
+- **保存账号时留空表示保留原密钥**：控制台为每个账号分配了稳定的 `id`，提交时 `key` 为空且 `id` 匹配已有账号，则沿用已保存的密钥；新账号必须自带 `key`，否则会被忽略。
+- **数据目录新增运行文件**：`store.journal` 与 `.store.lock`。备份要包含整个目录，且同一目录只能运行一个实例（第二个实例会启动失败）。
+- **容器默认以非 root 用户运行**：Linux / macOS 上用 `PUID`、`PGID` 指定数据目录属主，详见上一节。
+- **请求历史落盘时机**：请求记录先写入日志缓冲，每 32 条或发生管理操作、正常退出时 `fsync`。进程崩溃不会丢记录（重启会重放日志），断电最多丢掉最近的少量记录；配置和模型改动仍然每次都同步落盘。
 
 ## 接入客户端
 
@@ -91,7 +102,7 @@ env_key = "CLINE_PROXY_KEY"
 |---|---|
 | `CLINE_PASS_KEY` | Cline Pass API Key，启动时写入账号池 |
 | `PROXY_KEY` | 下游代理和控制台 API 密钥 |
-| `PUBLIC_BASE_URL` | 控制台展示给客户端的公网地址 |
+| `PUBLIC_BASE_URL` | 控制台对外访问地址，HTTPS 反向代理部署时需设置 |
 | `PORT` | 监听端口，默认 `3123` |
 | `BIND_HOST` | 监听地址，本地默认 `127.0.0.1`，容器内应设为 `0.0.0.0` |
 | `DATA_DIR` | 配置和元数据目录，容器内为 `/data` |
@@ -103,8 +114,14 @@ Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3
 ## 安全
 
 - `config.json`、`metadata.json` 和 `data/` 里可能有明文密钥，不要提交到 Git。
-- 对公网开放前务必设置代理密钥（`proxyKey` / `PROXY_KEY`）。
+- 使用域名、非回环 IP 或对其他机器开放前，务必设置代理密钥（`proxyKey` / `PROXY_KEY`）。该密钥也具有管理权限。
+- 控制台接口默认不返回已保存的密钥（只有 `keyPreview`），需要时才通过 `GET /api/accounts?reveal=1` 显式读取，且响应带 `Cache-Control: no-store`。
+- 浏览器需同源访问控制台和接口；HTTPS 反向代理部署时设置 `PUBLIC_BASE_URL`。
 - 控制台里的探测、测试、校验会向真实上游发小额请求。
+
+## 数据备份
+
+每个数据目录只供一个服务实例使用。备份、迁移或手动修改配置前，请先正常停止服务。备份整个数据目录，包括 `store.journal`，不要单独删除其中的运行文件。
 
 ## 致谢
 

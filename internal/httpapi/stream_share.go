@@ -12,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
@@ -350,7 +352,7 @@ func (s *Server) recordSharedRun(
 	if job.okSSE {
 		applyStreamStats(&entry, job.stats)
 	}
-	_ = s.store.Record(entry)
+	s.record(entry)
 }
 
 func (s *Server) runSharedResponses(
@@ -394,7 +396,7 @@ func (s *Server) runSharedResponses(
 			}
 			job.last.Trace = append(job.last.Trace, model.Trace{
 				Upstream: attempt.Upstream, Status: result.Status,
-				MS: time.Since(started).Milliseconds(), Note: truncate(message, 160),
+				MS: time.Since(started).Milliseconds(), Note: strx.Truncate(message, 160),
 			})
 			job.last.Status, job.last.Out, job.last.NetErr, job.last.Account = result.Status, result.Out, result.NetErr, result.Account
 			s.upstream.LearnFailure(modelID, attempt, message)
@@ -464,7 +466,7 @@ func (s *Server) runSharedResponses(
 // a 200 without SSE for that case.
 func isBufferedCompletion(result upstream.StreamAttemptResult) bool {
 	return !result.SSE && result.Status == http.StatusOK && result.Out != nil &&
-		len(statsSlice(result.Out["choices"])) > 0
+		len(jsonx.Slice(result.Out["choices"])) > 0
 }
 
 // publishBufferedResponses replays a buffered completion as the full

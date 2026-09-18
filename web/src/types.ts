@@ -3,8 +3,12 @@ export type SortMode = "cost" | "ttft" | "tps"
 export type UpstreamState = "ok" | "limited" | "bad" | "auth" | "unknown"
 
 export interface Account {
+  id: string
   name: string
+  /** Empty means "keep the stored key"; only filled in when the user types one. */
   key: string
+  keyPreview: string
+  hasKey: boolean
   enabled: boolean
 }
 

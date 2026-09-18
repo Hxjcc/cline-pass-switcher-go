@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestFromBodyPreservesOpenAIErrorDetails(t *testing.T) {
@@ -25,7 +27,7 @@ func TestFromBodyPreservesOpenAIErrorDetails(t *testing.T) {
 		t.Fatalf("error details were not preserved: %#v", details)
 	}
 	normalized := Body(details)
-	errorObject := asMap(normalized["error"])
+	errorObject := jsonx.Map(normalized["error"])
 	if errorObject["type"] != "rate_limit_error" || errorObject["code"] != "rate_limit_exceeded" {
 		t.Fatalf("normalized body lost fields: %#v", normalized)
 	}

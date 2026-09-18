@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - run: go vet ./...
+      - run: go test ./...
+      - if: runner.os == 'Linux'
+        run: go test -race ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run lint && npm test && npm run build
+        working-directory: web
+      - name: Verify embedded frontend matches source
+        run: |
+          git diff --exit-code -- internal/webassets/dist
+          test -z "$(git ls-files --others --exclude-standard -- internal/webassets/dist)"
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t cline-pass-ci .
+      - name: Verify non-root user and writable data directory
+        run: docker run --rm --entrypoint sh cline-pass-ci -ec 'test "$(id -u)" = 10001; test -w /data'

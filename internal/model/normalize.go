@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
 
 func LoadConfig(path string) (Config, error) {
@@ -17,7 +19,7 @@ func LoadConfig(path string) (Config, error) {
 	} else if !os.IsNotExist(err) {
 		return Config{}, err
 	}
-	applyEnvironment(&cfg)
+	ApplyEnvironment(&cfg)
 	NormalizeConfig(&cfg)
 	return cfg, nil
 }
@@ -36,7 +38,7 @@ func LoadMetadata(path string) (Metadata, error) {
 	return meta, nil
 }
 
-func applyEnvironment(cfg *Config) {
+func ApplyEnvironment(cfg *Config) {
 	if key := strings.TrimSpace(os.Getenv("CLINE_PASS_KEY")); key != "" {
 		found := false
 		for _, account := range cfg.Accounts {
@@ -92,10 +94,23 @@ func NormalizeConfig(cfg *Config) {
 	if cfg.Accounts == nil {
 		cfg.Accounts = []Account{}
 	}
+	// Identities are assigned once and then preserved, so a client can send an
+	// account back with an empty key without losing which key belongs to it.
+	seenIDs := make(map[string]struct{}, len(cfg.Accounts))
+	for index := range cfg.Accounts {
+		account := &cfg.Accounts[index]
+		if account.ID == "" {
+			account.ID = NewAccountID()
+		}
+		if _, duplicate := seenIDs[account.ID]; duplicate {
+			account.ID = NewAccountID()
+		}
+		seenIDs[account.ID] = struct{}{}
+	}
 	if cfg.KnownModels == nil {
 		cfg.KnownModels = append([]string(nil), DefaultKnownModels...)
 	}
-	cfg.KnownModels = uniqueStrings(cfg.KnownModels)
+	cfg.KnownModels = strx.UniqueTrimmed(cfg.KnownModels)
 	// A model that is subscribed again (live request, explicit re-add) wins
 	// over an earlier removal.
 	known := make(map[string]struct{}, len(cfg.KnownModels))
@@ -103,7 +118,7 @@ func NormalizeConfig(cfg *Config) {
 		known[id] = struct{}{}
 	}
 	removed := make([]string, 0, len(cfg.RemovedModels))
-	for _, id := range uniqueStrings(cfg.RemovedModels) {
+	for _, id := range strx.UniqueTrimmed(cfg.RemovedModels) {
 		if _, found := known[id]; !found {
 			removed = append(removed, id)
 		}
@@ -116,8 +131,8 @@ func NormalizeConfig(cfg *Config) {
 		if modelConfig.Upstreams == nil && modelConfig.Upstream != "" {
 			modelConfig.Upstreams = []string{modelConfig.Upstream}
 		}
-		modelConfig.Upstreams = uniqueStrings(modelConfig.Upstreams)
-		modelConfig.Exclude = uniqueStrings(modelConfig.Exclude)
+		modelConfig.Upstreams = strx.UniqueTrimmed(modelConfig.Upstreams)
+		modelConfig.Exclude = strx.UniqueTrimmed(modelConfig.Exclude)
 		excluded := make(map[string]struct{}, len(modelConfig.Exclude))
 		for _, upstream := range modelConfig.Exclude {
 			excluded[upstream] = struct{}{}
@@ -185,21 +200,4 @@ func EnsureDataDir(dataDir string) error {
 		dataDir = "."
 	}
 	return os.MkdirAll(filepath.Clean(dataDir), 0o755)
-}
-
-func uniqueStrings(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, found := seen[value]; found {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }

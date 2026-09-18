@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { FlaskConical, Play, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
@@ -43,6 +43,15 @@ export function TestBench({ models, onTest }: TestBenchProps) {
   const [upstream, setUpstream] = useState("auto")
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<TestResponse | null>(null)
+  const [previousModelID, setPreviousModelID] = useState(modelID)
+  if (!models.some((model) => model.id === modelID) && modelID !== (models[0]?.id ?? "")) {
+    setModelID(models[0]?.id ?? "")
+  }
+  if (previousModelID !== modelID) {
+    setPreviousModelID(modelID)
+    setUpstream("auto")
+    setResult(null)
+  }
 
   const selected = models.find((model) => model.id === modelID)
   const config = normalizeModelConfig(selected?.config)
@@ -57,16 +66,6 @@ export function TestBench({ models, onTest }: TestBenchProps) {
     const state = (selected?.meta?.upstreamStatus?.[value]?.status ?? "unknown") as UpstreamState
     upstreamItems[value] = `${value} · ${upstreamLabels[state]}`
   }
-
-  useEffect(() => {
-    if (!models.some((model) => model.id === modelID)) {
-      setModelID(models[0]?.id ?? "")
-    }
-  }, [modelID, models])
-
-  useEffect(() => {
-    setUpstream("auto")
-  }, [modelID])
 
   const run = async () => {
     if (!modelID) {

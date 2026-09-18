@@ -3,6 +3,8 @@ package responses
 import (
 	"strings"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 var benchmarkStreamEvents []Event
@@ -36,13 +38,13 @@ func TestLongStreamRetainsContentAndPublishedDeltas(t *testing.T) {
 		}
 	}
 	events := state.Finalize(true, nil)
-	final := asMap(events[len(events)-1].Data["response"])
-	output := asSlice(final["output"])
+	final := jsonx.Map(events[len(events)-1].Data["response"])
+	output := jsonx.Slice(final["output"])
 	want := strings.Repeat(piece, 1024)
 	if final["status"] != "completed" || len(output) != 3 {
 		t.Fatalf("unexpected final response: status=%v items=%d", final["status"], len(output))
 	}
-	if asMap(asSlice(asMap(output[0])["summary"])[0])["text"] != want || textFromParts(asMap(output[1])["content"]) != want || asMap(output[2])["arguments"] != `{"input":"`+want+`"}` {
+	if jsonx.Map(jsonx.Slice(jsonx.Map(output[0])["summary"])[0])["text"] != want || textFromParts(jsonx.Map(output[1])["content"]) != want || jsonx.Map(output[2])["arguments"] != `{"input":"`+want+`"}` {
 		t.Fatal("long stream lost text or arguments")
 	}
 	if firstText.Data["delta"] != piece || firstArguments.Data["delta"] != `{"input":"`+piece {

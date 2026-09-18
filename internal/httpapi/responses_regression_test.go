@@ -89,7 +89,7 @@ func TestConcurrentResponsesPreserveEachClientsContext(t *testing.T) {
 			for i := range 2 {
 				go func() {
 					w := httptest.NewRecorder()
-					server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(tc.requests[i])))
+					server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(tc.requests[i])))
 					results[i] <- w
 				}()
 			}
@@ -145,7 +145,7 @@ func TestResponsesHistoryTracksProtocolOutcome(t *testing.T) {
 				t.Fatal(err)
 			}
 			w := httptest.NewRecorder()
-			server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
+			server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
 			if !strings.Contains(w.Body.String(), "event: response."+tc.terminal) {
 				t.Fatalf("wrong terminal: %s", w.Body.String())
 			}
@@ -181,7 +181,7 @@ func TestSuccessfulResponsesFallbackClearsPreviousError(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
+	server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hi","stream":true}`)))
 	history := st.Metadata().History
 	if !strings.Contains(w.Body.String(), "response.completed") || len(history) != 1 || history[0].Error != nil || len(history[0].Trace) != 2 {
 		t.Fatalf("successful fallback marked failed: %#v", history)
@@ -204,7 +204,7 @@ func TestCompactionRejectsTruncationAndRecordsFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			w := httptest.NewRecorder()
-			server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses/compact", strings.NewReader(fmt.Sprintf(`{"model":"test","input":"hi","stream":%v}`, stream))))
+			server.ServeHTTP(w, localRequest("POST", "/v1/responses/compact", strings.NewReader(fmt.Sprintf(`{"model":"test","input":"hi","stream":%v}`, stream))))
 			if stream {
 				if !strings.Contains(w.Body.String(), "response.created") || !strings.Contains(w.Body.String(), "response.failed") || !strings.Contains(w.Body.String(), "compaction_incomplete") || strings.Contains(w.Body.String(), "response.completed") {
 					t.Fatalf("truncated compact did not fail: %s", w.Body.String())
@@ -244,7 +244,7 @@ func TestCompactionConstructsSummaryUpstreamRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses/compact", strings.NewReader(`{
+	server.ServeHTTP(w, localRequest("POST", "/v1/responses/compact", strings.NewReader(`{
 		"model":"test","input":[{"role":"user","content":"Continue implementing the app"}],
 		"tools":[{"type":"function","name":"exec"}],"tool_choice":"required",
 		"text":{"format":{"type":"json_object"}}

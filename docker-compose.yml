@@ -3,6 +3,7 @@ services:
     build: .
     container_name: cline-pass-console
     restart: unless-stopped
+    user: "${PUID:-10001}:${PGID:-10001}"
     environment:
       - DATA_DIR=/data
       - BIND_HOST=0.0.0.0

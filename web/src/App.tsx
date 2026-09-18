@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Activity,
   Boxes,
@@ -63,6 +63,17 @@ interface CachedSnapshot {
   security: SecurityResponse
 }
 
+async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
+  const [meta, models, accounts, security, history] = await Promise.all([
+    api<MetaResponse>("/api/meta"),
+    api<ModelsResponse>("/api/models", { key }),
+    api<AccountsResponse>("/api/accounts", { key }),
+    api<SecurityResponse>("/api/security", { key }),
+    api<HistoryResponse>("/api/history", { key }),
+  ])
+  return { meta, models, accounts, security, history: history.history }
+}
+
 function readSnapshot(): CachedSnapshot | null {
   try {
     const raw = sessionStorage.getItem(SNAPSHOT_STORAGE)
@@ -101,13 +112,13 @@ function App() {
   const [tab, setTab] = useState(() => sessionStorage.getItem(TAB_STORAGE) || "overview")
   const [refreshing, setRefreshing] = useState(false)
 
-  const handleError = (error: unknown) => {
+  const handleError = useCallback((error: unknown) => {
     if (error instanceof UnauthorizedError) {
       setLoginOpen(true)
       return
     }
     toast.error(errorMessage(error))
-  }
+  }, [])
 
   const loadModels = async (key = authKey) => {
     const response = await api<ModelsResponse>("/api/models", { key })
@@ -121,39 +132,39 @@ function App() {
     return response.history
   }
 
+  const applySnapshot = useCallback((snapshot: CachedSnapshot) => {
+    setMeta(snapshot.meta)
+    setModels(snapshot.models)
+    setAccounts(snapshot.accounts)
+    setSecurity(snapshot.security)
+    setHistory(snapshot.history)
+  }, [])
+
   const loadAll = async (key = authKey) => {
-    const [metaResponse, modelsResponse, accountsResponse, securityResponse, historyResponse] =
-      await Promise.all([
-        api<MetaResponse>("/api/meta"),
-        api<ModelsResponse>("/api/models", { key }),
-        api<AccountsResponse>("/api/accounts", { key }),
-        api<SecurityResponse>("/api/security", { key }),
-        api<HistoryResponse>("/api/history", { key }),
-      ])
-    setMeta(metaResponse)
-    setModels(modelsResponse)
-    setAccounts(accountsResponse)
-    setSecurity(securityResponse)
-    setHistory(historyResponse.history)
-    if (metaResponse.authRequired && !key) {
-      setLoginOpen(true)
-    }
+    applySnapshot(await fetchSnapshot(key))
   }
 
   useEffect(() => {
-    void loadAll(authKey).catch(handleError)
-  }, [authKey])
+    let active = true
+    void fetchSnapshot(authKey)
+      .then((snapshot) => { if (active) applySnapshot(snapshot) })
+      .catch((error: unknown) => { if (active) handleError(error) })
+    return () => { active = false }
+  }, [authKey, applySnapshot, handleError])
 
   useEffect(() => {
+    let active = true
     void api<MetaResponse>("/api/meta")
       .then((response) => {
+        if (!active) return
         setMeta(response)
         if (response.authRequired && !authKey) {
           setLoginOpen(true)
         }
       })
-      .catch(handleError)
-  }, [])
+      .catch((error: unknown) => { if (active) handleError(error) })
+    return () => { active = false }
+  }, [authKey, handleError])
 
   useEffect(() => {
     if (!models || !meta || !accounts || !security) return
@@ -207,6 +218,10 @@ function App() {
       key: authKey,
       body: { key },
     })
+
+  // Stored keys stay hidden until the user asks for them; the reveal response
+  // is kept in the panel and never written to the cached snapshot.
+  const revealAccounts = () => api<AccountsResponse>("/api/accounts?reveal=1", { key: authKey })
 
   const saveSecurity = async (
     value: Pick<SecurityResponse, "proxyKey" | "publicBaseUrl" | "exposeCatalog">,
@@ -452,7 +467,12 @@ function App() {
 
           <TabsContent value="accounts">
             {accounts && (
-              <AccountsPanel data={accounts} onSave={saveAccounts} onTest={testAccount} />
+              <AccountsPanel
+                data={accounts}
+                onSave={saveAccounts}
+                onTest={testAccount}
+                onReveal={revealAccounts}
+              />
             )}
           </TabsContent>
 

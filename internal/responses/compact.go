@@ -1,5 +1,7 @@
 package responses
 
+import "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+
 // The Chat backend has no native compaction endpoint. Explicitly ask for a
 // handoff summary, and disable ordinary task execution for this generation.
 const compactionInstructions = `Create a concise handoff summary of the preceding conversation for another model to continue from.
@@ -14,9 +16,9 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 		return nil, nil, err
 	}
 	context.compactionUsers = compactionUserMessages(body["input"])
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	leading := 0
-	for leading < len(messages) && asMap(messages[leading])["role"] == "system" {
+	for leading < len(messages) && jsonx.Map(messages[leading])["role"] == "system" {
 		leading++
 	}
 	prepared := make([]any, 0, len(messages)+2)
@@ -39,7 +41,7 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 // Keep original user turns, including images, outside the summary. Construct
 // output message objects without changing the request maps or content blocks.
 func compactionUserMessages(input any) []any {
-	items := asSlice(input)
+	items := jsonx.Slice(input)
 	if text, ok := input.(string); ok {
 		items = []any{text}
 	}
@@ -49,9 +51,9 @@ func compactionUserMessages(input any) []any {
 		if text, ok := raw.(string); ok {
 			source = map[string]any{"role": "user", "content": text}
 		} else {
-			source = asMap(raw)
+			source = jsonx.Map(raw)
 		}
-		if asString(source["role"]) != "user" {
+		if jsonx.String(source["role"]) != "user" {
 			continue
 		}
 		message := make(map[string]any, len(source)+3)
@@ -59,7 +61,7 @@ func compactionUserMessages(input any) []any {
 			message[key] = value
 		}
 		message["type"], message["status"] = "message", "completed"
-		if asString(message["id"]) == "" {
+		if jsonx.String(message["id"]) == "" {
 			message["id"] = newID("msg")
 		}
 		if text, ok := message["content"].(string); ok {

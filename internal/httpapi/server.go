@@ -16,6 +16,7 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
@@ -54,10 +55,13 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	writer.Header().Set("Access-Control-Allow-Origin", "*")
-	writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	writer.Header().Set("Access-Control-Allow-Headers", "*")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set("Cache-Control", "no-store")
+	if !s.browserRequestAllowed(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBytes)
 	if request.Method == http.MethodOptions {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -92,7 +96,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && path == "/api/test":
 		s.handleTest(writer, request)
 	case request.Method == http.MethodGet && path == "/api/accounts":
-		s.handleGetAccounts(writer)
+		s.handleGetAccounts(writer, request)
 	case request.Method == http.MethodPost && path == "/api/accounts":
 		s.handleSaveAccounts(writer, request)
 	case request.Method == http.MethodPost && path == "/api/accounts/test":
@@ -124,6 +128,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && isResponsesCompactPath(path):
 		s.handleResponsesCompact(writer, request)
 	default:
+		if path == "/api" || path == "/v1" || strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/") {
+			writeJSON(writer, http.StatusNotFound, map[string]any{"error": map[string]any{"message": fmt.Sprintf("no route: %s %s", request.Method, path)}})
+			return
+		}
 		if request.Method == http.MethodGet || request.Method == http.MethodHead {
 			s.serveStatic(writer, request)
 			return
@@ -179,11 +187,13 @@ func (s *Server) handleProbe(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusOK, result)
 }
 
-func (s *Server) handleGetAccounts(writer http.ResponseWriter) {
+func (s *Server) handleGetAccounts(writer http.ResponseWriter, request *http.Request) {
 	cfg := s.store.Config()
 	meta := s.store.Metadata()
+	// Stored keys are opt-in: only an explicit reveal returns them.
+	reveal := request.URL.Query().Get("reveal") == "1"
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"accounts": cfg.Accounts,
+		"accounts": accountViews(cfg.Accounts, reveal),
 		"mode":     cfg.AccountMode,
 		"active":   cfg.ActiveAccount,
 		"stats":    meta.Stats,
@@ -200,20 +210,10 @@ func (s *Server) handleSaveAccounts(writer http.ResponseWriter, request *http.Re
 		writeRequestError(writer, err)
 		return
 	}
-	accounts := make([]model.Account, 0, len(body.Accounts))
-	for index, account := range body.Accounts {
-		account.Name = truncate(strings.TrimSpace(account.Name), 50)
-		if account.Name == "" {
-			account.Name = "账号" + strconv.Itoa(index+1)
-		}
-		account.Key = strings.TrimSpace(account.Key)
-		if account.Key != "" {
-			accounts = append(accounts, account)
-		}
-	}
+	accounts := mergeAccounts(s.store.Config().Accounts, body.Accounts)
 	if len(accounts) == 0 {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"error": map[string]any{"message": "至少需要一个有效账号（key 非空）"},
+			"error": map[string]any{"message": "至少需要一个有效账号（新账号必须填写 key）"},
 		})
 		return
 	}
@@ -427,7 +427,7 @@ func (s *Server) handleListModels(writer http.ResponseWriter, request *http.Requ
 	if cfg.ExposeCatalog {
 		ids = append(ids, s.upstream.Catalog(request.Context())...)
 	}
-	ids = uniqueStrings(ids)
+	ids = strx.UniqueTrimmed(ids)
 	data := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		data = append(data, map[string]any{"id": id, "object": "model"})
@@ -483,7 +483,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"ok": false, "error": truncate(message, 400), "targets": modelConfig.Upstreams, "exclude": modelConfig.Exclude, "trace": result.Trace,
+			"ok": false, "error": strx.Truncate(message, 400), "targets": modelConfig.Upstreams, "exclude": modelConfig.Exclude, "trace": result.Trace,
 		})
 		return
 	}
@@ -502,12 +502,12 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 		Trace:     result.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
-	_ = s.store.Record(entry)
+	s.record(entry)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok": true, "ms": time.Since(started).Milliseconds(), "targets": modelConfig.Upstreams,
 		"exclude": modelConfig.Exclude, "actual": routing.FinalProvider, "actualName": routing.FinalProviderName,
 		"pipeline": routing.Pipeline, "pinnable": routing.Pipeline != "", "canonicalSlug": routing.CanonicalSlug,
-		"fallbacks": routing.Fallbacks, "content": truncate(routing.Content, 120), "account": result.Account.Name,
+		"fallbacks": routing.Fallbacks, "content": strx.Truncate(routing.Content, 120), "account": result.Account.Name,
 		"trace": result.Trace,
 	})
 }
@@ -531,7 +531,7 @@ func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map
 			Upstream: attempt.Upstream,
 			Status:   response.Status,
 			MS:       time.Since(started).Milliseconds(),
-			Note:     truncate(note, 160),
+			Note:     strx.Truncate(note, 160),
 		})
 		result.Status = response.Status
 		result.Out = response.Out
@@ -604,7 +604,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	if result.Status == http.StatusOK {
 		applyChatStats(&entry, result.Out, entry.MS)
 	}
-	_ = s.store.Record(entry)
+	s.record(entry)
 
 	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
 	writer.Header().Set("Content-Type", "application/json")
@@ -673,21 +673,32 @@ func (s *Server) publicProxyBase(cfg model.Config) string {
 	return "http://127.0.0.1:" + strconv.Itoa(cfg.Port) + "/v1"
 }
 
+const maxRequestBytes = 50 << 20
+
 func readJSON(request *http.Request, target any) error {
 	defer request.Body.Close()
-	decoder := json.NewDecoder(io.LimitReader(request.Body, (50<<20)+1))
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, request.Body, maxRequestBytes))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return err
+		}
 		return errors.New("request body must contain a single JSON value")
 	}
 	return nil
 }
 
 func writeRequestError(writer http.ResponseWriter, err error) {
-	writeJSON(writer, http.StatusBadRequest, map[string]any{
+	status := http.StatusBadRequest
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		status = http.StatusRequestEntityTooLarge
+	}
+	writeJSON(writer, status, map[string]any{
 		"error": map[string]any{"message": err.Error()},
 	})
 }
@@ -722,32 +733,6 @@ func normalizeList(values []string) []string {
 		}
 	}
 	return result
-}
-
-func uniqueStrings(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, found := seen[value]; found {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func traceUpstreams(trace []model.Trace) []string {
@@ -838,7 +823,7 @@ func headerSafe(value string) string {
 			builder.WriteRune(character)
 		}
 	}
-	result := truncate(strings.TrimSpace(builder.String()), 80)
+	result := strx.Truncate(strings.TrimSpace(builder.String()), 80)
 	if result == "" {
 		return "-"
 	}
@@ -879,12 +864,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func truncate(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }

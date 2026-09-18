@@ -9,13 +9,16 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/apierr"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
 
 const openRouterAPI = "https://openrouter.ai/api/v1"
@@ -102,7 +105,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	root := asMap(raw)
+	root := jsonx.Map(raw)
 	if message := extractError(root); message != "" && !hasChoices(root) {
 		return ProbeResult{}, errors.New(message)
 	}
@@ -126,15 +129,15 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	}
 	var upstreams []string
 	if routing.Pipeline == "planner" {
-		upstreams = unique(append(append([]string{}, harvested...), routing.Fallbacks...))
+		upstreams = strx.Unique(append(append([]string{}, harvested...), routing.Fallbacks...))
 	} else {
 		keys := make([]string, 0, len(detail))
 		for key := range detail {
 			keys = append(keys, key)
 		}
-		upstreams = unique(append(append(routing.Fallbacks, harvested...), keys...))
+		upstreams = strx.Unique(append(append(routing.Fallbacks, harvested...), keys...))
 	}
-	tier0 := unique(append(previous.Tier0, parseTier0(routing.Plan)...))
+	tier0 := strx.Unique(append(previous.Tier0, parseTier0(routing.Plan)...))
 	// The channel list was just (re)built; resolve the hit against it rather
 	// than against whatever the previous probe knew.
 	routing.FinalProvider = CanonicalProvider(model.ModelMeta{Upstreams: upstreams, UpstreamDetail: detail}, routing.FinalProvider)
@@ -142,7 +145,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		current.OK = true
 		current.Pipeline = routing.Pipeline
 		current.Pinnable = routing.Pipeline != ""
-		current.AvailableProviders = unique(append(harvested, current.AvailableProviders...))
+		current.AvailableProviders = strx.Unique(append(harvested, current.AvailableProviders...))
 		current.CanonicalSlug = routing.CanonicalSlug
 		current.OpenRouterSlug = orSlug
 		current.UpstreamDetail = detail
@@ -180,7 +183,7 @@ func (s *Service) harvestAvailableProviders(ctx context.Context, modelID, pipeli
 	if err != nil {
 		return nil
 	}
-	message := extractError(asMap(raw))
+	message := extractError(jsonx.Map(raw))
 	if pipeline == "planner" {
 		return parseAvailableProviders(message)
 	}
@@ -204,17 +207,17 @@ func (s *Service) orModelList(ctx context.Context) []string {
 	if err != nil {
 		return meta.ORModels
 	}
-	items := getSlice(asMap(raw), "data")
+	items := getSlice(jsonx.Map(raw), "data")
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		if id := getString(asMap(item), "id"); id != "" {
+		if id := getString(jsonx.Map(item), "id"); id != "" {
 			ids = append(ids, id)
 		}
 	}
 	if len(ids) == 0 {
 		return meta.ORModels
 	}
-	_ = s.store.UpdateMetadata(func(current *model.Metadata) {
+	s.updateMetadata(func(current *model.Metadata) {
 		current.ORModels = ids
 		current.ORModelsFetchedAt = time.Now().UnixMilli()
 	})
@@ -246,11 +249,11 @@ func (s *Service) orEndpoints(ctx context.Context, slug string) ([]model.Upstrea
 	if err != nil {
 		return nil, realSlug
 	}
-	root := asMap(raw)
+	root := jsonx.Map(raw)
 	endpoints := getSlice(getMap(root, "data"), "endpoints")
 	detail := map[string]model.UpstreamDetail{}
 	for _, item := range endpoints {
-		endpoint := asMap(item)
+		endpoint := jsonx.Map(item)
 		providerSlug := strings.SplitN(getString(endpoint, "tag"), "/", 2)[0]
 		if providerSlug == "" {
 			providerSlug = strings.ReplaceAll(strings.ToLower(getString(endpoint, "provider_name")), " ", "-")
@@ -315,10 +318,10 @@ func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (Valida
 			_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 60*time.Second)
 			if err != nil {
 				note = err.Error()
-			} else if message := extractError(asMap(raw)); message != "" && !hasChoices(asMap(raw)) {
+			} else if message := extractError(jsonx.Map(raw)); message != "" && !hasChoices(jsonx.Map(raw)) {
 				status = classifyUpstreamError(message)
-				note = truncate(message, 160)
-			} else if hasChoices(asMap(raw)) {
+				note = strx.Truncate(message, 160)
+			} else if hasChoices(jsonx.Map(raw)) {
 				status = "ok"
 			}
 			mutex.Lock()
@@ -370,7 +373,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	}
 
 	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, "https://api.cline.bot/api/v1/ai/cline/recommended-models", nil, nil, 30*time.Second); err == nil {
-		root := asMap(raw)
+		root := jsonx.Map(raw)
 		list := getSlice(root, "clinePass")
 		if len(list) == 0 {
 			list = getSlice(getMap(root, "data"), "clinePass")
@@ -380,7 +383,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 				if id, ok := item.(string); ok {
 					add(id)
 				} else {
-					entry := asMap(item)
+					entry := jsonx.Map(item)
 					id := add(getString(entry, "id"))
 					if id != "" {
 						capability := capabilities[id]
@@ -399,7 +402,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	}
 
 	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, "https://models.dev/api.json", nil, nil, 30*time.Second); err == nil {
-		root := asMap(raw)
+		root := jsonx.Map(raw)
 		clinePass := getMap(getMap(root, "providers"), "cline-pass")
 		if clinePass == nil {
 			clinePass = getMap(root, "cline-pass")
@@ -411,7 +414,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 				if id == "" {
 					continue
 				}
-				capability := normalizeModelCapability(id, parseModelCapability(asMap(rawModel), updatedAt))
+				capability := normalizeModelCapability(id, parseModelCapability(jsonx.Map(rawModel), updatedAt))
 				capabilities[id] = mergeModelCapability(capabilities[id], capability)
 			}
 			sources = append(sources, "models.dev")
@@ -456,16 +459,16 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	}
 	finalConfig := s.store.Config()
 	result := OfficialResult{
-		Sources:     unique(sources),
+		Sources:     strx.Unique(sources),
 		Found:       len(valid),
 		Added:       added,
 		KnownModels: finalConfig.KnownModels,
 		TS:          time.Now().UnixMilli(),
 		Total:       len(finalConfig.KnownModels),
 	}
-	_ = s.store.UpdateMetadata(func(meta *model.Metadata) {
+	s.updateMetadata(func(meta *model.Metadata) {
 		for id, capability := range capabilities {
-			if containsID(finalConfig.RemovedModels, id) {
+			if slices.Contains(finalConfig.RemovedModels, id) {
 				continue
 			}
 			meta.Models[id] = mergeModelCapability(meta.Models[id], capability)
@@ -495,17 +498,17 @@ func (s *Service) Catalog(ctx context.Context) []string {
 	if err != nil {
 		return meta.Catalog
 	}
-	items := getSlice(asMap(raw), "data")
+	items := getSlice(jsonx.Map(raw), "data")
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		if id := getString(asMap(item), "id"); id != "" {
+		if id := getString(jsonx.Map(item), "id"); id != "" {
 			ids = append(ids, id)
 		}
 	}
 	if len(ids) == 0 {
 		return meta.Catalog
 	}
-	_ = s.store.UpdateMetadata(func(current *model.Metadata) {
+	s.updateMetadata(func(current *model.Metadata) {
 		current.Catalog = ids
 		current.CatalogFetchedAt = time.Now().UnixMilli()
 	})
@@ -530,22 +533,22 @@ func (s *Service) TestAccount(ctx context.Context, key string) AccountTestResult
 	if err != nil {
 		return AccountTestResult{OK: false, MS: time.Since(started).Milliseconds(), Model: modelID, Error: err.Error()}
 	}
-	message := extractError(asMap(raw))
-	if message != "" && !hasChoices(asMap(raw)) {
+	message := extractError(jsonx.Map(raw))
+	if message != "" && !hasChoices(jsonx.Map(raw)) {
 		authFail := regexp.MustCompile(`(?i)unauthorized|re-authenticate|invalid\s*api|401`).MatchString(message)
 		if authFail {
 			return AccountTestResult{
 				OK:    false,
 				MS:    time.Since(started).Milliseconds(),
 				Model: modelID,
-				Error: "密钥无效或未授权：" + truncate(message, 160),
+				Error: "密钥无效或未授权：" + strx.Truncate(message, 160),
 			}
 		}
 		return AccountTestResult{
 			OK:    true,
 			MS:    time.Since(started).Milliseconds(),
 			Model: modelID,
-			Note:  "密钥鉴权通过；网关提示：" + truncate(message, 120),
+			Note:  "密钥鉴权通过；网关提示：" + strx.Truncate(message, 120),
 		}
 	}
 	return AccountTestResult{OK: true, MS: time.Since(started).Milliseconds(), Model: modelID}
@@ -617,11 +620,11 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 	useVercel := pipeline == "planner" || pipeline == ""
 	useOpenRouter := pipeline == "direct" || pipeline == ""
 	if useVercel {
-		providerOptions := asMap(cloned["providerOptions"])
+		providerOptions := jsonx.Map(cloned["providerOptions"])
 		if providerOptions == nil {
 			providerOptions = map[string]any{}
 		}
-		gateway := asMap(providerOptions["gateway"])
+		gateway := jsonx.Map(providerOptions["gateway"])
 		if gateway == nil {
 			gateway = map[string]any{}
 		}
@@ -644,7 +647,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 		cloned["providerOptions"] = providerOptions
 	}
 	if useOpenRouter {
-		provider := asMap(cloned["provider"])
+		provider := jsonx.Map(cloned["provider"])
 		if provider == nil {
 			provider = map[string]any{}
 		}
@@ -691,7 +694,7 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 			Account: account,
 		}
 	}
-	root := asMap(raw)
+	root := jsonx.Map(raw)
 	if details, found := apierr.FromBody(root, status); found && !hasChoices(root) {
 		s.noteAccountStatus(account, details.Status)
 		return AttemptResult{
@@ -814,7 +817,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		}
 		var parsed map[string]any
 		if err := json.Unmarshal(raw, &parsed); err != nil {
-			parsed = map[string]any{"error": map[string]any{"message": truncate(string(raw), 400), "type": "upstream_error"}}
+			parsed = map[string]any{"error": map[string]any{"message": strx.Truncate(string(raw), 400), "type": "upstream_error"}}
 		}
 		if response.StatusCode == http.StatusOK && hasChoices(parsed) {
 			s.noteAccountStatus(account, http.StatusOK)
@@ -884,13 +887,13 @@ func (s *Service) LearnFailure(modelID string, attempt Attempt, message string) 
 		if status == "unknown" || status == "auth" {
 			return
 		}
-		_, _ = s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
+		s.updateModelMeta(modelID, func(current *model.ModelMeta) {
 			if current.UpstreamStatus == nil {
 				current.UpstreamStatus = map[string]model.UpstreamStatus{}
 			}
 			current.UpstreamStatus[attempt.Upstream] = model.UpstreamStatus{
 				Status:    status,
-				Note:      truncate(message, 160),
+				Note:      strx.Truncate(message, 160),
 				CheckedAt: time.Now().UnixMilli(),
 			}
 		})
@@ -903,8 +906,8 @@ func (s *Service) LearnFailure(modelID string, attempt Attempt, message string) 
 	if len(providers) == 0 {
 		return
 	}
-	_, _ = s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
-		current.Upstreams = unique(append(current.Upstreams, providers...))
+	s.updateModelMeta(modelID, func(current *model.ModelMeta) {
+		current.Upstreams = strx.Unique(append(current.Upstreams, providers...))
 	})
 }
 
@@ -913,14 +916,6 @@ func chatHeaders(key string) map[string]string {
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer " + key,
 	}
-}
-
-func truncate(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }
 
 func ErrorMessage(err error) string {

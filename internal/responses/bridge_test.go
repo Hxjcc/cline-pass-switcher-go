@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestToChatPreservesReasoningAndUserImage(t *testing.T) {
@@ -29,15 +31,15 @@ func TestToChatPreservesReasoningAndUserImage(t *testing.T) {
 	if chat["include_reasoning"] != true {
 		t.Fatalf("include_reasoning was not requested: %#v", chat["include_reasoning"])
 	}
-	if asMap(chat["reasoning"])["effort"] != "xhigh" {
+	if jsonx.Map(chat["reasoning"])["effort"] != "xhigh" {
 		t.Fatalf("native reasoning object was not forwarded: %#v", chat["reasoning"])
 	}
-	messages := asSlice(chat["messages"])
-	content := asSlice(asMap(messages[0])["content"])
+	messages := jsonx.Slice(chat["messages"])
+	content := jsonx.Slice(jsonx.Map(messages[0])["content"])
 	if len(content) != 2 {
 		t.Fatalf("expected text and image content, got %#v", content)
 	}
-	image := asMap(asMap(content[1])["image_url"])
+	image := jsonx.Map(jsonx.Map(content[1])["image_url"])
 	if image["url"] != "data:image/png;base64,AAAA" || image["detail"] != "high" {
 		t.Fatalf("unexpected image conversion: %#v", image)
 	}
@@ -68,30 +70,30 @@ func TestToChatMovesViewImageAfterCompleteToolGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	if len(messages) != 5 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("expected assistant, two tools, image user, final user; got %s", raw)
 	}
-	if asMap(messages[0])["role"] != "assistant" || len(asSlice(asMap(messages[0])["tool_calls"])) != 2 {
+	if jsonx.Map(messages[0])["role"] != "assistant" || len(jsonx.Slice(jsonx.Map(messages[0])["tool_calls"])) != 2 {
 		t.Fatalf("tool calls were not grouped: %#v", messages[0])
 	}
-	if asMap(messages[1])["role"] != "tool" || asMap(messages[2])["role"] != "tool" {
+	if jsonx.Map(messages[1])["role"] != "tool" || jsonx.Map(messages[2])["role"] != "tool" {
 		t.Fatalf("tool results must precede images: %#v", messages)
 	}
-	if !strings.Contains(asString(asMap(messages[2])["content"]), "image loaded") {
+	if !strings.Contains(jsonx.String(jsonx.Map(messages[2])["content"]), "image loaded") {
 		t.Fatalf("text alongside image was lost: %#v", messages[2])
 	}
-	imageMessage := asMap(messages[3])
+	imageMessage := jsonx.Map(messages[3])
 	if imageMessage["role"] != "user" {
 		t.Fatalf("image should be moved to a user message: %#v", imageMessage)
 	}
-	parts := asSlice(imageMessage["content"])
+	parts := jsonx.Slice(imageMessage["content"])
 	imageURL := ""
 	for _, raw := range parts {
-		part := asMap(raw)
+		part := jsonx.Map(raw)
 		if part["type"] == "image_url" {
-			imageURL = asString(asMap(part["image_url"])["url"])
+			imageURL = jsonx.String(jsonx.Map(part["image_url"])["url"])
 		}
 	}
 	if imageURL != "data:image/png;base64,QUJD" {
@@ -128,35 +130,35 @@ func TestToChatKeepsBatchedViewImageOutputsAcrossResizeNotices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("batched view_image history should convert: %v", err)
 	}
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	if len(messages) < 5 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("expected assistant, two tools, notices, images; got %s", raw)
 	}
-	assistant := asMap(messages[0])
-	if len(asSlice(assistant["tool_calls"])) != 2 {
+	assistant := jsonx.Map(messages[0])
+	if len(jsonx.Slice(assistant["tool_calls"])) != 2 {
 		t.Fatalf("both view_image calls should share one assistant message: %#v", assistant)
 	}
-	if asMap(messages[1])["tool_call_id"] != "call_00_FcvzTdT13OubzpZTEKKs2202" || asMap(messages[1])["content"] != toolMediaPlaceholder {
+	if jsonx.Map(messages[1])["tool_call_id"] != "call_00_FcvzTdT13OubzpZTEKKs2202" || jsonx.Map(messages[1])["content"] != toolMediaPlaceholder {
 		t.Fatalf("first image tool output was not placeholder-paired: %#v", messages[1])
 	}
-	if asMap(messages[2])["tool_call_id"] != "call_01_IX7JwYr2fqHzBsB6ygcH6127" || asMap(messages[2])["content"] != toolMediaPlaceholder {
+	if jsonx.Map(messages[2])["tool_call_id"] != "call_01_IX7JwYr2fqHzBsB6ygcH6127" || jsonx.Map(messages[2])["content"] != toolMediaPlaceholder {
 		t.Fatalf("second image tool output was not placeholder-paired: %#v", messages[2])
 	}
 	var imageCount int
 	var sawNotice bool
 	for _, raw := range messages[3:] {
-		message := asMap(raw)
+		message := jsonx.Map(raw)
 		// Mid-history developer notices are demoted to user turns; a system
 		// message after the tool group would be rejected by some providers.
-		if asString(message["role"]) != "user" {
+		if jsonx.String(message["role"]) != "user" {
 			t.Fatalf("unexpected role after tool group: %#v", message)
 		}
 		if strings.Contains(textFromParts(message["content"]), "image_resize_notice") {
 			sawNotice = true
 		}
-		for _, part := range asSlice(message["content"]) {
-			if asMap(part)["type"] == "image_url" {
+		for _, part := range jsonx.Slice(message["content"]) {
+			if jsonx.Map(part)["type"] == "image_url" {
 				imageCount++
 			}
 		}
@@ -186,12 +188,12 @@ func TestToChatReplaysReasoningOnAssistantToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	if len(messages) != 2 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("expected assistant tool call and tool output, got %s", raw)
 	}
-	assistant := asMap(messages[0])
+	assistant := jsonx.Map(messages[0])
 	if assistant["role"] != "assistant" || assistant["reasoning_content"] != "Need to inspect the file." {
 		t.Fatalf("reasoning was not replayed on the assistant tool call: %#v", assistant)
 	}
@@ -210,8 +212,8 @@ func TestToChatAttachesTrailingReasoningToPreviousAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := asSlice(chat["messages"])
-	assistant := asMap(messages[1])
+	messages := jsonx.Slice(chat["messages"])
+	assistant := jsonx.Map(messages[1])
 	if assistant["role"] != "assistant" || assistant["reasoning_content"] != "trailing thought" {
 		t.Fatalf("trailing reasoning was not attached to the assistant reply: %#v", assistant)
 	}
@@ -226,12 +228,12 @@ func TestToChatSkipsReasoningReplayForMoonshotModels(t *testing.T) {
 		},
 	}
 	chat, _, err := ToChatWithOptions(body, Options{
-		ReplayReasoning: ShouldReplayReasoning(asString(body["model"])),
+		ReplayReasoning: ShouldReplayReasoning(jsonx.String(body["model"])),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assistant := asMap(asSlice(chat["messages"])[0])
+	assistant := jsonx.Map(jsonx.Slice(chat["messages"])[0])
 	if assistant["reasoning_content"] != nil {
 		t.Fatalf("Moonshot reasoning must not be replayed: %#v", assistant)
 	}
@@ -250,15 +252,15 @@ func TestToChatRestoresCompactionEnvelopeAndIgnoresAdditionalTools(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	if len(messages) != 2 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("expected compaction summary and user message, got %s", raw)
 	}
-	if asMap(messages[0])["role"] != "system" || !strings.Contains(asString(asMap(messages[0])["content"]), "condensed history") {
+	if jsonx.Map(messages[0])["role"] != "system" || !strings.Contains(jsonx.String(jsonx.Map(messages[0])["content"]), "condensed history") {
 		t.Fatalf("compaction summary was not restored: %#v", messages[0])
 	}
-	if asMap(messages[1])["role"] != "user" || asMap(messages[1])["content"] != "continue" {
+	if jsonx.Map(messages[1])["role"] != "user" || jsonx.Map(messages[1])["content"] != "continue" {
 		t.Fatalf("additional_tools should not become a user message: %#v", messages)
 	}
 }
@@ -285,9 +287,9 @@ func TestToChatDropsOrphanedToolChoice(t *testing.T) {
 
 func chatFunctionByName(t *testing.T, chat map[string]any, name string) map[string]any {
 	t.Helper()
-	for _, raw := range asSlice(chat["tools"]) {
-		function := asMap(asMap(raw)["function"])
-		if asString(function["name"]) == name {
+	for _, raw := range jsonx.Slice(chat["tools"]) {
+		function := jsonx.Map(jsonx.Map(raw)["function"])
+		if jsonx.String(function["name"]) == name {
 			return function
 		}
 	}
@@ -317,10 +319,10 @@ func TestToChatPreservesClientToolSearchSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	function := chatFunctionByName(t, chat, "tool_search")
-	if asString(function["description"]) != "Find the project-specific tools needed to continue the task." {
+	if jsonx.String(function["description"]) != "Find the project-specific tools needed to continue the task." {
 		t.Fatalf("tool_search description was overwritten: %#v", function["description"])
 	}
-	if asMap(asMap(function["parameters"])["properties"])["goal"] == nil {
+	if jsonx.Map(jsonx.Map(function["parameters"])["properties"])["goal"] == nil {
 		t.Fatalf("client tool_search parameters were not forwarded: %#v", function["parameters"])
 	}
 }
@@ -368,17 +370,17 @@ func TestToChatCollectsAdditionalToolsAndSearchOutput(t *testing.T) {
 	chatFunctionByName(t, chat, "exec")
 	chatFunctionByName(t, chat, "tool_search")
 	chatFunctionByName(t, chat, "calendar__create_event")
-	if context.ResponseTools == nil || asString(asMap(context.ResponseTools[0])["name"]) != "exec" {
+	if context.ResponseTools == nil || jsonx.String(jsonx.Map(context.ResponseTools[0])["name"]) != "exec" {
 		t.Fatalf("Responses Lite tools were not echoed: %#v", context.ResponseTools)
 	}
 	foundSearchOutput := false
-	for _, raw := range asSlice(chat["messages"]) {
-		message := asMap(raw)
-		if asString(message["role"]) != "tool" || asString(message["tool_call_id"]) != "call_search" {
+	for _, raw := range jsonx.Slice(chat["messages"]) {
+		message := jsonx.Map(raw)
+		if jsonx.String(message["role"]) != "tool" || jsonx.String(message["tool_call_id"]) != "call_search" {
 			continue
 		}
 		foundSearchOutput = true
-		if !strings.Contains(asString(message["content"]), "create_event") {
+		if !strings.Contains(jsonx.String(message["content"]), "create_event") {
 			t.Fatalf("tool_search_output tools were not forwarded as Chat tool content: %#v", message["content"])
 		}
 	}
@@ -414,9 +416,9 @@ func TestToChatSkipsHostedToolSearchHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range asSlice(chat["messages"]) {
-		message := asMap(raw)
-		if asString(message["role"]) == "tool" || asSlice(message["tool_calls"]) != nil {
+	for _, raw := range jsonx.Slice(chat["messages"]) {
+		message := jsonx.Map(raw)
+		if jsonx.String(message["role"]) == "tool" || jsonx.Slice(message["tool_calls"]) != nil {
 			rawMessages, _ := json.Marshal(chat["messages"])
 			t.Fatalf("hosted tool_search items must not become Chat tool turns: %s", rawMessages)
 		}
@@ -450,11 +452,11 @@ func TestFromChatProducesResponsesToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := asSlice(response["output"])
-	if len(output) != 2 || asMap(output[0])["type"] != "reasoning" || asMap(output[1])["type"] != "custom_tool_call" {
+	output := jsonx.Slice(response["output"])
+	if len(output) != 2 || jsonx.Map(output[0])["type"] != "reasoning" || jsonx.Map(output[1])["type"] != "custom_tool_call" {
 		t.Fatalf("unexpected response output: %#v", output)
 	}
-	if asMap(output[1])["input"] != "*** Begin Patch" {
+	if jsonx.Map(output[1])["input"] != "*** Begin Patch" {
 		t.Fatalf("custom tool input was not restored: %#v", output[1])
 	}
 }
@@ -504,7 +506,7 @@ func TestStreamAdapterRestoresCustomToolCall(t *testing.T) {
 	for _, value := range events {
 		types = append(types, value.Type)
 		if value.Type == "response.custom_tool_call_input.done" {
-			customInput = asString(value.Data["input"])
+			customInput = jsonx.String(value.Data["input"])
 		}
 	}
 	joined := strings.Join(types, ",")
@@ -545,10 +547,10 @@ func TestStreamAdapterRestoresToolSearchCall(t *testing.T) {
 	for _, value := range events {
 		types = append(types, value.Type)
 		if value.Type == "response.output_item.done" {
-			item = asMap(value.Data["item"])
+			item = jsonx.Map(value.Data["item"])
 		}
 		if value.Type == "response.function_call_arguments.done" {
-			arguments = asString(value.Data["arguments"])
+			arguments = jsonx.String(value.Data["arguments"])
 		}
 	}
 	joined := strings.Join(types, ",")
@@ -557,10 +559,10 @@ func TestStreamAdapterRestoresToolSearchCall(t *testing.T) {
 			t.Fatalf("missing %s in %s", expected, joined)
 		}
 	}
-	if asString(item["type"]) != "tool_search_call" || asString(item["execution"]) != "client" || asString(item["call_id"]) != "call_search" {
+	if jsonx.String(item["type"]) != "tool_search_call" || jsonx.String(item["execution"]) != "client" || jsonx.String(item["call_id"]) != "call_search" {
 		t.Fatalf("unexpected tool_search_call item: %#v", item)
 	}
-	if asString(asMap(item["arguments"])["query"]) != "calendar" {
+	if jsonx.String(jsonx.Map(item["arguments"])["query"]) != "calendar" {
 		t.Fatalf("tool_search arguments were not restored: %#v", item["arguments"])
 	}
 	if arguments != `{"query":"calendar"}` {
@@ -580,8 +582,8 @@ func TestStreamAdapterFailsBareEOFWithoutFinishReason(t *testing.T) {
 	if last.Type != "response.failed" {
 		t.Fatalf("bare EOF should fail instead of completing: %#v", events)
 	}
-	response := asMap(last.Data["response"])
-	responseError := asMap(response["error"])
+	response := jsonx.Map(last.Data["response"])
+	responseError := jsonx.Map(response["error"])
 	if responseError["code"] != "stream_truncated" {
 		t.Fatalf("unexpected terminal error: %#v", responseError)
 	}
@@ -601,8 +603,8 @@ func TestStreamAdapterMarksContentFilterIncomplete(t *testing.T) {
 	if last.Type != "response.incomplete" {
 		t.Fatalf("content_filter should produce response.incomplete: %#v", events)
 	}
-	response := asMap(last.Data["response"])
-	if asMap(response["incomplete_details"])["reason"] != "content_filter" {
+	response := jsonx.Map(last.Data["response"])
+	if jsonx.Map(response["incomplete_details"])["reason"] != "content_filter" {
 		t.Fatalf("unexpected incomplete details: %#v", response)
 	}
 }
@@ -621,7 +623,7 @@ func TestStreamAdapterFailsUnknownFinishReason(t *testing.T) {
 	if last.Type != "response.failed" {
 		t.Fatalf("unknown finish_reason should fail: %#v", events)
 	}
-	responseError := asMap(asMap(last.Data["response"])["error"])
+	responseError := jsonx.Map(jsonx.Map(last.Data["response"])["error"])
 	if responseError["code"] != "upstream_finish_reason_unknown" {
 		t.Fatalf("unexpected terminal error: %#v", responseError)
 	}
@@ -641,7 +643,7 @@ func TestStreamAdapterLocksResponseIdentityAfterFirstChunk(t *testing.T) {
 	var completed map[string]any
 	for _, value := range events {
 		if value.Type == "response.completed" {
-			completed = asMap(value.Data["response"])
+			completed = jsonx.Map(value.Data["response"])
 		}
 	}
 	if completed == nil {
@@ -669,9 +671,9 @@ func TestStreamAdapterSplitsInlineThinkBlock(t *testing.T) {
 	for _, value := range events {
 		switch value.Type {
 		case "response.reasoning_summary_text.delta":
-			reasoning += asString(value.Data["delta"])
+			reasoning += jsonx.String(value.Data["delta"])
 		case "response.output_text.delta":
-			visible += asString(value.Data["delta"])
+			visible += jsonx.String(value.Data["delta"])
 		}
 	}
 	if reasoning != "I should think." {
@@ -696,7 +698,7 @@ func TestStreamAdapterReadsReasoningDetails(t *testing.T) {
 	var reasoning string
 	for _, value := range events {
 		if value.Type == "response.reasoning_summary_text.delta" {
-			reasoning += asString(value.Data["delta"])
+			reasoning += jsonx.String(value.Data["delta"])
 		}
 	}
 	if reasoning != "detailed thought" {
@@ -726,7 +728,7 @@ func TestStreamAdapterDropsMalformedToolArguments(t *testing.T) {
 	if last.Type != "response.failed" {
 		t.Fatalf("malformed arguments should fail the turn: %#v", events)
 	}
-	responseError := asMap(asMap(last.Data["response"])["error"])
+	responseError := jsonx.Map(jsonx.Map(last.Data["response"])["error"])
 	if responseError["code"] != "upstream_tool_call_dropped" {
 		t.Fatalf("unexpected terminal error: %#v", responseError)
 	}
@@ -753,7 +755,7 @@ func TestStreamAdapterCanonicalizesToolArguments(t *testing.T) {
 	var arguments string
 	for _, value := range events {
 		if value.Type == "response.function_call_arguments.done" {
-			arguments = asString(value.Data["arguments"])
+			arguments = jsonx.String(value.Data["arguments"])
 		}
 	}
 	if arguments != `{"cmd":"dir"}` {
@@ -775,13 +777,13 @@ func TestToChatMergesCommentaryWithToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := asSlice(chat["messages"])
+	messages := jsonx.Slice(chat["messages"])
 	if len(messages) != 2 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("commentary and tool calls should share one assistant message: %s", raw)
 	}
-	assistant := asMap(messages[0])
-	if assistant["content"] != "I will inspect." || len(asSlice(assistant["tool_calls"])) != 1 {
+	assistant := jsonx.Map(messages[0])
+	if assistant["content"] != "I will inspect." || len(jsonx.Slice(assistant["tool_calls"])) != 1 {
 		t.Fatalf("commentary was not merged with tool calls: %#v", assistant)
 	}
 }
@@ -894,7 +896,7 @@ func TestStreamAdapterPreservesUpstreamErrorType(t *testing.T) {
 	if last.Type != "response.failed" {
 		t.Fatalf("expected response.failed, got %#v", events)
 	}
-	responseError := asMap(asMap(last.Data["response"])["error"])
+	responseError := jsonx.Map(jsonx.Map(last.Data["response"])["error"])
 	if responseError["type"] != "rate_limit_error" || responseError["code"] != "rate_limit_exceeded" {
 		t.Fatalf("stream error details were not preserved: %#v", responseError)
 	}
@@ -936,8 +938,8 @@ func TestStreamAdapterEmitsRawReasoningForDeepSeek(t *testing.T) {
 		case "response.reasoning_summary_text.delta":
 			summaryDeltas++
 		case "response.output_item.done":
-			item := asMap(value.Data["item"])
-			if asString(item["type"]) == "reasoning" {
+			item := jsonx.Map(value.Data["item"])
+			if jsonx.String(item["type"]) == "reasoning" {
 				reasoningItem = item
 			}
 		}
@@ -948,12 +950,12 @@ func TestStreamAdapterEmitsRawReasoningForDeepSeek(t *testing.T) {
 	if reasoningItem == nil {
 		t.Fatal("missing completed reasoning item")
 	}
-	content := asSlice(reasoningItem["content"])
-	if len(content) != 1 || asString(asMap(content[0])["type"]) != "reasoning_text" {
+	content := jsonx.Slice(reasoningItem["content"])
+	if len(content) != 1 || jsonx.String(jsonx.Map(content[0])["type"]) != "reasoning_text" {
 		t.Fatalf("raw reasoning item shape is wrong: %#v", reasoningItem)
 	}
-	summary := asSlice(reasoningItem["summary"])
-	if len(summary) != 1 || asString(asMap(summary[0])["text"]) != "Need think." {
+	summary := jsonx.Slice(reasoningItem["summary"])
+	if len(summary) != 1 || jsonx.String(jsonx.Map(summary[0])["text"]) != "Need think." {
 		t.Fatalf("ChatGPT summary projection missing: %#v", reasoningItem)
 	}
 }
@@ -976,7 +978,7 @@ func TestStreamAdapterPreservesReasoningSpaces(t *testing.T) {
 	var joined string
 	for _, value := range events {
 		if value.Type == "response.reasoning_text.delta" {
-			joined += asString(value.Data["delta"])
+			joined += jsonx.String(value.Data["delta"])
 		}
 	}
 	if joined != "We need answer" {
@@ -1000,8 +1002,8 @@ func TestToChatReplaysFullReasoningWithoutTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assistant := asMap(asSlice(chat["messages"])[0])
-	if got := asString(assistant["reasoning_content"]); got != longReasoning {
+	assistant := jsonx.Map(jsonx.Slice(chat["messages"])[0])
+	if got := jsonx.String(assistant["reasoning_content"]); got != longReasoning {
 		t.Fatalf("reasoning replay was truncated: got %d bytes, want %d", len(got), len(longReasoning))
 	}
 }
@@ -1021,7 +1023,7 @@ func TestStreamAdapterKeepsRequestedModel(t *testing.T) {
 	))
 	for _, value := range events {
 		if value.Type == "response.created" {
-			if asString(asMap(value.Data["response"])["model"]) != "cline-pass/glm-5.3-flash" {
+			if jsonx.String(jsonx.Map(value.Data["response"])["model"]) != "cline-pass/glm-5.3-flash" {
 				t.Fatalf("streamed model was overwritten: %#v", value.Data["response"])
 			}
 			return
@@ -1049,15 +1051,15 @@ func TestFromChatReadsClineReasoningField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asString(response["model"]) != "cline-pass/qwen3.8-max" {
+	if jsonx.String(response["model"]) != "cline-pass/qwen3.8-max" {
 		t.Fatalf("requested model was not preserved: %#v", response["model"])
 	}
-	item := asMap(asSlice(response["output"])[0])
-	if asString(item["type"]) != "reasoning" {
+	item := jsonx.Map(jsonx.Slice(response["output"])[0])
+	if jsonx.String(item["type"]) != "reasoning" {
 		t.Fatalf("cline reasoning field was not converted: %#v", response["output"])
 	}
-	summary := asSlice(item["summary"])
-	if len(summary) != 1 || asString(asMap(summary[0])["text"]) != "step by step" {
+	summary := jsonx.Slice(item["summary"])
+	if len(summary) != 1 || jsonx.String(jsonx.Map(summary[0])["text"]) != "step by step" {
 		t.Fatalf("reasoning summary missing: %#v", item)
 	}
 }
@@ -1071,8 +1073,8 @@ func TestAliasChatReasoningCopiesOpenRouterField(t *testing.T) {
 	if !AliasChatReasoning(chunk) {
 		t.Fatal("expected reasoning alias")
 	}
-	delta := asMap(asMap(asSlice(chunk["choices"])[0])["delta"])
-	if asString(delta["reasoning_content"]) != "think aloud" {
+	delta := jsonx.Map(jsonx.Map(jsonx.Slice(chunk["choices"])[0])["delta"])
+	if jsonx.String(delta["reasoning_content"]) != "think aloud" {
 		t.Fatalf("reasoning_content was not filled: %#v", delta)
 	}
 }
@@ -1086,12 +1088,12 @@ func collectStreamText(events []Event) (reasoning, visible string, lateDeltas []
 		case "response.output_item.done":
 			done[value.Data["output_index"]] = true
 		case "response.reasoning_summary_text.delta":
-			reasoning += asString(value.Data["delta"])
+			reasoning += jsonx.String(value.Data["delta"])
 			if done[value.Data["output_index"]] {
 				lateDeltas = append(lateDeltas, value)
 			}
 		case "response.output_text.delta":
-			visible += asString(value.Data["delta"])
+			visible += jsonx.String(value.Data["delta"])
 			if done[value.Data["output_index"]] {
 				lateDeltas = append(lateDeltas, value)
 			}
@@ -1107,8 +1109,8 @@ func completedOutputTypes(t *testing.T, events []Event) []string {
 		t.Fatalf("expected response.completed, got %s: %#v", last.Type, last.Data)
 	}
 	types := []string{}
-	for _, raw := range asSlice(asMap(last.Data["response"])["output"]) {
-		types = append(types, asString(asMap(raw)["type"]))
+	for _, raw := range jsonx.Slice(jsonx.Map(last.Data["response"])["output"]) {
+		types = append(types, jsonx.String(jsonx.Map(raw)["type"]))
 	}
 	return types
 }
@@ -1138,8 +1140,8 @@ func TestStreamAdapterReopensItemsAfterInterleavedThinking(t *testing.T) {
 	if strings.Join(types, ",") != strings.Join(want, ",") {
 		t.Fatalf("output should follow wire order, got %v", types)
 	}
-	response := asMap(events[len(events)-1].Data["response"])
-	second := asMap(asSlice(response["output"])[3])
+	response := jsonx.Map(events[len(events)-1].Data["response"])
+	second := jsonx.Map(jsonx.Slice(response["output"])[3])
 	if textFromParts(second["content"]) != "Step two." {
 		t.Fatalf("second message lost its text: %#v", second)
 	}
@@ -1264,15 +1266,15 @@ func TestFromChatSplitsInlineThinkBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := asSlice(response["output"])
-	if len(output) != 2 || asMap(output[0])["type"] != "reasoning" || asMap(output[1])["type"] != "message" {
+	output := jsonx.Slice(response["output"])
+	if len(output) != 2 || jsonx.Map(output[0])["type"] != "reasoning" || jsonx.Map(output[1])["type"] != "message" {
 		t.Fatalf("non-stream path should split inline think like the stream path: %#v", output)
 	}
-	if textFromParts(asMap(output[1])["content"]) != "OK" {
+	if textFromParts(jsonx.Map(output[1])["content"]) != "OK" {
 		t.Fatalf("think tags leaked into the message: %#v", output[1])
 	}
-	summary := asSlice(asMap(output[0])["summary"])
-	if len(summary) != 1 || asString(asMap(summary[0])["text"]) != "I should think." {
+	summary := jsonx.Slice(jsonx.Map(output[0])["summary"])
+	if len(summary) != 1 || jsonx.String(jsonx.Map(summary[0])["text"]) != "I should think." {
 		t.Fatalf("reasoning summary missing: %#v", output[0])
 	}
 }
@@ -1291,7 +1293,7 @@ func TestFromChatMarksContentFilterIncomplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response["status"] != "incomplete" || asMap(response["incomplete_details"])["reason"] != "content_filter" {
+	if response["status"] != "incomplete" || jsonx.Map(response["incomplete_details"])["reason"] != "content_filter" {
 		t.Fatalf("content_filter should be reported as incomplete: %#v", response)
 	}
 }
@@ -1345,11 +1347,11 @@ func TestFromChatKeepsToolCallOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := asSlice(response["output"])
-	if len(output) != 3 || asMap(output[0])["type"] != "message" {
+	output := jsonx.Slice(response["output"])
+	if len(output) != 3 || jsonx.Map(output[0])["type"] != "message" {
 		t.Fatalf("unexpected output: %#v", output)
 	}
-	if asMap(output[1])["call_id"] != "call_a" || asMap(output[2])["call_id"] != "call_b" {
+	if jsonx.Map(output[1])["call_id"] != "call_a" || jsonx.Map(output[2])["call_id"] != "call_b" {
 		t.Fatalf("tool call order changed: %#v", output)
 	}
 }
@@ -1385,12 +1387,12 @@ func TestChatCompletionAsChunkIndexesToolCalls(t *testing.T) {
 	if chunk["object"] != "chat.completion.chunk" || chunk["provider"] != "vendor" || chunk["usage"] == nil {
 		t.Fatalf("top-level fields were not carried over: %#v", chunk)
 	}
-	choice := asMap(asSlice(chunk["choices"])[0])
-	delta := asMap(choice["delta"])
-	if choice["finish_reason"] != "tool_calls" || asString(delta["content"]) != "hi" {
+	choice := jsonx.Map(jsonx.Slice(chunk["choices"])[0])
+	delta := jsonx.Map(choice["delta"])
+	if choice["finish_reason"] != "tool_calls" || jsonx.String(delta["content"]) != "hi" {
 		t.Fatalf("choice was not reshaped into a delta: %#v", choice)
 	}
-	call := asMap(asSlice(delta["tool_calls"])[0])
+	call := jsonx.Map(jsonx.Slice(delta["tool_calls"])[0])
 	if call["index"] != 0 {
 		t.Fatalf("streaming tool calls need an index: %#v", call)
 	}
@@ -1411,13 +1413,13 @@ func TestToChatDemotesMidHistoryDeveloperMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	roles := []string{}
-	for _, raw := range asSlice(chat["messages"]) {
-		roles = append(roles, asString(asMap(raw)["role"]))
+	for _, raw := range jsonx.Slice(chat["messages"]) {
+		roles = append(roles, jsonx.String(jsonx.Map(raw)["role"]))
 	}
 	if strings.Join(roles, ",") != "system,system,user,assistant,user,user" {
 		t.Fatalf("leading developer stays system, later ones become user: %v", roles)
 	}
-	demoted := asMap(asSlice(chat["messages"])[4])
+	demoted := jsonx.Map(jsonx.Slice(chat["messages"])[4])
 	if !strings.Contains(textFromParts(demoted["content"]), "environment_context") {
 		t.Fatalf("demoted notice lost its content: %#v", demoted)
 	}
@@ -1447,8 +1449,8 @@ func TestToChatForwardsPromptCacheKeyAndPadsEmptyToolOutput(t *testing.T) {
 	if chat["prompt_cache_key"] != "session-42" {
 		t.Fatalf("prompt_cache_key should reach the Chat body: %#v", chat)
 	}
-	messages := asSlice(chat["messages"])
-	tool := asMap(messages[len(messages)-1])
+	messages := jsonx.Slice(chat["messages"])
+	tool := jsonx.Map(messages[len(messages)-1])
 	if tool["role"] != "tool" || tool["content"] != toolEmptyOutputPlaceholder {
 		t.Fatalf("empty tool output should be padded: %#v", tool)
 	}
@@ -1469,8 +1471,8 @@ func TestCompactionEventsOpenTheLifecycle(t *testing.T) {
 	if strings.Join(types, ",") != want {
 		t.Fatalf("unexpected compaction lifecycle: %v", types)
 	}
-	created := asMap(CompactionEvents(compaction, context)[0].Data["response"])
-	if created["status"] != "in_progress" || len(asSlice(created["output"])) != 0 || created["usage"] != nil {
+	created := jsonx.Map(CompactionEvents(compaction, context)[0].Data["response"])
+	if created["status"] != "in_progress" || len(jsonx.Slice(created["output"])) != 0 || created["usage"] != nil {
 		t.Fatalf("response.created must describe an in-progress response: %#v", created)
 	}
 	if compaction["object"] != "response.compaction" || compaction["status"] != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -59,21 +60,6 @@ type Context struct {
 	outputSchema             *jsonschema.Schema
 }
 
-func asMap(value any) map[string]any {
-	result, _ := value.(map[string]any)
-	return result
-}
-
-func asSlice(value any) []any {
-	result, _ := value.([]any)
-	return result
-}
-
-func asString(value any) string {
-	result, _ := value.(string)
-	return result
-}
-
 func boolValue(value any, fallback bool) bool {
 	if result, ok := value.(bool); ok {
 		return result
@@ -82,7 +68,7 @@ func boolValue(value any, fallback bool) bool {
 }
 
 func normalizedImageDetail(value any) string {
-	detail := asString(value)
+	detail := jsonx.String(value)
 	if detail == "original" {
 		return "high"
 	}
@@ -180,8 +166,8 @@ func isServerHostedToolType(typeName string) bool {
 // optional declarations are omitted from Chat; an explicit forced selection
 // is validated separately rather than rejecting the entire tool inventory.
 func isUnforwardedTool(tool map[string]any) bool {
-	return isServerHostedToolType(asString(tool["type"])) ||
-		(asString(tool["type"]) == "tool_search" && asString(tool["execution"]) == "server")
+	return isServerHostedToolType(jsonx.String(tool["type"])) ||
+		(jsonx.String(tool["type"]) == "tool_search" && jsonx.String(tool["execution"]) == "server")
 }
 
 func (context *Context) alreadyBound(namespace, name string) bool {
@@ -192,7 +178,7 @@ func (context *Context) alreadyBound(namespace, name string) bool {
 }
 
 func toolDescriptionWithDefinition(tool map[string]any) string {
-	description := asString(tool["description"])
+	description := jsonx.String(tool["description"])
 	definition := map[string]any{
 		"type":        tool["type"],
 		"name":        tool["name"],
@@ -219,20 +205,20 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		return
 	}
 
-	tool := asMap(value)
+	tool := jsonx.Map(value)
 	if tool == nil {
 		return
 	}
 	if isUnforwardedTool(tool) {
 		return
 	}
-	typeName := asString(tool["type"])
+	typeName := jsonx.String(tool["type"])
 	if typeName == "namespace" {
-		nextNamespace := asString(tool["name"])
+		nextNamespace := jsonx.String(tool["name"])
 		if nextNamespace == "" {
 			nextNamespace = namespace
 		}
-		for _, child := range asSlice(tool["tools"]) {
+		for _, child := range jsonx.Slice(tool["tools"]) {
 			context.addResponseTool(child, nextNamespace)
 		}
 		return
@@ -244,7 +230,7 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		context.toolNames[toolSearchName] = struct{}{}
 		context.bindings[toolSearchName] = toolBinding{Kind: "tool_search", Name: toolSearchName}
 		context.originalToChat[toolSearchName] = toolSearchName
-		description := asString(tool["description"])
+		description := jsonx.String(tool["description"])
 		if description == "" {
 			description = "Search and load Codex tools, plugins, connectors, and MCP namespaces."
 		}
@@ -255,7 +241,7 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		context.chatTools = append(context.chatTools, functionTool(toolSearchName, description, parameters, nil))
 		return
 	}
-	name := asString(tool["name"])
+	name := jsonx.String(tool["name"])
 	if name == "" {
 		return
 	}
@@ -278,7 +264,7 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	if parameters == nil {
 		parameters = tool["input_schema"]
 	}
-	context.chatTools = append(context.chatTools, functionTool(chatName, asString(tool["description"]), parameters, tool["strict"]))
+	context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, tool["strict"]))
 }
 
 func (context *Context) collectDeclaredInputTools(value any, depth int) {
@@ -291,9 +277,9 @@ func (context *Context) collectDeclaredInputTools(value any, depth int) {
 			context.collectDeclaredInputTools(child, depth+1)
 		}
 	case map[string]any:
-		switch asString(typed["type"]) {
+		switch jsonx.String(typed["type"]) {
 		case "additional_tools":
-			tools := asSlice(typed["tools"])
+			tools := jsonx.Slice(typed["tools"])
 			if len(context.ResponseTools) == 0 && len(tools) > 0 {
 				context.ResponseTools = tools
 			}
@@ -301,7 +287,7 @@ func (context *Context) collectDeclaredInputTools(value any, depth int) {
 				context.addResponseTool(tool, "")
 			}
 		case "tool_search_output":
-			for _, tool := range asSlice(typed["tools"]) {
+			for _, tool := range jsonx.Slice(typed["tools"]) {
 				context.addResponseTool(tool, "")
 			}
 		}
@@ -312,10 +298,10 @@ func (context *Context) collectDeclaredInputTools(value any, depth int) {
 }
 
 func isHostedToolSearchItem(item map[string]any) bool {
-	if asString(item["execution"]) == "server" {
+	if jsonx.String(item["execution"]) == "server" {
 		return true
 	}
-	return strings.TrimSpace(asString(item["call_id"])) == "" && asString(item["execution"]) != "client"
+	return strings.TrimSpace(jsonx.String(item["call_id"])) == "" && jsonx.String(item["execution"]) != "client"
 }
 
 func toolSearchOutputContent(item map[string]any) string {
@@ -335,7 +321,7 @@ func toolSearchOutputContent(item map[string]any) string {
 }
 
 func imageURLPart(part map[string]any) (map[string]any, bool) {
-	typeName := asString(part["type"])
+	typeName := jsonx.String(part["type"])
 	if typeName != "input_image" && typeName != "image_url" && typeName != "image" && typeName != "output_image" {
 		return nil, false
 	}
@@ -343,17 +329,17 @@ func imageURLPart(part map[string]any) (map[string]any, bool) {
 	var imageURL any
 	if value := part["image_url"]; value != nil {
 		imageURL = value
-	} else if value := asString(part["url"]); value != "" {
+	} else if value := jsonx.String(part["url"]); value != "" {
 		imageURL = value
-	} else if value := asString(part["image"]); value != "" {
+	} else if value := jsonx.String(part["image"]); value != "" {
 		imageURL = value
-	} else if data := asString(part["data"]); data != "" {
+	} else if data := jsonx.String(part["data"]); data != "" {
 		if strings.HasPrefix(data, "data:") {
 			imageURL = data
 		} else {
-			mimeType := asString(part["mimeType"])
+			mimeType := jsonx.String(part["mimeType"])
 			if mimeType == "" {
-				mimeType = asString(part["mime_type"])
+				mimeType = jsonx.String(part["mime_type"])
 			}
 			if mimeType == "" {
 				mimeType = "image/png"
@@ -383,7 +369,7 @@ func imageURLPart(part map[string]any) (map[string]any, bool) {
 		if detail != "" && value["detail"] == nil {
 			value["detail"] = detail
 		}
-		if asString(value["url"]) == "" {
+		if jsonx.String(value["url"]) == "" {
 			return nil, false
 		}
 		return map[string]any{"type": "image_url", "image_url": value}, true
@@ -396,25 +382,25 @@ func chatContentFromResponseContent(content any) any {
 	if text, ok := content.(string); ok {
 		return text
 	}
-	items := asSlice(content)
+	items := jsonx.Slice(content)
 	if items == nil {
 		return ""
 	}
 	parts := make([]any, 0, len(items))
 	allText := true
 	for _, value := range items {
-		part := asMap(value)
+		part := jsonx.Map(value)
 		if part == nil {
 			continue
 		}
-		typeName := asString(part["type"])
+		typeName := jsonx.String(part["type"])
 		switch typeName {
 		case "input_text", "output_text", "text":
-			if text := asString(part["text"]); text != "" {
+			if text := jsonx.String(part["text"]); text != "" {
 				parts = append(parts, map[string]any{"type": "text", "text": text})
 			}
 		case "refusal":
-			if text := asString(part["refusal"]); text != "" {
+			if text := jsonx.String(part["refusal"]); text != "" {
 				parts = append(parts, map[string]any{"type": "text", "text": text})
 			}
 		case "input_image", "image_url", "image", "output_image":
@@ -423,9 +409,9 @@ func chatContentFromResponseContent(content any) any {
 				allText = false
 			}
 		case "input_file":
-			name := asString(part["filename"])
+			name := jsonx.String(part["filename"])
 			if name == "" {
-				name = asString(part["file_id"])
+				name = jsonx.String(part["file_id"])
 			}
 			if name == "" {
 				name = "attachment"
@@ -439,7 +425,7 @@ func chatContentFromResponseContent(content any) any {
 	if allText {
 		var builder strings.Builder
 		for _, value := range parts {
-			builder.WriteString(asString(asMap(value)["text"]))
+			builder.WriteString(jsonx.String(jsonx.Map(value)["text"]))
 		}
 		return builder.String()
 	}
@@ -479,7 +465,7 @@ func isToolContent(value any, depth int) bool {
 		if _, ok := imageURLPart(typed); ok {
 			return true
 		}
-		switch asString(typed["type"]) {
+		switch jsonx.String(typed["type"]) {
 		case "input_text", "output_text", "text":
 			_, ok := typed["text"].(string)
 			return ok
@@ -541,9 +527,9 @@ func collectToolOutput(value any, parts *outputParts, depth int) {
 			parts.Images = append(parts.Images, image)
 			return
 		}
-		typeName := asString(typed["type"])
+		typeName := jsonx.String(typed["type"])
 		if typeName == "input_text" || typeName == "output_text" || typeName == "text" {
-			parts.addText(asString(typed["text"]))
+			parts.addText(jsonx.String(typed["text"]))
 			return
 		}
 		for _, key := range []string{"content", "output"} {
@@ -576,7 +562,7 @@ func parseToolOutput(value any) outputParts {
 }
 
 func messageFromResponseItem(item map[string]any) map[string]any {
-	role := asString(item["role"])
+	role := jsonx.String(item["role"])
 	if role == "developer" {
 		role = "system"
 	}
@@ -589,10 +575,10 @@ func messageFromResponseItem(item map[string]any) map[string]any {
 	if role == "assistant" {
 		content := make([]any, 0)
 		var refusal strings.Builder
-		for _, raw := range asSlice(item["content"]) {
-			part := asMap(raw)
+		for _, raw := range jsonx.Slice(item["content"]) {
+			part := jsonx.Map(raw)
 			if part["type"] == "refusal" {
-				refusal.WriteString(asString(part["refusal"]))
+				refusal.WriteString(jsonx.String(part["refusal"]))
 			} else {
 				content = append(content, raw)
 			}
@@ -622,17 +608,17 @@ func (context *Context) chatToolName(name, namespace string) string {
 }
 
 func functionCallFromResponseItem(item map[string]any, context *Context) map[string]any {
-	callID := asString(item["call_id"])
+	callID := jsonx.String(item["call_id"])
 	if callID == "" {
-		callID = asString(item["id"])
+		callID = jsonx.String(item["id"])
 	}
-	typeName := asString(item["type"])
-	name := asString(item["name"])
-	namespace := asString(item["namespace"])
+	typeName := jsonx.String(item["type"])
+	name := jsonx.String(item["name"])
+	namespace := jsonx.String(item["namespace"])
 	chatName := context.chatToolName(name, namespace)
-	arguments := asString(item["arguments"])
+	arguments := jsonx.String(item["arguments"])
 	if typeName == "custom_tool_call" {
-		argumentsRaw, _ := json.Marshal(map[string]any{customToolInputKey: asString(item["input"])})
+		argumentsRaw, _ := json.Marshal(map[string]any{customToolInputKey: jsonx.String(item["input"])})
 		arguments = string(argumentsRaw)
 	} else if typeName == "tool_search_call" {
 		chatName = toolSearchName
@@ -663,16 +649,16 @@ func (context *Context) toolChoiceToChat(value any) any {
 			return nil
 		}
 	}
-	choice := asMap(value)
+	choice := jsonx.Map(value)
 	if choice == nil {
 		return nil
 	}
-	name := asString(choice["name"])
+	name := jsonx.String(choice["name"])
 	if name == "" {
 		return nil
 	}
-	chatName := context.chatToolName(name, asString(choice["namespace"]))
-	if asString(choice["type"]) == "tool_search" {
+	chatName := context.chatToolName(name, jsonx.String(choice["namespace"]))
+	if jsonx.String(choice["type"]) == "tool_search" {
 		chatName = toolSearchName
 	}
 	return map[string]any{"type": "function", "function": map[string]any{"name": chatName}}
@@ -766,15 +752,15 @@ func mapReasoningEffort(effort string, supported []string) string {
 // endpoint returns response.compaction; SSE uses the normal Response lifecycle
 // with retained user messages followed by the compaction item.
 func CompactionEvents(compaction map[string]any, context *Context) []Event {
-	response := context.responseBase(asString(compaction["id"]), intValue(compaction["created_at"]),
-		context.Model, "completed", asSlice(compaction["output"]), compaction["usage"], nil, "")
-	inProgress := context.responseBase(asString(compaction["id"]), intValue(compaction["created_at"]),
+	response := context.responseBase(jsonx.String(compaction["id"]), intValue(compaction["created_at"]),
+		context.Model, "completed", jsonx.Slice(compaction["output"]), compaction["usage"], nil, "")
+	inProgress := context.responseBase(jsonx.String(compaction["id"]), intValue(compaction["created_at"]),
 		context.Model, "in_progress", []any{}, nil, nil, "")
 	events := []Event{
 		event("response.created", map[string]any{"response": inProgress}),
 		event("response.in_progress", map[string]any{"response": inProgress}),
 	}
-	for index, item := range asSlice(compaction["output"]) {
+	for index, item := range jsonx.Slice(compaction["output"]) {
 		events = append(events,
 			event("response.output_item.added", map[string]any{"output_index": index, "item": item}),
 			event("response.output_item.done", map[string]any{"output_index": index, "item": item}),
@@ -804,9 +790,9 @@ func compactionSummaryFromEnvelope(value string) (string, bool) {
 
 func responseOutputText(response map[string]any) string {
 	parts := make([]string, 0, 2)
-	for _, raw := range asSlice(response["output"]) {
-		item := asMap(raw)
-		switch asString(item["type"]) {
+	for _, raw := range jsonx.Slice(response["output"]) {
+		item := jsonx.Map(raw)
+		switch jsonx.String(item["type"]) {
 		case "message":
 			if text := strings.TrimSpace(textFromParts(item["content"])); text != "" {
 				parts = append(parts, text)
@@ -841,12 +827,12 @@ func extractReasoningDetailsText(value any) string {
 }
 
 func extractReasoningDetailPartText(value any) string {
-	object := asMap(value)
+	object := jsonx.Map(value)
 	if object == nil {
 		return ""
 	}
 	for _, key := range []string{"text", "content", "summary"} {
-		raw := asString(object[key])
+		raw := jsonx.String(object[key])
 		if strings.TrimSpace(raw) != "" {
 			return raw
 		}
@@ -860,19 +846,19 @@ func extractReasoningDetailPartText(value any) string {
 // extractReasoningFieldText pulls readable reasoning from the various shapes
 // used by OpenAI-compatible Chat upstreams.
 func extractReasoningFieldText(value any) string {
-	object := asMap(value)
+	object := jsonx.Map(value)
 	if object == nil {
 		return ""
 	}
 	for _, key := range []string{"reasoning_content", "reasoning"} {
-		raw := asString(object[key])
+		raw := jsonx.String(object[key])
 		if strings.TrimSpace(raw) != "" {
 			return raw
 		}
 	}
-	if reasoning := asMap(object["reasoning"]); reasoning != nil {
+	if reasoning := jsonx.Map(object["reasoning"]); reasoning != nil {
 		for _, key := range []string{"content", "text", "summary"} {
-			raw := asString(reasoning[key])
+			raw := jsonx.String(reasoning[key])
 			if strings.TrimSpace(raw) != "" {
 				return raw
 			}
@@ -889,13 +875,13 @@ func AliasChatReasoning(chunk map[string]any) bool {
 		return false
 	}
 	changed := false
-	for _, raw := range asSlice(chunk["choices"]) {
-		choice := asMap(raw)
+	for _, raw := range jsonx.Slice(chunk["choices"]) {
+		choice := jsonx.Map(raw)
 		if choice == nil {
 			continue
 		}
 		for _, key := range []string{"delta", "message"} {
-			object := asMap(choice[key])
+			object := jsonx.Map(choice[key])
 			if object == nil {
 				continue
 			}
@@ -908,22 +894,22 @@ func AliasChatReasoning(chunk map[string]any) bool {
 }
 
 func aliasReasoningFields(object map[string]any) bool {
-	reasoningText := asString(object["reasoning"])
+	reasoningText := jsonx.String(object["reasoning"])
 	if reasoningText == "" {
-		if nested := asMap(object["reasoning"]); nested != nil {
-			reasoningText = firstString(asString(nested["content"]), asString(nested["text"]), asString(nested["summary"]))
+		if nested := jsonx.Map(object["reasoning"]); nested != nil {
+			reasoningText = firstString(jsonx.String(nested["content"]), jsonx.String(nested["text"]), jsonx.String(nested["summary"]))
 		}
 	}
 	if reasoningText == "" {
 		reasoningText = extractReasoningDetailsText(object["reasoning_details"])
 	}
-	contentText := asString(object["reasoning_content"])
+	contentText := jsonx.String(object["reasoning_content"])
 	changed := false
 	if reasoningText != "" && strings.TrimSpace(contentText) == "" {
 		object["reasoning_content"] = reasoningText
 		changed = true
 	}
-	if contentText != "" && asString(object["reasoning"]) == "" && asMap(object["reasoning"]) == nil {
+	if contentText != "" && jsonx.String(object["reasoning"]) == "" && jsonx.Map(object["reasoning"]) == nil {
 		object["reasoning"] = contentText
 		changed = true
 	}
@@ -931,7 +917,7 @@ func aliasReasoningFields(object map[string]any) bool {
 }
 
 func extractReasoningSummaryText(value any) string {
-	object := asMap(value)
+	object := jsonx.Map(value)
 	if object == nil {
 		return ""
 	}
@@ -942,7 +928,7 @@ func extractReasoningSummaryText(value any) string {
 		}
 	}
 	for _, key := range []string{"reasoning_content", "text"} {
-		raw := asString(object[key])
+		raw := jsonx.String(object[key])
 		if strings.TrimSpace(raw) != "" {
 			return raw
 		}
@@ -959,20 +945,20 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 		return nil, err
 	}
 	if response["status"] != "completed" {
-		reason := asString(asMap(response["incomplete_details"])["reason"])
+		reason := jsonx.String(jsonx.Map(response["incomplete_details"])["reason"])
 		return nil, &ChatFailure{Code: "compaction_incomplete", Type: "upstream_error",
 			Message: "upstream compaction summary is incomplete: " + reason, Response: response}
 	}
-	choice := asMap(asSlice(chat["choices"])[0])
-	message := asMap(choice["message"])
-	if asString(choice["finish_reason"]) != "stop" || len(asSlice(message["tool_calls"])) > 0 {
+	choice := jsonx.Map(jsonx.Slice(chat["choices"])[0])
+	message := jsonx.Map(choice["message"])
+	if jsonx.String(choice["finish_reason"]) != "stop" || len(jsonx.Slice(message["tool_calls"])) > 0 {
 		return nil, errors.New("upstream compaction did not finish with a summary")
 	}
-	if asString(message["refusal"]) != "" {
+	if jsonx.String(message["refusal"]) != "" {
 		return nil, errors.New("upstream refused the compaction request")
 	}
-	for _, raw := range asSlice(message["content"]) {
-		if asMap(raw)["type"] == "refusal" {
+	for _, raw := range jsonx.Slice(message["content"]) {
+		if jsonx.Map(raw)["type"] == "refusal" {
 			return nil, errors.New("upstream refused the compaction request")
 		}
 	}
@@ -1006,7 +992,7 @@ func reasoningTextFromItem(item map[string]any) string {
 func ToChat(body map[string]any) (map[string]any, *Context, error) {
 	modelID := ""
 	if body != nil {
-		modelID = asString(body["model"])
+		modelID = jsonx.String(body["model"])
 	}
 	return ToChatWithOptions(body, Options{
 		ReplayReasoning: true,
@@ -1020,24 +1006,24 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	if body == nil {
 		return nil, nil, errors.New("invalid Responses request body")
 	}
-	modelID := strings.TrimSpace(asString(body["model"]))
+	modelID := strings.TrimSpace(jsonx.String(body["model"]))
 	if modelID == "" {
 		return nil, nil, errors.New("model is required")
 	}
 	// The proxy keeps no server-side state (every response is store:false),
 	// so chaining on a previous response would silently drop the earlier
 	// turns. Refusing is the only honest answer.
-	if previous := strings.TrimSpace(asString(body["previous_response_id"])); previous != "" {
+	if previous := strings.TrimSpace(jsonx.String(body["previous_response_id"])); previous != "" {
 		return nil, nil, errors.New("previous_response_id is not supported by this proxy; send the full conversation in input")
 	}
 	if err := validateRequestCapabilities(body); err != nil {
 		return nil, nil, err
 	}
-	responseTools := asSlice(body["tools"])
+	responseTools := jsonx.Slice(body["tools"])
 	if responseTools == nil {
 		responseTools = []any{}
 	}
-	metadata := asMap(body["metadata"])
+	metadata := jsonx.Map(body["metadata"])
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
@@ -1074,17 +1060,17 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"], 0)
-	if asString(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
+	if jsonx.String(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
 		return nil, nil, unsupported("tool_choice", "required tool execution when no client-executable tools are available")
 	}
-	if asString(asMap(context.ResponseToolChoice)["type"]) == "tool_search" && context.bindings[toolSearchName].Kind != "tool_search" {
+	if jsonx.String(jsonx.Map(context.ResponseToolChoice)["type"]) == "tool_search" && context.bindings[toolSearchName].Kind != "tool_search" {
 		return nil, nil, unsupported("tool_choice", "forced tool search without a client-executable tool_search declaration")
 	}
 
 	messages := make([]any, 0, 16)
 	prefixMessages := make([]any, 0, 2)
 	if instructions := body["instructions"]; instructions != nil {
-		text := asString(instructions)
+		text := jsonx.String(instructions)
 		if text == "" {
 			raw, _ := json.Marshal(instructions)
 			text = string(raw)
@@ -1093,7 +1079,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			prefixMessages = append(prefixMessages, map[string]any{"role": "system", "content": text})
 		}
 	}
-	input := asSlice(body["input"])
+	input := jsonx.Slice(body["input"])
 	if input == nil {
 		input = []any{map[string]any{"type": "message", "role": "user", "content": body["input"]}}
 	}
@@ -1136,8 +1122,8 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		if !options.ReplayReasoning || value == "" || lastAssistantIndex < 0 || lastAssistantIndex >= len(messages) {
 			return
 		}
-		message := asMap(messages[lastAssistantIndex])
-		if message == nil || asString(message["role"]) != "assistant" {
+		message := jsonx.Map(messages[lastAssistantIndex])
+		if message == nil || jsonx.String(message["role"]) != "assistant" {
 			return
 		}
 		if existing, _ := message["reasoning_content"].(string); strings.TrimSpace(existing) != "" {
@@ -1150,7 +1136,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	}
 	conversationStarted := func() bool {
 		for _, raw := range messages {
-			if asString(asMap(raw)["role"]) != "system" {
+			if jsonx.String(jsonx.Map(raw)["role"]) != "system" {
 				return true
 			}
 		}
@@ -1160,7 +1146,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		if message == nil {
 			return
 		}
-		role := asString(message["role"])
+		role := jsonx.String(message["role"])
 		if role == "assistant" {
 			attachReasoning(message)
 			messages = append(messages, message)
@@ -1187,8 +1173,8 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	buffered := make([]map[string]any, 0)
 	registerCalls := func(calls []any) {
 		for _, raw := range calls {
-			call := asMap(raw)
-			id := strings.TrimSpace(asString(call["id"]))
+			call := jsonx.Map(raw)
+			id := strings.TrimSpace(jsonx.String(call["id"]))
 			if id != "" {
 				unanswered[id] = struct{}{}
 			}
@@ -1209,8 +1195,8 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		// tool_calls; two consecutive assistant messages teach them to stop
 		// after the commentary text.
 		if len(messages) > 0 {
-			last := asMap(messages[len(messages)-1])
-			if last != nil && asString(last["role"]) == "assistant" && last["tool_calls"] == nil {
+			last := jsonx.Map(messages[len(messages)-1])
+			if last != nil && jsonx.String(last["role"]) == "assistant" && last["tool_calls"] == nil {
 				last["tool_calls"] = calls
 				attachReasoning(last)
 				lastAssistantIndex = len(messages) - 1
@@ -1270,11 +1256,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			queueOrAppend(map[string]any{"role": "user", "content": text})
 			continue
 		}
-		item := asMap(rawItem)
+		item := jsonx.Map(rawItem)
 		if item == nil {
 			continue
 		}
-		switch asString(item["type"]) {
+		switch jsonx.String(item["type"]) {
 		case "reasoning":
 			appendReasoning(reasoningTextFromItem(item))
 		case "function_call", "custom_tool_call":
@@ -1292,9 +1278,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			pendingToolCalls = append(pendingToolCalls, functionCallFromResponseItem(item, context))
 		case "function_call_output", "custom_tool_call_output":
 			flushToolCalls()
-			callID := asString(item["call_id"])
+			callID := jsonx.String(item["call_id"])
 			if callID == "" {
-				callID = asString(item["id"])
+				callID = jsonx.String(item["id"])
 			}
 			parts := parseToolOutput(item["output"])
 			text := strings.Join(parts.Text, "\n")
@@ -1315,9 +1301,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 				continue
 			}
 			flushToolCalls()
-			callID := asString(item["call_id"])
+			callID := jsonx.String(item["call_id"])
 			if callID == "" {
-				callID = asString(item["id"])
+				callID = jsonx.String(item["id"])
 			}
 			messages = append(messages, map[string]any{
 				"role": "tool", "tool_call_id": callID, "content": toolSearchOutputContent(item),
@@ -1325,7 +1311,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			delete(unanswered, strings.TrimSpace(callID))
 			flushAfterToolGroup()
 		case "compaction":
-			if summary, ok := compactionSummaryFromEnvelope(asString(item["encrypted_content"])); ok {
+			if summary, ok := compactionSummaryFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
 				compactionSummaries = append(compactionSummaries, summary)
 			} else {
 				compactionSummaries = append(compactionSummaries, "Earlier conversation was compacted, but its details are not readable by this provider.")
@@ -1334,9 +1320,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			// Responses Lite carries dynamic tool declarations here; they are
 			// not Chat messages and must not be replayed as user text.
 		default:
-			if item["role"] != nil || asString(item["type"]) == "message" || item["type"] == nil {
+			if item["role"] != nil || jsonx.String(item["type"]) == "message" || item["type"] == nil {
 				queueOrAppend(messageFromResponseItem(item))
-			} else if typeName := asString(item["type"]); typeName == "input_text" || typeName == "input_image" || typeName == "input_file" || typeName == "input_audio" {
+			} else if typeName := jsonx.String(item["type"]); typeName == "input_text" || typeName == "input_image" || typeName == "input_file" || typeName == "input_audio" {
 				queueOrAppend(messageFromResponseItem(map[string]any{"role": "user", "content": []any{item}}))
 			} else {
 				raw, _ := json.Marshal(item)
@@ -1382,11 +1368,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	}
 	// Chat Completions accepts the same cache hint; passing it through lets
 	// prompt-caching upstreams keep routing a conversation to a warm cache.
-	if cacheKey := strings.TrimSpace(asString(body["prompt_cache_key"])); cacheKey != "" {
+	if cacheKey := strings.TrimSpace(jsonx.String(body["prompt_cache_key"])); cacheKey != "" {
 		chat["prompt_cache_key"] = cacheKey
 	}
-	reasoning := asMap(body["reasoning"])
-	rawEffort := asString(reasoning["effort"])
+	reasoning := jsonx.Map(body["reasoning"])
+	rawEffort := jsonx.String(reasoning["effort"])
 	context.RequestedReasoningEffort = strings.ToLower(strings.TrimSpace(rawEffort))
 	effort := mapReasoningEffort(rawEffort, options.ReasoningEfforts)
 	disabled := reasoningEffortDisabled(rawEffort) || reasoningEffortDisabled(effort)
@@ -1414,12 +1400,12 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		delete(chat, "tool_choice")
 		delete(chat, "parallel_tool_calls")
 	}
-	if text := asMap(body["text"]); text != nil {
-		if format := asMap(text["format"]); format != nil {
-			switch asString(format["type"]) {
+	if text := jsonx.Map(body["text"]); text != nil {
+		if format := jsonx.Map(text["format"]); format != nil {
+			switch jsonx.String(format["type"]) {
 			case "json_schema":
 				if format["schema"] != nil {
-					name := asString(format["name"])
+					name := jsonx.String(format["name"])
 					if name == "" {
 						name = "response"
 					}
@@ -1450,13 +1436,13 @@ func validateChatToolHistory(messages []any) error {
 	}
 
 	for _, raw := range messages {
-		message := asMap(raw)
+		message := jsonx.Map(raw)
 		if message == nil {
 			continue
 		}
-		role := asString(message["role"])
+		role := jsonx.String(message["role"])
 		if role == "tool" {
-			callID := strings.TrimSpace(asString(message["tool_call_id"]))
+			callID := strings.TrimSpace(jsonx.String(message["tool_call_id"]))
 			if callID == "" {
 				return errors.New("tool output history is incomplete: tool_call_id is missing")
 			}
@@ -1472,9 +1458,9 @@ func validateChatToolHistory(messages []any) error {
 		if role != "assistant" {
 			continue
 		}
-		for _, rawCall := range asSlice(message["tool_calls"]) {
-			call := asMap(rawCall)
-			callID := strings.TrimSpace(asString(call["id"]))
+		for _, rawCall := range jsonx.Slice(message["tool_calls"]) {
+			call := jsonx.Map(rawCall)
+			callID := strings.TrimSpace(jsonx.String(call["id"]))
 			if callID == "" {
 				return errors.New("tool output history is incomplete: assistant tool call id is missing")
 			}
@@ -1505,7 +1491,7 @@ func customInputFromArguments(value string) string {
 	var parsed any
 	if json.Unmarshal([]byte(value), &parsed) == nil {
 		if object, ok := parsed.(map[string]any); ok {
-			if input := asString(object[customToolInputKey]); input != "" {
+			if input := jsonx.String(object[customToolInputKey]); input != "" {
 				return input
 			}
 		}
@@ -1541,14 +1527,14 @@ func textFromParts(content any) string {
 		return text
 	}
 	var builder strings.Builder
-	for _, raw := range asSlice(content) {
-		part := asMap(raw)
+	for _, raw := range jsonx.Slice(content) {
+		part := jsonx.Map(raw)
 		if part == nil {
 			continue
 		}
-		if text := asString(part["text"]); text != "" {
+		if text := jsonx.String(part["text"]); text != "" {
 			builder.WriteString(text)
-		} else if refusal := asString(part["refusal"]); refusal != "" {
+		} else if refusal := jsonx.String(part["refusal"]); refusal != "" {
 			builder.WriteString(refusal)
 		}
 	}
@@ -1556,14 +1542,14 @@ func textFromParts(content any) string {
 }
 
 func usageToResponses(value any) any {
-	usage := asMap(value)
+	usage := jsonx.Map(value)
 	if usage == nil {
 		return nil
 	}
 	input := intValue(usage["prompt_tokens"])
 	output := intValue(usage["completion_tokens"])
-	promptDetails := asMap(usage["prompt_tokens_details"])
-	completionDetails := asMap(usage["completion_tokens_details"])
+	promptDetails := jsonx.Map(usage["prompt_tokens_details"])
+	completionDetails := jsonx.Map(usage["completion_tokens_details"])
 	return map[string]any{
 		"input_tokens":          input,
 		"input_tokens_details":  map[string]any{"cached_tokens": intValue(promptDetails["cached_tokens"])},
@@ -1597,13 +1583,13 @@ func intValueWithFallback(value any, fallback int64) int64 {
 }
 
 func (context *Context) responseOutputItemFromTool(toolCall map[string]any, status string) map[string]any {
-	callID := asString(toolCall["id"])
+	callID := jsonx.String(toolCall["id"])
 	if callID == "" {
 		callID = newID("call")
 	}
-	function := asMap(toolCall["function"])
-	chatName := asString(function["name"])
-	arguments := asString(function["arguments"])
+	function := jsonx.Map(toolCall["function"])
+	chatName := jsonx.String(function["name"])
+	arguments := jsonx.String(function["arguments"])
 	binding := context.bindings[chatName]
 	switch binding.Kind {
 	case "custom":
@@ -1686,13 +1672,13 @@ func deltaFromChatMessage(message map[string]any) map[string]any {
 	for key, value := range message {
 		delta[key] = value
 	}
-	calls := asSlice(message["tool_calls"])
+	calls := jsonx.Slice(message["tool_calls"])
 	if len(calls) == 0 {
 		return delta
 	}
 	indexed := make([]any, 0, len(calls))
 	for position, raw := range calls {
-		call := asMap(raw)
+		call := jsonx.Map(raw)
 		if call == nil {
 			continue
 		}
@@ -1711,16 +1697,16 @@ func deltaFromChatMessage(message map[string]any) map[string]any {
 // streaming state machine and returns the complete Responses event lifecycle,
 // ending in response.completed, response.incomplete or response.failed.
 func EventsFromChat(chat map[string]any, context *Context) ([]Event, error) {
-	choices := asSlice(chat["choices"])
+	choices := jsonx.Slice(chat["choices"])
 	if len(choices) == 0 {
 		return nil, errors.New("upstream returned no choices")
 	}
-	choice := asMap(choices[0])
+	choice := jsonx.Map(choices[0])
 	chunk := map[string]any{
 		"id": chat["id"], "model": chat["model"], "created": chat["created"], "usage": chat["usage"],
 		"choices": []any{map[string]any{
 			"index":         0,
-			"delta":         deltaFromChatMessage(asMap(choice["message"])),
+			"delta":         deltaFromChatMessage(jsonx.Map(choice["message"])),
 			"finish_reason": choice["finish_reason"],
 		}},
 	}
@@ -1739,15 +1725,15 @@ func FromChat(chat map[string]any, context *Context) (map[string]any, error) {
 		return nil, err
 	}
 	terminal := events[len(events)-1]
-	response := asMap(terminal.Data["response"])
+	response := jsonx.Map(terminal.Data["response"])
 	if terminal.Type != "response.failed" {
 		return response, nil
 	}
 	failure := &ChatFailure{Response: response, Message: "upstream response could not be converted"}
-	if responseError := asMap(response["error"]); responseError != nil {
-		failure.Code = asString(responseError["code"])
-		failure.Type = asString(responseError["type"])
-		if message := asString(responseError["message"]); message != "" {
+	if responseError := jsonx.Map(response["error"]); responseError != nil {
+		failure.Code = jsonx.String(responseError["code"])
+		failure.Type = jsonx.String(responseError["type"])
+		if message := jsonx.String(responseError["message"]); message != "" {
 			failure.Message = message
 		}
 	}
@@ -1766,8 +1752,8 @@ func ChatCompletionAsChunk(chat map[string]any) map[string]any {
 	}
 	chunk["object"] = "chat.completion.chunk"
 	choices := make([]any, 0, 1)
-	for position, raw := range asSlice(chat["choices"]) {
-		choice := asMap(raw)
+	for position, raw := range jsonx.Slice(chat["choices"]) {
+		choice := jsonx.Map(raw)
 		if choice == nil {
 			continue
 		}
@@ -1777,7 +1763,7 @@ func ChatCompletionAsChunk(chat map[string]any) map[string]any {
 		}
 		choices = append(choices, map[string]any{
 			"index":         index,
-			"delta":         deltaFromChatMessage(asMap(choice["message"])),
+			"delta":         deltaFromChatMessage(jsonx.Map(choice["message"])),
 			"finish_reason": choice["finish_reason"],
 			"logprobs":      choice["logprobs"],
 		})

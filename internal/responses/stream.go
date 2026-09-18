@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/apierr"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
 )
 
 const (
@@ -42,15 +44,15 @@ type Outcome struct {
 func OutcomeFromEvents(events []Event) Outcome {
 	for index := len(events) - 1; index >= 0; index-- {
 		value := events[index]
-		response := asMap(value.Data["response"])
+		response := jsonx.Map(value.Data["response"])
 		switch value.Type {
 		case "response.completed":
 			return Outcome{Status: "completed"}
 		case "response.incomplete":
-			return Outcome{Status: "incomplete", IncompleteReason: asString(asMap(response["incomplete_details"])["reason"])}
+			return Outcome{Status: "incomplete", IncompleteReason: jsonx.String(jsonx.Map(response["incomplete_details"])["reason"])}
 		case "response.failed":
-			details := asMap(response["error"])
-			return Outcome{Status: "failed", Code: asString(details["code"]), Message: asString(details["message"])}
+			details := jsonx.Map(response["error"])
+			return Outcome{Status: "failed", Code: jsonx.String(details["code"]), Message: jsonx.String(details["message"])}
 		}
 	}
 	return Outcome{}
@@ -521,7 +523,7 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 	if value, found := raw["index"]; found {
 		index = int(intValue(value))
 	}
-	callID := asString(raw["id"])
+	callID := jsonx.String(raw["id"])
 	if index < 0 && callID != "" {
 		for key, current := range state.tools {
 			if current.CallID == callID {
@@ -553,8 +555,8 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 	if callID != "" {
 		current.CallID = callID
 	}
-	if function := asMap(raw["function"]); function != nil {
-		if name := asString(function["name"]); name != "" {
+	if function := jsonx.Map(raw["function"]); function != nil {
+		if name := jsonx.String(function["name"]); name != "" {
 			current.ChatName = name
 		}
 	}
@@ -563,8 +565,8 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 
 func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 	current := state.ensureTool(raw)
-	function := asMap(raw["function"])
-	argumentDelta := asString(function["arguments"])
+	function := jsonx.Map(raw["function"])
+	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
 	events := []Event{}
 	if !current.Added && current.ChatName != "" {
@@ -572,8 +574,8 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 			"id":       current.CallID,
 			"function": map[string]any{"name": current.ChatName, "arguments": ""},
 		}, "in_progress")
-		current.ItemID = asString(base["id"])
-		current.Kind = asString(base["type"])
+		current.ItemID = jsonx.String(base["id"])
+		current.Kind = jsonx.String(base["type"])
 		current.Added = true
 		events = append(events, state.closeReasoning()...)
 		events = append(events, state.closeMessage()...)
@@ -620,19 +622,19 @@ func (state *StreamState) closeTools() []Event {
 			"function": map[string]any{"name": current.ChatName, "arguments": arguments},
 		}, "completed")
 		base["id"] = current.ItemID
-		switch asString(base["type"]) {
+		switch jsonx.String(base["type"]) {
 		case "custom_tool_call":
 			events = append(events,
 				event("response.custom_tool_call_input.delta", map[string]any{
-					"item_id": asString(base["id"]), "output_index": current.OutputIndex, "delta": base["input"],
+					"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "delta": base["input"],
 				}),
 				event("response.custom_tool_call_input.done", map[string]any{
-					"item_id": asString(base["id"]), "output_index": current.OutputIndex, "input": base["input"],
+					"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "input": base["input"],
 				}),
 			)
 		case "function_call", "tool_search_call":
 			events = append(events, event("response.function_call_arguments.done", map[string]any{
-				"item_id": asString(base["id"]), "output_index": current.OutputIndex,
+				"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex,
 				"arguments": toolArgumentsJSON(base["arguments"]),
 			}))
 		}
@@ -691,7 +693,7 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 		return state.failWithDetails(details.Message, code, details.Type)
 	}
 	if !state.identityLocked {
-		if id := asString(chunk["id"]); id != "" {
+		if id := jsonx.String(chunk["id"]); id != "" {
 			state.responseID = responseIDFromChatID(id)
 		}
 		// Keep the client-requested model. ChatGPT Desktop / Codex drops
@@ -699,23 +701,23 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 		if createdAt := intValue(chunk["created"]); createdAt != 0 {
 			state.createdAt = createdAt
 		}
-		if asString(chunk["id"]) != "" || asString(chunk["model"]) != "" || len(asSlice(chunk["choices"])) > 0 {
+		if jsonx.String(chunk["id"]) != "" || jsonx.String(chunk["model"]) != "" || len(jsonx.Slice(chunk["choices"])) > 0 {
 			state.identityLocked = true
 		}
 	}
 	if chunk["usage"] != nil {
 		state.usage = usageToResponses(chunk["usage"])
 	}
-	choices := asSlice(chunk["choices"])
+	choices := jsonx.Slice(chunk["choices"])
 	if len(choices) == 0 {
 		return nil
 	}
-	choice := asMap(choices[0])
+	choice := jsonx.Map(choices[0])
 	if choice == nil {
 		return nil
 	}
 	events := state.ensureStarted()
-	delta := asMap(choice["delta"])
+	delta := jsonx.Map(choice["delta"])
 	if delta != nil {
 		if reasoning := reasoningDeltaText(delta); reasoning != "" {
 			events = append(events, state.pushReasoning(reasoning)...)
@@ -723,28 +725,28 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 		if content, ok := delta["content"].(string); ok {
 			events = append(events, state.pushContent(content)...)
 		} else {
-			for _, raw := range asSlice(delta["content"]) {
-				part := asMap(raw)
+			for _, raw := range jsonx.Slice(delta["content"]) {
+				part := jsonx.Map(raw)
 				if part["type"] == "refusal" {
-					events = append(events, state.pushRefusal(asString(part["refusal"]))...)
+					events = append(events, state.pushRefusal(jsonx.String(part["refusal"]))...)
 				} else {
-					events = append(events, state.pushContent(asString(part["text"]))...)
+					events = append(events, state.pushContent(jsonx.String(part["text"]))...)
 				}
 			}
 		}
-		if refusal := asString(delta["refusal"]); refusal != "" {
+		if refusal := jsonx.String(delta["refusal"]); refusal != "" {
 			events = append(events, state.pushRefusal(refusal)...)
 		}
-		if toolCalls := asSlice(delta["tool_calls"]); len(toolCalls) > 0 {
+		if toolCalls := jsonx.Slice(delta["tool_calls"]); len(toolCalls) > 0 {
 			events = append(events, state.flushInlineThink()...)
 			for _, raw := range toolCalls {
-				if toolCall := asMap(raw); toolCall != nil {
+				if toolCall := jsonx.Map(raw); toolCall != nil {
 					events = append(events, state.pushToolCall(toolCall)...)
 				}
 			}
 		}
 	}
-	if finishReason := asString(choice["finish_reason"]); finishReason != "" {
+	if finishReason := jsonx.String(choice["finish_reason"]); finishReason != "" {
 		state.finishReason = finishReason
 	}
 	return events
@@ -755,13 +757,13 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 // and must not be dropped just because it trims to nothing.
 func reasoningDeltaText(delta map[string]any) string {
 	for _, key := range []string{"reasoning_content", "reasoning"} {
-		if raw := asString(delta[key]); raw != "" {
+		if raw := jsonx.String(delta[key]); raw != "" {
 			return raw
 		}
 	}
-	if reasoning := asMap(delta["reasoning"]); reasoning != nil {
+	if reasoning := jsonx.Map(delta["reasoning"]); reasoning != nil {
 		for _, key := range []string{"content", "text", "summary"} {
-			if raw := asString(reasoning[key]); raw != "" {
+			if raw := jsonx.String(reasoning[key]); raw != "" {
 				return raw
 			}
 		}
@@ -814,7 +816,7 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 	hasMessage := false
 	hasToolCall := false
 	for _, entry := range state.output {
-		switch asString(entry.item["type"]) {
+		switch jsonx.String(entry.item["type"]) {
 		case "message":
 			if strings.TrimSpace(textFromParts(entry.item["content"])) != "" {
 				hasMessage = true
@@ -883,7 +885,7 @@ func (state *StreamState) finish(events []Event, status, incompleteReason string
 
 type StreamAdapter struct {
 	state  *StreamState
-	buffer string
+	parser sse.Parser
 	done   bool
 }
 
@@ -930,20 +932,14 @@ func (adapter *StreamAdapter) Feed(data []byte) []Event {
 	if adapter.done || len(data) == 0 {
 		return nil
 	}
-	adapter.buffer += string(data)
-	adapter.buffer = strings.ReplaceAll(adapter.buffer, "\r\n", "\n")
 	events := []Event{}
-	for {
-		index := strings.Index(adapter.buffer, "\n\n")
-		if index < 0 {
-			break
-		}
-		block := adapter.buffer[:index]
-		adapter.buffer = adapter.buffer[index+2:]
+	err := adapter.parser.Feed(data, func(block string) bool {
 		events = append(events, adapter.handleBlock(block)...)
-		if adapter.done {
-			break
-		}
+		return !adapter.done
+	})
+	if err != nil {
+		adapter.done = true
+		events = append(events, adapter.state.Fail(err.Error(), "stream_event_too_large")...)
 	}
 	return events
 }
@@ -953,10 +949,8 @@ func (adapter *StreamAdapter) Finish(readErr error) []Event {
 		return nil
 	}
 	events := []Event{}
-	if strings.TrimSpace(adapter.buffer) != "" {
-		adapter.buffer = strings.ReplaceAll(adapter.buffer, "\r\n", "\n")
-		events = append(events, adapter.handleBlock(adapter.buffer)...)
-		adapter.buffer = ""
+	if remaining := adapter.parser.Finish(); strings.TrimSpace(remaining) != "" {
+		events = append(events, adapter.handleBlock(remaining)...)
 	}
 	if adapter.done {
 		return events
