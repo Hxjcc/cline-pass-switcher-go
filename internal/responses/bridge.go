@@ -52,12 +52,19 @@ type Context struct {
 	RequestedReasoningEffort string
 	MappedReasoningEffort    string
 	RawReasoning             bool
-	bindings                 map[string]toolBinding
-	originalToChat           map[string]string
-	chatTools                []any
-	toolNames                map[string]struct{}
-	compactionUsers          []any
-	outputSchema             *jsonschema.Schema
+	// webSearchTool and webFetchTool are gateway provider tools (for example
+	// vercel:exa_search and vercel:browserbase_fetch) that stand in for the
+	// client's hosted web_search and for reading a link the user pasted.
+	// Empty keeps the capability off.
+	webSearchTool   string
+	webFetchTool    string
+	providerTools   map[string]struct{}
+	bindings        map[string]toolBinding
+	originalToChat  map[string]string
+	chatTools       []any
+	toolNames       map[string]struct{}
+	compactionUsers []any
+	outputSchema    *jsonschema.Schema
 }
 
 func boolValue(value any, fallback bool) bool {
@@ -209,6 +216,10 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	if tool == nil {
 		return
 	}
+	if isWebSearchToolType(jsonx.String(tool["type"])) {
+		context.addProviderWebSearch()
+		return
+	}
 	if isUnforwardedTool(tool) {
 		return
 	}
@@ -265,6 +276,146 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		parameters = tool["input_schema"]
 	}
 	context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, tool["strict"]))
+}
+
+// isWebSearchToolType reports whether the client declared OpenAI's hosted web
+// search. The other hosted tools (file_search, computer, ...) stay unsupported.
+func isWebSearchToolType(typeName string) bool {
+	switch typeName {
+	case "web_search", "web_search_preview", "web_search_preview_2025_03_11":
+		return true
+	default:
+		return false
+	}
+}
+
+// addProviderWebSearch declares the gateway-executed search tool that stands in
+// for the hosted web_search. The gateway performs the search, so the client only
+// ever sees the finished answer.
+func (context *Context) addProviderWebSearch() {
+	context.addProviderTool(context.webSearchTool)
+}
+
+// addProviderTool declares one gateway-executed tool exactly once and remembers
+// its names so calls the gateway answers itself never reach the client.
+func (context *Context) addProviderTool(tool string) {
+	if tool == "" {
+		return
+	}
+	if context.providerTools == nil {
+		context.providerTools = map[string]struct{}{}
+	}
+	if _, found := context.providerTools[tool]; found {
+		return
+	}
+	context.providerTools[tool] = struct{}{}
+	context.chatTools = append(context.chatTools, map[string]any{"type": tool})
+	if index := strings.LastIndex(tool, ":"); index >= 0 {
+		context.providerTools[tool[index+1:]] = struct{}{}
+	}
+}
+
+// normaliseWebFetchTool maps configuration onto the gateway fetch tool.
+func normaliseWebFetchTool(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "", "off", "none", "false", "disabled":
+		return ""
+	case "browserbase", "browserbase_fetch", "fetch", "on", "true":
+		return "vercel:browserbase_fetch"
+	default:
+		if strings.HasPrefix(strings.ToLower(trimmed), "vercel:") {
+			return trimmed
+		}
+		return ""
+	}
+}
+
+// httpURLPattern matches an http(s) link inside user-authored text.
+var httpURLPattern = regexp.MustCompile("https?://[^\\s<>\"')]+")
+
+// requestHasUserURL reports whether the user sent a link. Reading a page is only
+// useful in that case, so the fetch tool is declared lazily.
+func requestHasUserURL(input any) bool {
+	if text, ok := input.(string); ok {
+		return httpURLPattern.MatchString(text)
+	}
+	for _, raw := range jsonx.Slice(input) {
+		if text, ok := raw.(string); ok {
+			if httpURLPattern.MatchString(text) {
+				return true
+			}
+			continue
+		}
+		item := jsonx.Map(raw)
+		if item == nil {
+			continue
+		}
+		if role := jsonx.String(item["role"]); role != "" && role != "user" {
+			continue
+		}
+		if kind := jsonx.String(item["type"]); kind != "" && kind != "message" && !strings.HasPrefix(kind, "input_") {
+			continue
+		}
+		if httpURLPattern.MatchString(collectPartText(item["content"])) {
+			return true
+		}
+		if httpURLPattern.MatchString(jsonx.String(item["text"])) {
+			return true
+		}
+	}
+	return false
+}
+
+// collectPartText flattens the text of a Responses content value.
+func collectPartText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	var builder strings.Builder
+	for _, raw := range jsonx.Slice(content) {
+		part := jsonx.Map(raw)
+		if part == nil {
+			continue
+		}
+		if text := jsonx.String(part["text"]); text != "" {
+			builder.WriteString(text)
+			builder.WriteByte('\n')
+		}
+	}
+	return builder.String()
+}
+
+// normaliseWebSearchTool maps configuration onto a gateway provider tool id.
+func normaliseWebSearchTool(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "", "off", "none", "false", "disabled":
+		return ""
+	case "exa", "exa_search":
+		return "vercel:exa_search"
+	case "tako", "tako_search":
+		return "vercel:tako_search"
+	case "perplexity", "perplexity_search":
+		return "vercel:perplexity_search"
+	case "browserbase", "browserbase_fetch", "fetch":
+		return "vercel:browserbase_fetch"
+	default:
+		if strings.HasPrefix(strings.ToLower(trimmed), "vercel:") {
+			return trimmed
+		}
+		return ""
+	}
+}
+
+// isProviderTool reports whether a Chat tool call belongs to a tool the gateway
+// executes on its own. Those calls never reach the client.
+func (context *Context) isProviderTool(name string) bool {
+	if name == "" || len(context.providerTools) == 0 {
+		return false
+	}
+	_, found := context.providerTools[name]
+	return found
 }
 
 func (context *Context) collectDeclaredInputTools(value any, depth int) {
@@ -726,6 +877,14 @@ type Options struct {
 	// pruned history, host-side tools), and those become user text instead of
 	// failing the turn.
 	StrictToolHistory bool
+	// WebSearchUpstream maps the client's hosted web_search declaration onto a
+	// tool the upstream gateway executes itself (vercel:exa_search and friends).
+	// Empty keeps the hosted tool unsupported, which is the default.
+	WebSearchUpstream string
+	// WebFetchUpstream declares a gateway tool that reads a URL the user pasted
+	// (vercel:browserbase_fetch). It is only declared when the request carries a
+	// link in user-authored text.
+	WebFetchUpstream string
 }
 
 // ShouldReplayReasoning reports whether reasoning_content can be replayed in
@@ -1097,6 +1256,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		TopP:               body["top_p"],
 		Metadata:           metadata,
 		RawReasoning:       options.RawReasoning,
+		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
+		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
+		providerTools:      map[string]struct{}{},
 		bindings:           map[string]toolBinding{},
 		originalToChat:     map[string]string{},
 		chatTools:          []any{},
@@ -1117,6 +1279,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"], 0)
+	if context.webFetchTool != "" && requestHasUserURL(body["input"]) {
+		context.addProviderTool(context.webFetchTool)
+	}
 	if jsonx.String(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
 		return nil, nil, unsupported("tool_choice", "required tool execution when no client-executable tools are available")
 	}

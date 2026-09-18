@@ -55,6 +55,18 @@ func (s *Store) StrictToolHistory() bool {
 	return s.config.StrictToolHistory
 }
 
+func (s *Store) WebSearchUpstream() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.WebSearchUpstream
+}
+
+func (s *Store) WebFetchUpstream() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.WebFetchUpstream
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

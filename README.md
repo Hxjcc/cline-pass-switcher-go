@@ -24,7 +24,7 @@ Linux / macOS：
 ```bash
 mkdir -p data
 cp config.example.json data/config.json
-PUID=$(id -u) PGID=$(id -g) docker compose up -d --build
+docker compose up -d --build
 ```
 
 Windows PowerShell：
@@ -39,7 +39,20 @@ docker compose up -d --build
 
 配置和运行数据都在 `./data`。默认只监听本机 `127.0.0.1:3123`，不会暴露到局域网。
 
-容器默认以非 root 用户运行。Linux / macOS 上的命令使用当前用户身份，后续重建时也需保留 `PUID` 和 `PGID`。从旧版本升级时，请先停止容器，确认 `data` 目录及文件对运行用户可写。
+容器以非 root 用户运行：启动时 entrypoint 会先把 `data` 目录的属主改成运行用户（`PUID`/`PGID`，默认 `10001`），再降权执行，所以普通 `docker compose up -d --build` 即可，不需要在命令行前缀里传 PUID/PGID。想指定别的 uid（例如与宿主机用户一致）时，在同目录的 `.env` 里写 `PUID=1000` 和 `PGID=1000`；从旧版本升级且 `data` 属主混乱时，重启容器一次即可自动纠正。
+
+### 容器默认开启的联网能力
+
+`docker-compose.yml` 默认打开两个上游网关工具（**按次计费**，不需要就把对应行删掉或改成 `off`）：
+
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `WEB_SEARCH_UPSTREAM` | `exa` | 客户端声明 `web_search` 时改用网关的搜索工具，让模型能查最新信息 |
+| `WEB_FETCH_UPSTREAM` | `browserbase_fetch` | 用户消息里出现链接时声明抓取工具，读取该页面的内容 |
+
+两者都由上游网关（Cline → Vercel）执行，是否真的调用取决于模型：DeepSeek 会调用，GLM 目前不会。搜索不会返回结构化的 `url_citation`，来源以正文 URL 的形式给出。从源码运行时这两项默认关闭，需要在 `config.json` 里填 `webSearchUpstream` / `webFetchUpstream`，或设置同名环境变量。
+
+公网 / 反向代理部署时，把 compose 里注释掉的 `PUBLIC_BASE_URL` 和 `PROXY_KEY` 打开并改成实际值——否则控制台的浏览器请求会因为来源校验返回 403（详见「从旧版本升级」）。
 
 ### 从源码运行
 
@@ -68,7 +81,7 @@ go build -o cline-pass-switcher ./cmd/cline-pass-switcher
 - **账号密钥默认脱敏**：`GET /api/accounts` 只返回 `keyPreview` 前后缀，需要完整密钥时显式请求 `GET /api/accounts?reveal=1`。控制台的「显示密钥」按钮就是这条路。
 - **保存账号时留空表示保留原密钥**：控制台为每个账号分配了稳定的 `id`，提交时 `key` 为空且 `id` 匹配已有账号，则沿用已保存的密钥；新账号必须自带 `key`，否则会被忽略。
 - **数据目录新增运行文件**：`store.journal` 与 `.store.lock`。备份要包含整个目录，且同一目录只能运行一个实例（第二个实例会启动失败）。
-- **容器默认以非 root 用户运行**：Linux / macOS 上用 `PUID`、`PGID` 指定数据目录属主，详见上一节。
+- **容器以非 root 用户运行**：`PUID`、`PGID`（默认 `10001`）决定运行用户，启动时自动修正 `data` 属主，无需手动 `chown` 或命令行前缀，详见上一节。
 - **工具历史不完整不再直接报错**：ChatGPT Desktop 等客户端会把「没有对应调用」的工具结果写进历史（跨任务委派、历史裁剪、宿主工具），旧版本会返回 400。现在这类内容会转成用户消息继续转发；需要恢复严格校验时设置 `STRICT_TOOL_HISTORY=true`。
 - **请求历史落盘时机**：请求记录先写入日志缓冲，每 32 条或发生管理操作、正常退出时 `fsync`。进程崩溃不会丢记录（重启会重放日志），断电最多丢掉最近的少量记录；配置和模型改动仍然每次都同步落盘。
 
@@ -108,6 +121,8 @@ env_key = "CLINE_PROXY_KEY"
 | `BIND_HOST` | 监听地址，本地默认 `127.0.0.1`，容器内应设为 `0.0.0.0` |
 | `DATA_DIR` | 配置和元数据目录，容器内为 `/data` |
 | `STRICT_TOOL_HISTORY` | 设为 `true` 时，工具历史不完整（客户端回放了没有对应调用的工具结果）直接报错；默认 `false`，这类结果会作为用户内容继续转发 |
+| `WEB_SEARCH_UPSTREAM` | 把 `web_search` 声明映射成上游网关执行的搜索工具：`exa`（推荐）/ `tako` / `perplexity` / `browserbase_fetch`；留空或 `off` 表示不映射（默认） |
+| `WEB_FETCH_UPSTREAM` | 用户消息里出现 http(s) 链接时，声明上游网关的抓取工具读取该页面：`browserbase_fetch`；留空或 `off` 表示关闭（默认） |
 
 Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3123` 会覆盖 `config.json` 中的端口，与端口映射保持一致。
 

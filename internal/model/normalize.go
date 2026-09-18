@@ -67,6 +67,12 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.StrictToolHistory = strict
 		}
 	}
+	if upstream := strings.TrimSpace(os.Getenv("WEB_SEARCH_UPSTREAM")); upstream != "" {
+		cfg.WebSearchUpstream = upstream
+	}
+	if upstream := strings.TrimSpace(os.Getenv("WEB_FETCH_UPSTREAM")); upstream != "" {
+		cfg.WebFetchUpstream = upstream
+	}
 }
 
 func NormalizeConfig(cfg *Config) {

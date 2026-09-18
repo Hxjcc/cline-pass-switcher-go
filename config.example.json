@@ -4,6 +4,8 @@
   "publicBaseUrl": "",
   "exposeCatalog": false,
   "strictToolHistory": false,
+  "webSearchUpstream": "",
+  "webFetchUpstream": "",
   "upstreamBase": "https://api.cline.bot/api/v1",
   "accounts": [],
   "accountMode": "single",
