@@ -16,6 +16,17 @@
 
 协议参考：[OpenAI Responses 类型与事件](https://developers.openai.com/api/reference/cli/resources/responses)。
 
+## 工具历史归一化
+
+Chat Completions 要求每条 tool 消息都紧跟对应的 assistant tool_calls，而 ChatGPT Desktop 会把「没有对应调用」的工具结果写进会话历史，例如跨任务委派、历史裁剪或宿主侧工具的执行结果。默认行为是把这些孤儿结果转成用户消息继续转发，而不是让整轮请求失败：
+
+- `create_thread` / `codex_app` 命名空间 / `<codex_delegation>` 开头的输出视为委派提示词，解包 `<input>` 后作为普通用户消息；
+- 其它孤儿结果保留原文，并加上 `[tool result without a recorded call <name>]` 前缀，避免模型误当成用户发言；
+- 若孤儿结果出现在同一批工具调用之间，会先缓冲、等这批调用全部有结果后再追加，保证 assistant → tool… → user 的顺序不被破坏；
+- `strictToolHistory` 配置或 `STRICT_TOOL_HISTORY=true` 可以恢复旧的严格行为（返回 `orphan tool output` 错误）。
+
+回归覆盖：`TestToChatToleratesOrphanToolOutputs`、`TestToChatStrictToolHistoryStillRejectsOrphans`、`TestOrphanToolOutputDoesNotSplitToolGroup`，以及端到端的 `TestDelegatedThreadHistoryReachesUpstream`。
+
 ## 可重复验证
 
 普通检查：

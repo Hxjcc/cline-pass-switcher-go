@@ -3,6 +3,7 @@
   "proxyKey": "",
   "publicBaseUrl": "",
   "exposeCatalog": false,
+  "strictToolHistory": false,
   "upstreamBase": "https://api.cline.bot/api/v1",
   "accounts": [],
   "accountMode": "single",

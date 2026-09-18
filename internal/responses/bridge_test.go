@@ -800,17 +800,6 @@ func TestToChatRejectsIncompleteToolHistory(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "missing outputs") {
 		t.Fatalf("expected incomplete tool history error, got %v", err)
 	}
-
-	orphan := map[string]any{
-		"model": "cline-pass/qwen3.8-max",
-		"input": []any{
-			map[string]any{"type": "function_call_output", "call_id": "orphan", "output": "ok"},
-		},
-	}
-	_, _, err = ToChat(orphan)
-	if err == nil || !strings.Contains(err.Error(), "orphan") {
-		t.Fatalf("expected orphan tool output error, got %v", err)
-	}
 }
 
 func TestCustomInputFromArgumentsAcceptsJSONString(t *testing.T) {
@@ -1519,5 +1508,89 @@ func TestToChatLeavesReasoningUntouchedWithoutRequest(t *testing.T) {
 	}
 	if context.RequestedReasoningEffort != "" || context.MappedReasoningEffort != "" {
 		t.Fatalf("no effort should be recorded: requested=%q mapped=%q", context.RequestedReasoningEffort, context.MappedReasoningEffort)
+	}
+}
+
+func TestToChatToleratesOrphanToolOutputs(t *testing.T) {
+	// ChatGPT Desktop hands a delegated task to the child thread as a
+	// function_call_output whose call item stays in the parent thread.
+	delegation := map[string]any{
+		"model": "cline-pass/qwen3.8-max",
+		"input": []any{
+			map[string]any{
+				"type":      "function_call_output",
+				"call_id":   "fco_1",
+				"name":      "create_thread",
+				"namespace": "codex_app",
+				"output":    "<codex_delegation><source_thread_id>abc</source_thread_id><input>do the thing &amp; report</input></codex_delegation>",
+			},
+		},
+	}
+	chat, _, err := ToChat(delegation)
+	if err != nil {
+		t.Fatalf("delegation payload must not fail the request: %v", err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	if len(messages) != 1 {
+		t.Fatalf("expected a single message, got %#v", messages)
+	}
+	message := jsonx.Map(messages[0])
+	if jsonx.String(message["role"]) != "user" || jsonx.String(message["content"]) != "do the thing & report" {
+		t.Fatalf("delegation payload was not replayed as the prompt: %#v", message)
+	}
+
+	// Results of host-side tools have no call at all; keep the content and mark
+	// it so the model does not read it as a user turn.
+	hostTool := map[string]any{
+		"model": "cline-pass/qwen3.8-max",
+		"input": []any{
+			map[string]any{"type": "function_call_output", "call_id": "call_x", "name": "shell", "output": "exit code 1"},
+		},
+	}
+	chat, _, err = ToChat(hostTool)
+	if err != nil {
+		t.Fatalf("orphan tool output must not fail the request: %v", err)
+	}
+	content := jsonx.String(jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"])
+	if !strings.Contains(content, "exit code 1") || !strings.Contains(content, "shell") {
+		t.Fatalf("orphan content or marker lost: %q", content)
+	}
+}
+
+func TestToChatStrictToolHistoryStillRejectsOrphans(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/qwen3.8-max",
+		"input": []any{
+			map[string]any{"type": "function_call_output", "call_id": "orphan", "output": "ok"},
+		},
+	}
+	_, _, err := ToChatWithOptions(body, Options{StrictToolHistory: true})
+	if err == nil || !strings.Contains(err.Error(), "orphan tool output") {
+		t.Fatalf("expected the orphan error in strict mode, got %v", err)
+	}
+}
+
+func TestOrphanToolOutputDoesNotSplitToolGroup(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/qwen3.8-max",
+		"tools": []any{map[string]any{"type": "function", "name": "shell", "parameters": map[string]any{"type": "object"}}},
+		"input": []any{
+			map[string]any{"type": "function_call", "call_id": "call_a", "name": "shell", "arguments": "{\"cmd\":\"a\"}"},
+			map[string]any{"type": "function_call", "call_id": "call_b", "name": "shell", "arguments": "{\"cmd\":\"b\"}"},
+			map[string]any{"type": "function_call_output", "call_id": "call_a", "output": "a done"},
+			map[string]any{"type": "function_call_output", "call_id": "call_orphan", "name": "shell", "output": "orphan"},
+			map[string]any{"type": "function_call_output", "call_id": "call_b", "output": "b done"},
+		},
+	}
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	roles := make([]string, 0, 4)
+	for _, raw := range jsonx.Slice(chat["messages"]) {
+		roles = append(roles, jsonx.String(jsonx.Map(raw)["role"]))
+	}
+	if got := strings.Join(roles, ","); got != "assistant,tool,tool,user" {
+		t.Fatalf("orphan output split the tool group: %s (%#v)", got, chat["messages"])
 	}
 }

@@ -94,3 +94,26 @@ func TestNormalizeConfigExcludeWins(t *testing.T) {
 		t.Fatalf("unknown pin mode should normalize to strict, got %q", value.PinMode)
 	}
 }
+
+func TestStrictToolHistoryEnvironmentOverride(t *testing.T) {
+	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT"} {
+		t.Setenv(name, "")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	t.Setenv("STRICT_TOOL_HISTORY", "true")
+	config, err := LoadConfig(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.StrictToolHistory {
+		t.Fatal("STRICT_TOOL_HISTORY=true was ignored")
+	}
+	t.Setenv("STRICT_TOOL_HISTORY", "0")
+	config, err = LoadConfig(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.StrictToolHistory {
+		t.Fatal("STRICT_TOOL_HISTORY=0 should turn the switch off")
+	}
+}

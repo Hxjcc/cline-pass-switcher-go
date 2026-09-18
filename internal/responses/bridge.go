@@ -640,6 +640,57 @@ func functionCallFromResponseItem(item map[string]any, context *Context) map[str
 	}
 }
 
+// orphanToolOutputMessage renders a tool result whose call is missing from the
+// request as user-visible content. ChatGPT Desktop writes delegation hand-offs
+// and host-side tool results into a thread without the matching call item, and
+// Chat Completions cannot carry a tool message that follows no tool call.
+func orphanToolOutputMessage(item map[string]any, text string, images []any) map[string]any {
+	body := text
+	if isDelegationToolOutput(item, text) {
+		body = delegationInput(text)
+	} else {
+		name := strings.TrimSpace(jsonx.String(item["name"]))
+		marker := "[tool result without a recorded call"
+		if name != "" {
+			marker += " " + name
+		}
+		marker += "]\n"
+		body = marker + text
+	}
+	if len(images) == 0 {
+		return map[string]any{"role": "user", "content": body}
+	}
+	parts := []any{map[string]any{"type": "text", "text": body}}
+	parts = append(parts, images...)
+	return map[string]any{"role": "user", "content": parts}
+}
+
+// isDelegationToolOutput recognizes the cross-task hand-off payload that the
+// desktop client stores at the head of a delegated thread.
+func isDelegationToolOutput(item map[string]any, text string) bool {
+	if jsonx.String(item["name"]) == "create_thread" || jsonx.String(item["namespace"]) == "codex_app" {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(text), "<codex_delegation>")
+}
+
+// delegationInput unwraps the XML envelope so the model receives the delegated
+// prompt as an ordinary user message; the envelope itself is client bookkeeping.
+func delegationInput(text string) string {
+	start := strings.Index(text, "<input>")
+	end := strings.LastIndex(text, "</input>")
+	if start < 0 || end <= start {
+		return strings.TrimSpace(text)
+	}
+	inner := text[start+len("<input>") : end]
+	if strings.Contains(inner, "&") {
+		inner = strings.NewReplacer(
+			"&lt;", "<", "&gt;", ">", "&apos;", "'", "&amp;", "&",
+		).Replace(inner)
+	}
+	return strings.TrimSpace(inner)
+}
+
 func (context *Context) toolChoiceToChat(value any) any {
 	if text, ok := value.(string); ok {
 		switch text {
@@ -669,6 +720,12 @@ type Options struct {
 	ReplayReasoning  bool
 	ReasoningEfforts []string
 	RawReasoning     bool
+	// StrictToolHistory rejects a request whose tool history does not map onto
+	// Chat Completions exactly. It is off by default: ChatGPT Desktop replays
+	// results of calls that are not part of the request (delegation hand-offs,
+	// pruned history, host-side tools), and those become user text instead of
+	// failing the turn.
+	StrictToolHistory bool
 }
 
 // ShouldReplayReasoning reports whether reasoning_content can be replayed in
@@ -1290,6 +1347,10 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			if text == "" {
 				text = toolEmptyOutputPlaceholder
 			}
+			if _, answered := unanswered[strings.TrimSpace(callID)]; !answered && !options.StrictToolHistory {
+				queueOrAppend(orphanToolOutputMessage(item, text, parts.Images))
+				break
+			}
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": callID, "content": text})
 			delete(unanswered, strings.TrimSpace(callID))
 			if len(parts.Images) > 0 {
@@ -1305,8 +1366,13 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			if callID == "" {
 				callID = jsonx.String(item["id"])
 			}
+			content := toolSearchOutputContent(item)
+			if _, answered := unanswered[strings.TrimSpace(callID)]; !answered && !options.StrictToolHistory {
+				queueOrAppend(orphanToolOutputMessage(item, content, nil))
+				break
+			}
 			messages = append(messages, map[string]any{
-				"role": "tool", "tool_call_id": callID, "content": toolSearchOutputContent(item),
+				"role": "tool", "tool_call_id": callID, "content": content,
 			})
 			delete(unanswered, strings.TrimSpace(callID))
 			flushAfterToolGroup()
