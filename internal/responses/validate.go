@@ -81,6 +81,9 @@ func validateToolDefinitions(value any, path string, depth int) error {
 		if tool == nil {
 			continue
 		} // Codex's string custom-tool shorthand.
+		if isUnforwardedTool(tool) {
+			continue
+		}
 		field := fmt.Sprintf("%s[%d]", path, index)
 		switch kind := asString(tool["type"]); kind {
 		case "", "function", "custom":
@@ -89,9 +92,6 @@ func validateToolDefinitions(value any, path string, depth int) error {
 				return err
 			}
 		case "tool_search":
-			if asString(tool["execution"]) == "server" {
-				return unsupported(field+".execution", "server-hosted tool search; use client execution")
-			}
 		default:
 			return unsupported(field+".type", "tool type "+kind)
 		}

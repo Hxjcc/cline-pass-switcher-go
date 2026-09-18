@@ -8,7 +8,9 @@
 - 上游 `refusal` 字段以及内容数组中的 refusal 块生成 `response.refusal.delta/done`，最终内容保留 `type=refusal`。同一条消息混合文本与 refusal 时，content_index 连续、顺序不变。回放时使用 Chat 的 refusal 字段。
 - 无法实现的能力在发送上游前返回 HTTP 400，错误包含 `type=invalid_request_error`、`code=unsupported_feature` 和具体 `param`。
 
-明确不支持的能力包括：conversation 引用、后台响应、文件与音频内容、没有 URL/内联数据的图片引用、web/file search 等服务端工具、server 模式的 tool search、未知输入 item、不可读的外部压缩包和没有可读内容的外部加密思考。`previous_response_id` 继续要求客户端改为发送完整历史。
+明确不支持的能力包括：conversation 引用、后台响应、文件与音频内容、没有 URL/内联数据的图片引用、强制执行 web/file search 等服务端工具、强制执行 server 模式的 tool search、未知输入 item、不可读的外部压缩包和没有可读内容的外部加密思考。`previous_response_id` 继续要求客户端改为发送完整历史。
+
+客户端会在普通问候请求里自动附带 `web_search` 等工具清单，因此“声明可用工具”不能视为“强制执行工具”。默认/auto/none 时，代理跳过已知不支持的服务端工具声明，并继续转发普通输入和支持的客户端工具；不据此宣称已提供搜索能力。显式 tool_choice 强制选中服务端工具，或者 required 且筛选后没有任何客户端工具时，仍返回 400。回归测试覆盖 tools[14]=web_search + 你好，并分别验证流式与非流式。
 
 普通工具返回字符串是原始业务数据，不会因为字符串内部含有 `type=input_file` 等 JSON 字段就被当作协议拒绝。可读思考回放、普通图片/data URL、客户端 tool search 和本代理生成的压缩包仍受支持。custom grammar 仍通过工具描述交给 Chat 模型，未提供原生 grammar 约束采样。
 
