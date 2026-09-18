@@ -2,7 +2,7 @@
 
 本地 OpenAI 兼容代理，把 Cline、Codex 等客户端接到 [Cline Pass](https://cline.bot/)，并提供 Web 控制台管理账号、渠道和请求记录。
 
-这是原 `cline-pass-switcher` 的 Go 重写版：配置字段和 API 路径保持兼容，已有的 `config.json` / `metadata.json` 可以直接拿来用。
+这是 [cline-pass-switcher](https://github.com/munmunjaklin458-afk/cline-pass-switcher) 的 Go 重写版：配置字段和 API 路径保持兼容，已有的 `config.json` / `metadata.json` 可以直接拿来用。
 
 ## 能做什么
 
@@ -105,6 +105,10 @@ Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3
 - `config.json`、`metadata.json` 和 `data/` 里可能有明文密钥，不要提交到 Git。
 - 对公网开放前务必设置代理密钥（`proxyKey` / `PROXY_KEY`）。
 - 控制台里的探测、测试、校验会向真实上游发小额请求。
+
+## 致谢
+
+感谢原作者 [@munmunjaklin458-afk](https://github.com/munmunjaklin458-afk) 开源 [cline-pass-switcher](https://github.com/munmunjaklin458-afk/cline-pass-switcher)。
 
 ## License
 
