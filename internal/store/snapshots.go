@@ -49,6 +49,12 @@ func (s *Store) AccessSettings() (key, publicBase string) {
 	return s.config.ProxyKey, s.config.PublicBaseURL
 }
 
+func (s *Store) StrictToolHistory() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.StrictToolHistory
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

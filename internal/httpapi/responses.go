@@ -32,9 +32,10 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:  responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts: s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:     responsesbridge.ShouldUseRawReasoning(requestedModel),
+		ReplayReasoning:   responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory: s.store.StrictToolHistory(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -134,9 +135,10 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:  responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts: s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:     responsesbridge.ShouldUseRawReasoning(requestedModel),
+		ReplayReasoning:   responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory: s.store.StrictToolHistory(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)

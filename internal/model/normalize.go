@@ -62,6 +62,11 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.Port = port
 		}
 	}
+	if rawStrict := strings.TrimSpace(os.Getenv("STRICT_TOOL_HISTORY")); rawStrict != "" {
+		if strict, err := strconv.ParseBool(rawStrict); err == nil {
+			cfg.StrictToolHistory = strict
+		}
+	}
 }
 
 func NormalizeConfig(cfg *Config) {

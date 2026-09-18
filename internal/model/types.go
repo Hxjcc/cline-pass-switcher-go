@@ -64,16 +64,19 @@ type PerModelConfig struct {
 }
 
 type Config struct {
-	Port          int       `json:"port"`
-	APIKey        string    `json:"apiKey,omitempty"`
-	ProxyKey      string    `json:"proxyKey"`
-	PublicBaseURL string    `json:"publicBaseUrl"`
-	ExposeCatalog bool      `json:"exposeCatalog"`
-	UpstreamBase  string    `json:"upstreamBase"`
-	Accounts      []Account `json:"accounts"`
-	AccountMode   string    `json:"accountMode"`
-	ActiveAccount int       `json:"activeAccount"`
-	KnownModels   []string  `json:"knownModels"`
+	Port          int    `json:"port"`
+	APIKey        string `json:"apiKey,omitempty"`
+	ProxyKey      string `json:"proxyKey"`
+	PublicBaseURL string `json:"publicBaseUrl"`
+	ExposeCatalog bool   `json:"exposeCatalog"`
+	// StrictToolHistory keeps the strict every-tool-result-has-a-call rule.
+	// It is off by default so desktop clients can replay incomplete history.
+	StrictToolHistory bool      `json:"strictToolHistory,omitempty"`
+	UpstreamBase      string    `json:"upstreamBase"`
+	Accounts          []Account `json:"accounts"`
+	AccountMode       string    `json:"accountMode"`
+	ActiveAccount     int       `json:"activeAccount"`
+	KnownModels       []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
