@@ -168,12 +168,20 @@ func defaultToolSearchParameters() map[string]any {
 
 func isServerHostedToolType(typeName string) bool {
 	switch typeName {
-	case "web_search", "web_search_preview", "file_search", "code_interpreter",
-		"image_generation", "computer", "computer_use", "mcp":
+	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "file_search", "code_interpreter",
+		"image_generation", "computer", "computer_use", "computer_use_preview", "mcp":
 		return true
 	default:
 		return false
 	}
+}
+
+// Clients can advertise hosted tools even for an ordinary text turn. These
+// optional declarations are omitted from Chat; an explicit forced selection
+// is validated separately rather than rejecting the entire tool inventory.
+func isUnforwardedTool(tool map[string]any) bool {
+	return isServerHostedToolType(asString(tool["type"])) ||
+		(asString(tool["type"]) == "tool_search" && asString(tool["execution"]) == "server")
 }
 
 func (context *Context) alreadyBound(namespace, name string) bool {
@@ -215,6 +223,9 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	if tool == nil {
 		return
 	}
+	if isUnforwardedTool(tool) {
+		return
+	}
 	typeName := asString(tool["type"])
 	if typeName == "namespace" {
 		nextNamespace := asString(tool["name"])
@@ -244,10 +255,6 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		context.chatTools = append(context.chatTools, functionTool(toolSearchName, description, parameters, nil))
 		return
 	}
-	if isServerHostedToolType(typeName) {
-		return
-	}
-
 	name := asString(tool["name"])
 	if name == "" {
 		return
@@ -1067,6 +1074,12 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"], 0)
+	if asString(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
+		return nil, nil, unsupported("tool_choice", "required tool execution when no client-executable tools are available")
+	}
+	if asString(asMap(context.ResponseToolChoice)["type"]) == "tool_search" && context.bindings[toolSearchName].Kind != "tool_search" {
+		return nil, nil, unsupported("tool_choice", "forced tool search without a client-executable tool_search declaration")
+	}
 
 	messages := make([]any, 0, 16)
 	prefixMessages := make([]any, 0, 2)
