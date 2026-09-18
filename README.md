@@ -83,7 +83,7 @@ requires_openai_auth = false
 env_key = "CLINE_PROXY_KEY"
 ```
 
-`CLINE_PROXY_KEY` 填控制台里的代理密钥。代理密钥为空时，Codex 仍需要一个非空占位值。正式路径是 `POST /v1/responses`，同时兼容 `POST /v1/response`。
+`CLINE_PROXY_KEY` 填控制台里的代理密钥。代理密钥为空时，Codex 仍需要一个非空占位值。Responses 路径是 `POST /v1/responses`。
 
 ## 环境变量
 
