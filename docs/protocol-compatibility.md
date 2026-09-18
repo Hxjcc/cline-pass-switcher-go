@@ -57,7 +57,7 @@ CLI 文件/工具链路、CLI 自行压缩和 HTTP `/responses/compact` 是三�
 
 ## 严格 JSON Schema 结果校验
 
-适用范围为 `/v1/responses` 及其别名上的 `text.format.type=json_schema`，并且有效 strict 设置为 true。沿用原有转换规则：省略 strict 时默认 true，显式 `strict:false` 不启用本地校验。普通文本、`json_object` 模式及 Chat Completions 透传接口不受此项调整影响。
+适用范围为 `/v1/responses`（以及 `/responses`、`/api/v1/responses`）上的 `text.format.type=json_schema`，并且有效 strict 设置为 true。沿用原有转换规则：省略 strict 时默认 true，显式 `strict:false` 不启用本地校验。普通文本、`json_object` 模式及 Chat Completions 透传接口不受此项调整影响。
 
 schema 在发送上游前编译一次。使用固定版本 `github.com/santhosh-tekuri/jsonschema/v6 v6.0.3`，默认 JSON Schema draft 2020-12，并开启 format 校验。支持嵌套对象/数组、required、additionalProperties、类型、枚举、数值/字符串约束、anyOf，以及 schema 内的 `$defs/$ref` 和递归引用。schema 的网络/本地文件加载全部禁用；所需定义应随请求提供。
 

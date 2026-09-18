@@ -362,7 +362,7 @@ func TestResponsesEndpointConvertsRequestAndResponse(t *testing.T) {
 	    {"type":"input_image","image_url":"data:image/png;base64,AAAA","detail":"high"}
 	  ]}]
 	}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/response", body)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", body)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -383,6 +383,17 @@ func TestResponsesEndpointConvertsRequestAndResponse(t *testing.T) {
 	content := output[0].(map[string]any)["content"].([]any)
 	if content[0].(map[string]any)["text"] != "OK" {
 		t.Fatalf("unexpected response text: %#v", output)
+	}
+}
+
+func TestSingularResponsePathIsNotRouted(t *testing.T) {
+	_, server := newTestServer(t)
+	for _, path := range []string{"/response", "/v1/response", "/api/v1/response"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test","input":"hi"}`)))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s should not be a Responses alias: %d %s", path, response.Code, response.Body.String())
+		}
 	}
 }
 

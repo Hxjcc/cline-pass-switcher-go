@@ -856,7 +856,7 @@ func isChatPath(path string) bool {
 
 func isResponsesPath(path string) bool {
 	switch path {
-	case "/response", "/responses", "/v1/response", "/v1/responses", "/api/v1/response", "/api/v1/responses":
+	case "/responses", "/v1/responses", "/api/v1/responses":
 		return true
 	default:
 		return false
