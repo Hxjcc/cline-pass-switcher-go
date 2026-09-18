@@ -3,10 +3,17 @@ services:
     build: .
     container_name: cline-pass-console
     restart: unless-stopped
-    user: "${PUID:-10001}:${PGID:-10001}"
+    # PUID/PGID (default 10001) choose the runtime user; the entrypoint fixes
+    # /data ownership on start, so no user override is needed here.
     environment:
       - DATA_DIR=/data
       - BIND_HOST=0.0.0.0
+      # 上游网关的联网能力，按次计费；不需要时删掉对应行或改成 off
+      - WEB_SEARCH_UPSTREAM=exa
+      - WEB_FETCH_UPSTREAM=browserbase_fetch
+      # 公网 / 反向代理部署时打开，并换成实际域名与自设密钥
+      # - PUBLIC_BASE_URL=https://cline.example.com
+      # - PROXY_KEY=change-me
     volumes:
       - ./data:/data
     ports:

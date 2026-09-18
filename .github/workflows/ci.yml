@@ -46,5 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t cline-pass-ci .
-      - name: Verify non-root user and writable data directory
-        run: docker run --rm --entrypoint sh cline-pass-ci -ec 'test "$(id -u)" = 10001; test -w /data'
+      - name: Verify the runtime user and a writable data directory
+        run: |
+          mkdir -p ci-data
+          docker run --rm -v "$PWD/ci-data:/data" cline-pass-ci sh -c 'test "$(id -u)" = 10001 && test -w /data'

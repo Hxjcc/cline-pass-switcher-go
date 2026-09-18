@@ -36,6 +36,8 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
 		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
 		StrictToolHistory: s.store.StrictToolHistory(),
+		WebSearchUpstream: s.store.WebSearchUpstream(),
+		WebFetchUpstream:  s.store.WebFetchUpstream(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -139,6 +141,8 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
 		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
 		StrictToolHistory: s.store.StrictToolHistory(),
+		WebSearchUpstream: s.store.WebSearchUpstream(),
+		WebFetchUpstream:  s.store.WebFetchUpstream(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)

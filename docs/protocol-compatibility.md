@@ -27,6 +27,22 @@ Chat Completions 要求每条 tool 消息都紧跟对应的 assistant tool_calls
 
 回归覆盖：`TestToChatToleratesOrphanToolOutputs`、`TestToChatStrictToolHistoryStillRejectsOrphans`、`TestOrphanToolOutputDoesNotSplitToolGroup`，以及端到端的 `TestDelegatedThreadHistoryReachesUpstream`。
 
+## Web 搜索转发
+
+ChatGPT Desktop 的 `web_search` 是托管工具：搜索由后端执行，客户端只负责声明。Chat Completions 上游没有这个概念，默认会被跳过。配置 `webSearchUpstream`（或环境变量 `WEB_SEARCH_UPSTREAM`）后，代理会把该声明替换成上游网关自己执行的服务端工具：
+
+| 配置值 | 实际声明 |
+|---|---|
+| `exa` | `{"type":"vercel:exa_search"}` |
+| `tako` | `{"type":"vercel:tako_search"}` |
+| `perplexity` | `{"type":"vercel:perplexity_search"}` |
+| `browserbase_fetch` | `{"type":"vercel:browserbase_fetch"}`（抓取指定 URL，不是搜索） |
+| 留空 / `off` | 不映射（默认） |
+
+另有 `webFetchUpstream`（环境变量 `WEB_FETCH_UPSTREAM`）：当用户消息里出现 http(s) 链接时，代理会额外声明 `{"type":"vercel:browserbase_fetch"}`，让模型能读取该链接的内容（实测可把 GitHub API 的字段原样读回，约 5 秒）。它只在检测到链接时声明，避免每轮请求都携带这类按次计费的工具；链接出现在工具输出而不是用户消息里时不会触发。
+
+行为说明：搜索在网关侧执行，客户端只会看到最终答案；`url_citation` 之类的结构化引用不会出现，来源以正文 URL 的形式给出。显式 `tool_choice` 强选 `web_search` 仍然返回 400，因为无法强制一个网关工具。这些 provider 工具按次计费，按需开启；`web_search_preview` 及其带日期的变体走同一条映射。
+
 ## 可重复验证
 
 普通检查：

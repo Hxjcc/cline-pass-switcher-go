@@ -1594,3 +1594,145 @@ func TestOrphanToolOutputDoesNotSplitToolGroup(t *testing.T) {
 		t.Fatalf("orphan output split the tool group: %s (%#v)", got, chat["messages"])
 	}
 }
+
+func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/glm-5.3-flash",
+		"input": "今天有什么新闻",
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}
+	// Off by default: the hosted declaration stays unsupported.
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jsonx.Slice(chat["tools"]) != nil {
+		t.Fatalf("web_search must stay unmapped by default: %#v", chat["tools"])
+	}
+
+	chat, _, err = ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
+		t.Fatalf("web_search was not mapped to the gateway tool: %#v", tools)
+	}
+
+	// The preview alias maps too, and the provider is configurable.
+	preview := map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "hi",
+		"tools": []any{map[string]any{"type": "web_search_preview"}},
+	}
+	chat, _, err = ToChatWithOptions(preview, Options{WebSearchUpstream: "perplexity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools = jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:perplexity_search" {
+		t.Fatalf("web_search_preview was not mapped: %#v", tools)
+	}
+
+	// Other hosted tools keep being dropped.
+	fileSearch := map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "hi",
+		"tools": []any{map[string]any{"type": "file_search"}},
+	}
+	chat, _, err = ToChatWithOptions(fileSearch, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jsonx.Slice(chat["tools"]) != nil {
+		t.Fatalf("file_search must stay unmapped: %#v", chat["tools"])
+	}
+}
+
+func TestProviderToolCallNeverReachesTheClient(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "search", "stream": true,
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !context.isProviderTool("vercel:exa_search") || !context.isProviderTool("exa_search") {
+		t.Fatal("gateway provider tool names were not tracked")
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1",
+			"function": map[string]any{"name": "vercel:exa_search", "arguments": "{}"},
+		}},
+	}}}})
+	for _, event := range events {
+		item := jsonx.Map(event.Data["item"])
+		if item != nil && jsonx.String(item["type"]) == "function_call" {
+			t.Fatalf("provider tool call leaked to the client: %#v", item)
+		}
+	}
+}
+
+func TestLinkFetchDeclaredOnlyWhenUserSendsURL(t *testing.T) {
+	options := Options{WebFetchUpstream: "browserbase_fetch"}
+	withURL := map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash",
+		"input": []any{map[string]any{
+			"type": "message", "role": "user",
+			"content": []any{map[string]any{"type": "input_text", "text": "帮我看看 https://example.com/a?b=1 这个页面"}},
+		}},
+	}
+	chat, _, err := ToChatWithOptions(withURL, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:browserbase_fetch" {
+		t.Fatalf("fetch tool was not declared for a user link: %#v", tools)
+	}
+
+	// A plain string input counts too.
+	plain := map[string]any{"model": "cline-pass/deepseek-v4.1-flash", "input": "读一下 https://example.com"}
+	chat, _, err = ToChatWithOptions(plain, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools = jsonx.Slice(chat["tools"]); len(tools) != 1 {
+		t.Fatalf("string input with a link did not declare the fetch tool: %#v", tools)
+	}
+
+	// No link: nothing declared.
+	withoutURL := map[string]any{"model": "cline-pass/deepseek-v4.1-flash", "input": "你好"}
+	chat, _, err = ToChatWithOptions(withoutURL, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools = jsonx.Slice(chat["tools"]); tools != nil {
+		t.Fatalf("fetch tool must stay undeclared without a link: %#v", tools)
+	}
+
+	// Disabled in configuration.
+	chat, _, err = ToChatWithOptions(withURL, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools = jsonx.Slice(chat["tools"]); tools != nil {
+		t.Fatalf("fetch tool must stay off unless configured: %#v", tools)
+	}
+
+	// A link inside a tool result is not user text.
+	fromTool := map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash",
+		"input": []any{
+			map[string]any{"type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{}"},
+			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "https://example.com"},
+		},
+	}
+	chat, _, err = ToChatWithOptions(fromTool, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools = jsonx.Slice(chat["tools"]); tools != nil {
+		t.Fatalf("tool output links must not declare the fetch tool: %#v", tools)
+	}
+}

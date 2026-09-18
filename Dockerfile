@@ -22,14 +22,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata su-exec \
     && addgroup -g 10001 app \
     && adduser -D -H -u 10001 -G app app \
-    && mkdir -p /data \
-    && chown app:app /data
+    && mkdir -p /data
 
 WORKDIR /app
 COPY --from=backend /out/cline-pass-switcher /app/cline-pass-switcher
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 ENV DATA_DIR=/data
 ENV BIND_HOST=0.0.0.0
@@ -38,6 +39,8 @@ ENV PORT=3123
 VOLUME ["/data"]
 EXPOSE 3123
 
-USER 10001:10001
-
-ENTRYPOINT ["/app/cline-pass-switcher"]
+# The entrypoint makes /data writable for the runtime user (PUID/PGID, default
+# 10001) and then drops privileges, so the server process itself never runs as
+# root and the bind mount needs no manual chown.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/app/cline-pass-switcher"]

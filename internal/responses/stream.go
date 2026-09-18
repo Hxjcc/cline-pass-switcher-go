@@ -564,6 +564,11 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 }
 
 func (state *StreamState) pushToolCall(raw map[string]any) []Event {
+	if function := jsonx.Map(raw["function"]); state.context.isProviderTool(jsonx.String(function["name"])) {
+		// Provider-executed tools (web search and friends) run inside the
+		// gateway; surfacing them would hand the client a tool it never declared.
+		return nil
+	}
 	current := state.ensureTool(raw)
 	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])

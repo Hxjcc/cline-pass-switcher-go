@@ -117,3 +117,33 @@ func TestStrictToolHistoryEnvironmentOverride(t *testing.T) {
 		t.Fatal("STRICT_TOOL_HISTORY=0 should turn the switch off")
 	}
 }
+
+func TestWebSearchUpstreamEnvironmentOverride(t *testing.T) {
+	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT", "STRICT_TOOL_HISTORY"} {
+		t.Setenv(name, "")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	t.Setenv("WEB_SEARCH_UPSTREAM", "exa")
+	config, err := LoadConfig(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.WebSearchUpstream != "exa" {
+		t.Fatalf("WEB_SEARCH_UPSTREAM was ignored: %q", config.WebSearchUpstream)
+	}
+}
+
+func TestWebFetchUpstreamEnvironmentOverride(t *testing.T) {
+	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT", "STRICT_TOOL_HISTORY", "WEB_SEARCH_UPSTREAM"} {
+		t.Setenv(name, "")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	t.Setenv("WEB_FETCH_UPSTREAM", "browserbase")
+	config, err := LoadConfig(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.WebFetchUpstream != "browserbase" {
+		t.Fatalf("WEB_FETCH_UPSTREAM was ignored: %q", config.WebFetchUpstream)
+	}
+}

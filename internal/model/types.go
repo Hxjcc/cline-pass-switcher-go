@@ -71,12 +71,18 @@ type Config struct {
 	ExposeCatalog bool   `json:"exposeCatalog"`
 	// StrictToolHistory keeps the strict every-tool-result-has-a-call rule.
 	// It is off by default so desktop clients can replay incomplete history.
-	StrictToolHistory bool      `json:"strictToolHistory,omitempty"`
-	UpstreamBase      string    `json:"upstreamBase"`
-	Accounts          []Account `json:"accounts"`
-	AccountMode       string    `json:"accountMode"`
-	ActiveAccount     int       `json:"activeAccount"`
-	KnownModels       []string  `json:"knownModels"`
+	StrictToolHistory bool `json:"strictToolHistory,omitempty"`
+	// WebSearchUpstream maps the hosted web_search tool onto a gateway
+	// provider tool such as vercel:exa_search. Empty disables the mapping.
+	WebSearchUpstream string `json:"webSearchUpstream,omitempty"`
+	// WebFetchUpstream declares a gateway tool that reads a URL the user
+	// pasted, for example vercel:browserbase_fetch. Empty disables it.
+	WebFetchUpstream string    `json:"webFetchUpstream,omitempty"`
+	UpstreamBase     string    `json:"upstreamBase"`
+	Accounts         []Account `json:"accounts"`
+	AccountMode      string    `json:"accountMode"`
+	ActiveAccount    int       `json:"activeAccount"`
+	KnownModels      []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
