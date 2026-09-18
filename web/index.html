@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0b6ed8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      // Apply the stored theme before first paint; next-themes takes over
+      // after hydration using the same storage key.
+      (() => {
+        try {
+          const stored = localStorage.getItem("cline-pass-switcher-theme")
+          const dark =
+            stored === "dark" ||
+            ((!stored || stored === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches)
+          if (dark) document.documentElement.classList.add("dark")
+        } catch {
+          // Storage can be unavailable in restricted browser contexts.
+        }
+      })()
+    </script>
+    <style>
+      /* sRGB equivalents of --background / --foreground in index.css. */
+      :root {
+        --boot-bg: #f1f4f8;
+        --boot-fg: #11161e;
+        color-scheme: light;
+      }
+
+      html.dark {
+        --boot-bg: #0a1017;
+        --boot-fg: #ebeff4;
+        color-scheme: dark;
+      }
+
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+        background: var(--boot-bg);
+      }
+
+      #root[data-boot-snapshot] {
+        pointer-events: none;
+      }
+
+      @keyframes app-first-load-in {
+        from {
+          opacity: 0;
+          transform: translateY(10px) scale(0.997);
+        }
+
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes app-entry-cover-out {
+        from {
+          opacity: 1;
+        }
+
+        to {
+          opacity: 0;
+        }
+      }
+
+      #app-entry-cover {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: var(--boot-bg);
+      }
+
+      #app-entry-cover > div {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--boot-fg);
+        font: 600 16px/1.25 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        letter-spacing: -0.01em;
+      }
+
+      #app-entry-cover img {
+        display: block;
+        width: 44px;
+        height: 44px;
+      }
+
+      #root[data-first-load] + #app-entry-cover {
+        display: flex;
+      }
+
+      #root[data-first-load] > [data-app-shell] {
+        opacity: 0;
+        transform: translateY(10px) scale(0.997);
+        transform-origin: top center;
+        will-change: opacity, transform;
+      }
+
+      html[data-app-ready] #root[data-first-load] > [data-app-shell] {
+        animation: app-first-load-in 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      }
+
+      html[data-app-ready] #app-entry-cover {
+        pointer-events: none;
+        animation: app-entry-cover-out 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #root[data-first-load] > [data-app-shell] {
+          opacity: 1;
+          transform: none;
+          animation: none;
+        }
+
+        #root[data-first-load] + #app-entry-cover {
+          display: none;
+        }
+      }
+    </style>
+    <title>Cline Pass 上游控制台</title>
+    <script type="module" src="/src/main.tsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="app-entry-cover" aria-hidden="true">
+      <div>
+        <img src="/favicon.svg" alt="" width="44" height="44" />
+        <span>Cline Pass</span>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const storageKey = "cline-pass-switcher-root-snapshot-v1"
+        const root = document.getElementById("root")
+
+        try {
+          const snapshot = sessionStorage.getItem(storageKey)
+          if (!snapshot) {
+            root.dataset.firstLoad = "true"
+            return
+          }
+
+          const template = document.createElement("template")
+          template.innerHTML = snapshot
+          template.content
+            .querySelectorAll("script, style, iframe, object, embed, link, meta")
+            .forEach((element) => element.remove())
+          template.content.querySelectorAll("*").forEach((element) => {
+            for (const attribute of [...element.attributes]) {
+              const name = attribute.name.toLowerCase()
+              const value = attribute.value.trim().toLowerCase()
+              if (
+                name.startsWith("on") ||
+                name === "srcdoc" ||
+                ((name === "href" || name === "src") && value.startsWith("javascript:"))
+              ) {
+                element.removeAttribute(attribute.name)
+              }
+            }
+          })
+
+          root.dataset.bootSnapshot = "true"
+          root.setAttribute("inert", "")
+          root.replaceChildren(template.content.cloneNode(true))
+        } catch {
+          root.dataset.firstLoad = "true"
+          sessionStorage.removeItem(storageKey)
+        }
+      })()
+    </script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "port": 3123,
+  "proxyKey": "",
+  "publicBaseUrl": "",
+  "exposeCatalog": false,
+  "upstreamBase": "https://api.cline.bot/api/v1",
+  "accounts": [],
+  "accountMode": "single",
+  "activeAccount": 0,
+  "knownModels": [
+    "cline-pass/glm-5.3-flash",
+    "cline-pass/kimi-k3",
+    "cline-pass/deepseek-v4-flash",
+    "cline-pass/deepseek-v4.1-flash",
+    "cline-pass/qwen3.8-max",
+    "cline-pass/minimax-m3",
+    "cline-pass/glm-5.3",
+    "cline-pass/glm-5.2",
+    "cline-pass/deepseek-v4-pro",
+    "cline-pass/mimo-v2.5-pro",
+    "cline-pass/mimo-v2.5",
+    "cline-pass/kimi-k2.6",
+    "cline-pass/qwen3.7-plus",
+    "cline-pass/kimi-k2.7-code",
+    "cline-pass/qwen3.7-max"
+  ],
+  "perModel": {}
+}

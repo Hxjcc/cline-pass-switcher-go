@@ -1,0 +1,27 @@
+# Runtime data and secrets
+config.json
+metadata.json
+data/
+*.tmp
+.env
+.env.*
+!.env.example
+
+# Local logs and acceptance dumps
+*.log
+docs/acceptance-*.json
+
+# Frontend dependencies and coverage
+web/node_modules/
+web/coverage/
+
+# Local build output
+/cline-pass-switcher
+/cline-pass-switcher*.exe
+*.test
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+services:
+  cline-pass-console:
+    build: .
+    container_name: cline-pass-console
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+      - BIND_HOST=0.0.0.0
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:3123:3123"
