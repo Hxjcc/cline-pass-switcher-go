@@ -37,6 +37,11 @@ func TestLoadConfigMigratesLegacyFields(t *testing.T) {
 	if config.Accounts[0].Key != "legacy-key" || !config.Accounts[0].Enabled {
 		t.Fatalf("unexpected migrated account: %#v", config.Accounts[0])
 	}
+	// The legacy field is folded in exactly once; keeping it would let it act
+	// as a runtime fallback that bypasses the account pool.
+	if config.APIKey != "" {
+		t.Fatalf("legacy apiKey should be dropped after migration: %q", config.APIKey)
+	}
 	modelConfig := config.PerModel["cline-pass/glm-5.3"]
 	if len(modelConfig.Upstreams) != 1 || modelConfig.Upstreams[0] != "alibaba" {
 		t.Fatalf("expected legacy upstream migration, got %#v", modelConfig.Upstreams)

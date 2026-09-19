@@ -69,6 +69,17 @@ type Config struct {
 	ProxyKey      string `json:"proxyKey"`
 	PublicBaseURL string `json:"publicBaseUrl"`
 	ExposeCatalog bool   `json:"exposeCatalog"`
+	// TrustedProxies lists IP addresses or CIDR blocks whose forwarded client
+	// address headers (X-Forwarded-For / X-Real-IP) may be trusted. It only
+	// matters while ProxyKey is empty, when every unauthenticated request has
+	// to prove it came from this machine.
+	TrustedProxies []string `json:"trustedProxies,omitempty"`
+	// TrustLocalPortForward declares that a non-loopback peer only reaches
+	// this listener through a host port mapping bound to the host loopback
+	// interface (docker `-p 127.0.0.1:3123:3123`). A container cannot see the
+	// real client address, so the operator has to state that boundary
+	// explicitly instead of the server guessing it from the Host header.
+	TrustLocalPortForward bool `json:"trustLocalPortForward,omitempty"`
 	// StrictToolHistory keeps the strict every-tool-result-has-a-call rule.
 	// It is off by default so desktop clients can replay incomplete history.
 	StrictToolHistory bool `json:"strictToolHistory,omitempty"`
@@ -175,8 +186,11 @@ type HistoryEntry struct {
 	Usage           *UsageStats `json:"usage,omitempty"`
 	Error           *string     `json:"error"`
 	Account         string      `json:"account,omitempty"`
-	Attempts        []string    `json:"attempts,omitempty"`
-	Trace           []Trace     `json:"trace,omitempty"`
+	// AccountID is the stable identity behind Account. Per-account counters
+	// are keyed by it so renaming an account keeps its statistics.
+	AccountID string   `json:"accountId,omitempty"`
+	Attempts  []string `json:"attempts,omitempty"`
+	Trace     []Trace  `json:"trace,omitempty"`
 }
 
 type AccountStats struct {

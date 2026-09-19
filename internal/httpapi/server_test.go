@@ -25,7 +25,11 @@ func localRequest(method, target string, body io.Reader) *http.Request {
 	if strings.HasPrefix(target, "/") {
 		target = "http://localhost" + target
 	}
-	return httptest.NewRequest(method, target, body)
+	request := httptest.NewRequest(method, target, body)
+	// httptest.NewRequest defaults RemoteAddr to TEST-NET-1. The access guard
+	// classifies the connection source, so a local test has to look local.
+	request.RemoteAddr = "127.0.0.1:54321"
+	return request
 }
 
 func newTestServer(t *testing.T) (*store.Store, *Server) {
@@ -51,6 +55,18 @@ func newTestServer(t *testing.T) (*store.Store, *Server) {
 		t.Fatal(err)
 	}
 	return st, server
+}
+
+// accountStats reads the per-account counters by account name, resolving the
+// stable identity the store now keys them by.
+func accountStats(t *testing.T, st *store.Store, name string) model.AccountStats {
+	t.Helper()
+	for _, account := range st.Config().Accounts {
+		if account.Name == name {
+			return st.Metadata().Stats[account.ID]
+		}
+	}
+	return st.Metadata().Stats[name]
 }
 
 func TestMetaIsPublicAndProtectedRoutesRequireKey(t *testing.T) {
@@ -677,8 +693,8 @@ func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 	if history[0].Error != nil || history[0].Usage == nil || history[0].Usage.CompletionTokens != 2 {
 		t.Fatalf("shared stream usage should be counted once: %#v", history[0])
 	}
-	if st.Metadata().Stats["main"].Requests != 1 {
-		t.Fatalf("account request count should not be inflated by attached clients: %#v", st.Metadata().Stats["main"])
+	if stats := accountStats(t, st, "main"); stats.Requests != 1 {
+		t.Fatalf("account request count should not be inflated by attached clients: %#v", stats)
 	}
 }
 

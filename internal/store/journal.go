@@ -167,11 +167,18 @@ func (s *Store) applyEntry(entry journalEntry) {
 		if len(s.meta.History) > 100 {
 			s.meta.History = s.meta.History[:100]
 		}
-		if e.Account != "" {
-			stats := s.meta.Stats[e.Account]
+		// Counters follow the stable account identity; entries written by
+		// older versions only carry a name and keep working through the
+		// fallback.
+		statsKey := e.AccountID
+		if statsKey == "" {
+			statsKey = e.Account
+		}
+		if statsKey != "" {
+			stats := s.meta.Stats[statsKey]
 			stats.Requests++
 			stats.LastUsed, stats.LastError = e.TS, e.Error
-			s.meta.Stats[e.Account] = stats
+			s.meta.Stats[statsKey] = stats
 		}
 	case "remove":
 		known := make([]string, 0, len(s.config.KnownModels))

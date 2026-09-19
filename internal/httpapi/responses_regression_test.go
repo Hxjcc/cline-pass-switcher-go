@@ -153,7 +153,7 @@ func TestResponsesHistoryTracksProtocolOutcome(t *testing.T) {
 			if len(meta.History) != 1 || meta.History[0].Error == nil || !strings.Contains(*meta.History[0].Error, tc.reason) {
 				t.Fatalf("protocol failure not recorded: %#v", meta.History)
 			}
-			if meta.Stats["main"].LastError == nil {
+			if accountStats(t, st, "main").LastError == nil {
 				t.Fatal("account statistics still report success")
 			}
 		})

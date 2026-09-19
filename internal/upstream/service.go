@@ -23,6 +23,14 @@ import (
 
 const openRouterAPI = "https://openrouter.ai/api/v1"
 
+// Official model catalog sources. Variables so tests (and a future
+// self-hosted mirror) can point them at a local server.
+var (
+	officialClineModelsURL = "https://api.cline.bot/api/v1/ai/cline/recommended-models"
+	officialModelsDevURL   = "https://models.dev/api.json"
+	officialDocsURL        = "https://docs.cline.bot/getting-started/clinepass"
+)
+
 type Service struct {
 	store  *store.Store
 	client *http.Client
@@ -36,6 +44,11 @@ type Service struct {
 	nonStreamNanos int64
 
 	accounts accountHealth
+
+	// quotaCache holds successful plan probes for a short window so the
+	// console cannot hammer the undocumented upstream endpoints.
+	quotaMu    sync.Mutex
+	quotaCache map[string]AccountQuota
 }
 
 type ProbeResult struct {
@@ -372,7 +385,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 		return value
 	}
 
-	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, "https://api.cline.bot/api/v1/ai/cline/recommended-models", nil, nil, 30*time.Second); err == nil {
+	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, officialClineModelsURL, nil, nil, 30*time.Second); err == nil {
 		root := jsonx.Map(raw)
 		list := getSlice(root, "clinePass")
 		if len(list) == 0 {
@@ -401,7 +414,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 		}
 	}
 
-	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, "https://models.dev/api.json", nil, nil, 30*time.Second); err == nil {
+	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, officialModelsDevURL, nil, nil, 30*time.Second); err == nil {
 		root := jsonx.Map(raw)
 		clinePass := getMap(getMap(root, "providers"), "cline-pass")
 		if clinePass == nil {
@@ -421,7 +434,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 		}
 	}
 
-	if text, err := s.fetchText(ctx, "https://docs.cline.bot/getting-started/clinepass", 30*time.Second); err == nil {
+	if text, err := s.fetchText(ctx, officialDocsURL, 30*time.Second); err == nil {
 		matches := regexp.MustCompile(`(?i)cline-pass/[a-z0-9._-]+`).FindAllString(text, -1)
 		if len(matches) > 0 {
 			for _, match := range matches {
@@ -444,7 +457,9 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	for _, id := range config.RemovedModels {
 		known[id] = struct{}{}
 	}
-	var added []string
+	// Always a slice: the console reads added.length, and JSON null would
+	// crash it when a sync finds nothing new.
+	added := make([]string, 0, len(valid))
 	for _, id := range valid {
 		if _, exists := known[id]; !exists {
 			added = append(added, id)
@@ -515,12 +530,25 @@ func (s *Service) Catalog(ctx context.Context) []string {
 	return ids
 }
 
-func (s *Service) TestAccount(ctx context.Context, key string) AccountTestResult {
+// TestAccount probes one credential. The stored key may be addressed by
+// account ID instead of being resubmitted, so the console never has to cache a
+// revealed key to test a saved account.
+func (s *Service) TestAccount(ctx context.Context, key, accountID string) AccountTestResult {
 	started := time.Now()
 	modelID := "cline-pass/glm-5.3-flash"
 	cfg := s.store.Config()
 	if len(cfg.KnownModels) > 0 {
 		modelID = cfg.KnownModels[0]
+	}
+	if strings.TrimSpace(key) == "" && strings.TrimSpace(accountID) != "" {
+		account := s.store.FindAccount(strings.TrimSpace(accountID))
+		if account.Key == "" {
+			return AccountTestResult{OK: false, MS: time.Since(started).Milliseconds(), Model: modelID, Error: "找不到该账号的密钥，请重新保存后再测试"}
+		}
+		key = account.Key
+	}
+	if strings.TrimSpace(key) == "" {
+		return AccountTestResult{OK: false, MS: time.Since(started).Milliseconds(), Model: modelID, Error: "key required"}
 	}
 	body := map[string]any{
 		"model": modelID,
@@ -529,14 +557,31 @@ func (s *Service) TestAccount(ctx context.Context, key string) AccountTestResult
 		},
 		"max_tokens": 512,
 	}
-	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(key), body, 120*time.Second)
+	status, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(key), body, 120*time.Second)
 	if err != nil {
 		return AccountTestResult{OK: false, MS: time.Since(started).Milliseconds(), Model: modelID, Error: err.Error()}
 	}
-	message := extractError(jsonx.Map(raw))
-	if message != "" && !hasChoices(jsonx.Map(raw)) {
-		authFail := regexp.MustCompile(`(?i)unauthorized|re-authenticate|invalid\s*api|401`).MatchString(message)
-		if authFail {
+	root := jsonx.Map(raw)
+	details, found := apierr.FromBody(root, status)
+	if found && hasChoices(root) {
+		// A completed generation with a provider warning still proves the
+		// credential works.
+		found = false
+	}
+	if found {
+		message := strings.TrimSpace(details.Message)
+		if rawText := strings.TrimSpace(jsonx.String(root["raw"])); rawText != "" && (message == "" || message == http.StatusText(details.Status)) {
+			message = strx.Truncate(rawText, 160)
+		}
+		if message == "" {
+			message = http.StatusText(details.Status)
+		}
+		if message == "" {
+			message = "upstream error"
+		}
+		authFailure := details.Status == http.StatusUnauthorized || details.Status == http.StatusForbidden ||
+			details.Type == "authentication_error" || details.Type == "permission_error"
+		if authFailure {
 			return AccountTestResult{
 				OK:    false,
 				MS:    time.Since(started).Milliseconds(),
@@ -545,10 +590,19 @@ func (s *Service) TestAccount(ctx context.Context, key string) AccountTestResult
 			}
 		}
 		return AccountTestResult{
-			OK:    true,
+			OK:    false,
 			MS:    time.Since(started).Milliseconds(),
 			Model: modelID,
-			Note:  "密钥鉴权通过；网关提示：" + strx.Truncate(message, 120),
+			Error: fmt.Sprintf("上游返回 %d：%s", details.Status, strx.Truncate(message, 160)),
+		}
+	}
+	if !hasChoices(root) {
+		// A 2xx without a completion is not proof that the key works.
+		return AccountTestResult{
+			OK:    false,
+			MS:    time.Since(started).Milliseconds(),
+			Model: modelID,
+			Error: "上游没有返回可用的补全结果，无法确认密钥状态",
 		}
 	}
 	return AccountTestResult{OK: true, MS: time.Since(started).Milliseconds(), Model: modelID}
@@ -590,6 +644,55 @@ func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Atte
 	return attempts
 }
 
+// knownChannels is the channel universe an exclude list is translated
+// against: the probed channel list when one exists, otherwise the channels the
+// user pinned for the model before the first probe.
+func (s *Service) knownChannels(modelID string) []string {
+	if upstreams := s.store.ModelMeta(modelID).Upstreams; len(upstreams) > 0 {
+		return upstreams
+	}
+	return s.store.ModelConfig(modelID).Upstreams
+}
+
+// RoutingFailure reports a pin/exclude combination that leaves no channel to
+// send to. InjectPrefs can only express "allow exactly these channels"; when
+// that allow list comes out empty an unconstrained request would silently use
+// the channels the user excluded, so the attempt must fail instead.
+func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Details {
+	if len(attempt.ExcludeList) == 0 {
+		return nil
+	}
+	if attempt.Strict && attempt.Upstream != "" {
+		// A strict pin names the single channel allowed to serve the request,
+		// and BuildAttempts never selects an excluded channel.
+		return nil
+	}
+	known := s.knownChannels(modelID)
+	if len(known) == 0 {
+		return &apierr.Details{
+			Status:  http.StatusBadRequest,
+			Type:    "invalid_request_error",
+			Code:    "channel_list_unknown",
+			Message: "尚未探测到该模型的渠道列表，无法应用排除规则；请先探测模型或清空排除项",
+		}
+	}
+	excluded := make(map[string]struct{}, len(attempt.ExcludeList))
+	for _, upstreamSlug := range attempt.ExcludeList {
+		excluded[upstreamSlug] = struct{}{}
+	}
+	for _, upstreamSlug := range known {
+		if _, found := excluded[upstreamSlug]; !found {
+			return nil
+		}
+	}
+	return &apierr.Details{
+		Status:  http.StatusBadRequest,
+		Type:    "invalid_request_error",
+		Code:    "no_allowed_channels",
+		Message: "排除规则排除了全部渠道，没有可用的上游渠道",
+	}
+}
+
 func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attempt) map[string]any {
 	cloned := model.Clone(body)
 	modelMeta := s.store.ModelMeta(modelID)
@@ -600,7 +703,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			exclude = append(exclude, value)
 		}
 	}
-	known := modelMeta.Upstreams
+	known := s.knownChannels(modelID)
 	var allowList []string
 	if len(exclude) > 0 {
 		excluded := make(map[string]struct{}, len(exclude))
@@ -613,7 +716,9 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			}
 		}
 	}
-	if attempt.Upstream == "" && attempt.Sort == "" && len(allowList) == 0 {
+	// No exclusion rules means no constraint; an empty allow list while rules
+	// exist is a conflict the attempt layer rejects before reaching here.
+	if attempt.Upstream == "" && attempt.Sort == "" && len(attempt.ExcludeList) == 0 {
 		return cloned
 	}
 	pipeline := modelMeta.Pipeline
@@ -682,6 +787,13 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 
 func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map[string]any, attempt Attempt) AttemptResult {
 	account := s.pickAccount()
+	if account.Key == "" {
+		details := apierr.Details{Status: http.StatusServiceUnavailable, Type: "configuration_error", Code: "no_account", Message: errNoAccount.Error()}
+		return AttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account, Fatal: true}
+	}
+	if details := s.RoutingFailure(modelID, attempt); details != nil {
+		return AttemptResult{Status: details.Status, Out: apierr.Body(*details), NetErr: details.Message, Account: account, Fatal: true}
+	}
 	baseURL := s.store.UpstreamBase()
 	send := s.InjectPrefs(body, modelID, attempt)
 	status, raw, err := s.fetchJSON(ctx, http.MethodPost, baseURL+"/chat/completions", chatHeaders(account.Key), send, s.NonStreamTimeout())
@@ -724,6 +836,8 @@ type StreamAttemptResult struct {
 	Out        map[string]any
 	NetErr     string
 	Account    model.Account
+	// Fatal marks a failure no other channel or account can fix.
+	Fatal bool
 }
 
 func firstSSEPayload(raw []byte, includeTrailing bool) (string, bool) {
@@ -777,6 +891,13 @@ func readSSEHead(reader io.Reader) ([]byte, string, error) {
 
 func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body map[string]any, attempt Attempt) StreamAttemptResult {
 	account := s.pickAccount()
+	if account.Key == "" {
+		details := apierr.Details{Status: http.StatusServiceUnavailable, Type: "configuration_error", Code: "no_account", Message: errNoAccount.Error()}
+		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account, Fatal: true}
+	}
+	if details := s.RoutingFailure(modelID, attempt); details != nil {
+		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(*details), NetErr: details.Message, Account: account, Fatal: true}
+	}
 	baseURL := s.store.UpstreamBase()
 	send := s.InjectPrefs(body, modelID, attempt)
 
@@ -861,6 +982,9 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 	if json.Unmarshal([]byte(payload), &firstEvent) == nil && extractError(firstEvent) != "" && !hasChoices(firstEvent) {
 		response.Body.Close()
 		details, _ := apierr.FromBody(firstEvent, 0)
+		// The transport answered 200 before the error arrived, but the
+		// account-level verdict is the same one the non-SSE branch records.
+		s.noteAccountStatus(account, details.Status)
 		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account}
 	}
 	// The response is committed from here on; switch the guard to the silence

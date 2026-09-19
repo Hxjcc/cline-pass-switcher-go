@@ -346,7 +346,8 @@ func (s *Server) recordSharedRun(
 		TS: time.Now().UnixMilli(), Model: modelID, Provider: job.provider, Canonical: job.canonical,
 		MS: time.Since(job.last.Started).Milliseconds(), Stream: true, Kind: "responses",
 		Error: errorMessage, Account: job.last.Account.Name,
-		Attempts: traceUpstreams(job.last.Trace), Trace: job.last.Trace,
+		AccountID: job.last.Account.ID,
+		Attempts:  traceUpstreams(job.last.Trace), Trace: job.last.Trace,
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	if job.okSSE {
@@ -376,84 +377,106 @@ func (s *Server) runSharedResponses(
 	}
 	defer record()
 
+	budget := newAttemptBudget(len(attempts), s.upstream.AccountAttemptLimit())
+	stopped := false
+	fatal := false
 	for _, attempt := range attempts {
-		started := time.Now()
-		result := s.upstream.StartStreamAttempt(job.ctx, modelID, chatBody, attempt)
-		if isBufferedCompletion(result) {
-			events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
-			if err == nil {
-				s.publishBufferedResponses(job, modelID, result, attempt, started, events)
-				return
-			}
-			result.Status = http.StatusBadGateway
-			result.NetErr = err.Error()
-			result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}}
-		}
-		if !result.SSE {
-			message := result.NetErr
-			if message == "" {
-				message = extractAttemptError(result.Out)
-			}
-			job.last.Trace = append(job.last.Trace, model.Trace{
-				Upstream: attempt.Upstream, Status: result.Status,
-				MS: time.Since(started).Milliseconds(), Note: strx.Truncate(message, 160),
-			})
-			job.last.Status, job.last.Out, job.last.NetErr, job.last.Account = result.Status, result.Out, result.NetErr, result.Account
-			s.upstream.LearnFailure(modelID, attempt, message)
-			if s.stopFailover(result.Status) {
+		for accountsUsed := 1; ; accountsUsed++ {
+			if !budget.acquire() {
+				stopped = true
 				break
 			}
-			continue
-		}
+			started := time.Now()
+			result := s.upstream.StartStreamAttempt(job.ctx, modelID, chatBody, attempt)
+			if isBufferedCompletion(result) {
+				events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
+				if err == nil {
+					s.publishBufferedResponses(job, modelID, result, attempt, started, events)
+					return
+				}
+				result.Status = http.StatusBadGateway
+				result.NetErr = err.Error()
+				result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}}
+			}
+			if !result.SSE {
+				message := result.NetErr
+				if message == "" {
+					message = extractAttemptError(result.Out)
+				}
+				job.last.Trace = append(job.last.Trace, model.Trace{
+					Upstream: attempt.Upstream, Status: result.Status,
+					MS: time.Since(started).Milliseconds(), Note: strx.Truncate(message, 160),
+				})
+				job.last.Status, job.last.Out, job.last.NetErr, job.last.Account = result.Status, result.Out, result.NetErr, result.Account
+				s.upstream.LearnFailure(modelID, attempt, message)
+				if result.Fatal {
+					fatal = true
+					break
+				}
+				if job.ctx.Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
+					break
+				}
+				continue
+			}
 
-		job.last.Trace = append(job.last.Trace, model.Trace{
-			Upstream: attempt.Upstream, Status: http.StatusOK,
-			MS: time.Since(started).Milliseconds(), Note: "responses stream",
-		})
-		job.last.Account = result.Account
-		job.last.Status = http.StatusOK
-		job.last.Out, job.last.NetErr = nil, ""
-		job.okSSE = true
-		job.stats = newStreamStats(started)
+			job.last.Trace = append(job.last.Trace, model.Trace{
+				Upstream: attempt.Upstream, Status: http.StatusOK,
+				MS: time.Since(started).Milliseconds(), Note: "responses stream",
+			})
+			job.last.Account = result.Account
+			job.last.Status = http.StatusOK
+			job.last.Out, job.last.NetErr = nil, ""
+			job.okSSE = true
+			job.stats = newStreamStats(started)
 
-		adapter := responsesbridge.NewStreamAdapter(bridgeContext)
-		rawTail := make([]byte, 0, 32<<10)
-		process := func(data []byte) error {
-			job.stats.Observe(data)
-			rawTail = appendRawTail(rawTail, data)
-			events := adapter.Feed(data)
-			return job.publishEvents(events)
+			adapter := responsesbridge.NewStreamAdapter(bridgeContext)
+			rawTail := make([]byte, 0, 32<<10)
+			process := func(data []byte) error {
+				job.stats.Observe(data)
+				rawTail = appendRawTail(rawTail, data)
+				events := adapter.Feed(data)
+				return job.publishEvents(events)
+			}
+			readErr := process(result.FirstChunk)
+			job.markReady()
+			if readErr == nil && !adapter.Completed() {
+				readErr = consumeStream(
+					job.ctx,
+					result.Body,
+					0,
+					adapter.Completed,
+					process,
+					nil,
+				)
+			}
+			_ = result.Body.Close()
+			// Check cancellation before Finish marks the adapter terminal.
+			job.aborted = job.ctx.Err() != nil && !adapter.Completed()
+			finish := adapter.Finish(readErr)
+			if err := job.publishEvents(finish); err != nil && readErr == nil {
+				readErr = err
+			}
+			if job.outcome.Status == "completed" || job.outcome.Status == "incomplete" {
+				// A terminal sentinel may have been buffered without its trailing
+				// delimiter when cancellation arrived. Finish can still validate it.
+				job.aborted = false
+			}
+			job.provider, job.canonical = parseStreamRouting(string(rawTail))
+			job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
+			if readErr != nil && job.ctx.Err() == nil {
+				job.readError = readErr.Error()
+			}
+			return
 		}
-		readErr := process(result.FirstChunk)
-		job.markReady()
-		if readErr == nil && !adapter.Completed() {
-			readErr = consumeStream(
-				job.ctx,
-				result.Body,
-				0,
-				adapter.Completed,
-				process,
-				nil,
-			)
+		if stopped {
+			break
 		}
-		_ = result.Body.Close()
-		// Check cancellation before Finish marks the adapter terminal.
-		job.aborted = job.ctx.Err() != nil && !adapter.Completed()
-		finish := adapter.Finish(readErr)
-		if err := job.publishEvents(finish); err != nil && readErr == nil {
-			readErr = err
+		if fatal || job.ctx.Err() != nil {
+			break
 		}
-		if job.outcome.Status == "completed" || job.outcome.Status == "incomplete" {
-			// A terminal sentinel may have been buffered without its trailing
-			// delimiter when cancellation arrived. Finish can still validate it.
-			job.aborted = false
+		if s.stopFailover(job.last.Status) {
+			break
 		}
-		job.provider, job.canonical = parseStreamRouting(string(rawTail))
-		job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
-		if readErr != nil && job.ctx.Err() == nil {
-			job.readError = readErr.Error()
-		}
-		return
 	}
 	// Every channel failed: the error is what clients will see, so it must be
 	// in the history before they are released.

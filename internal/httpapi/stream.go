@@ -28,132 +28,201 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 	var last chainResult
 	last.Status = http.StatusBadGateway
 	last.Started = time.Now()
+	budget := newAttemptBudget(len(attempts), s.upstream.AccountAttemptLimit())
 
 	for _, attempt := range attempts {
-		started := time.Now()
-		// No overall deadline: reasoning responses legitimately stream for
-		// minutes. StartStreamAttempt applies a first-event budget and then an
-		// idle (silence) budget so long but healthy streams survive.
-		result := s.upstream.StartStreamAttempt(request.Context(), modelID, body, attempt)
-		if isBufferedCompletion(result) {
+		streamed := false
+		fatal := false
+		for accountsUsed := 1; ; accountsUsed++ {
+			if !budget.acquire() {
+				s.writeChatStreamFailure(writer, modelID, body, last)
+				return
+			}
+			started := time.Now()
+			// No overall deadline: reasoning responses legitimately stream for
+			// minutes. StartStreamAttempt applies a first-event budget and then
+			// an idle (silence) budget so long but healthy streams survive.
+			result := s.upstream.StartStreamAttempt(request.Context(), modelID, body, attempt)
+			if isBufferedCompletion(result) {
+				last.Trace = append(last.Trace, model.Trace{
+					Upstream: attempt.Upstream,
+					Status:   http.StatusOK,
+					MS:       time.Since(started).Milliseconds(),
+					Note:     "buffered completion",
+				})
+				last.Account = result.Account
+				s.writeBufferedChatStream(writer, targets, last, result, modelID, body)
+				return
+			}
+			if !result.SSE {
+				message := result.NetErr
+				if message == "" {
+					message = extractAttemptError(result.Out)
+				}
+				trace := model.Trace{
+					Upstream: attempt.Upstream,
+					Status:   result.Status,
+					MS:       time.Since(started).Milliseconds(),
+					Note:     strx.Truncate(message, 160),
+				}
+				last.Trace = append(last.Trace, trace)
+				last.Status = result.Status
+				last.Out = result.Out
+				last.NetErr = result.NetErr
+				last.Account = result.Account
+				s.upstream.LearnFailure(modelID, attempt, message)
+				if result.Fatal {
+					fatal = true
+					break
+				}
+				if request.Context().Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
+					break
+				}
+				continue
+			}
+
 			last.Trace = append(last.Trace, model.Trace{
 				Upstream: attempt.Upstream,
 				Status:   http.StatusOK,
 				MS:       time.Since(started).Milliseconds(),
-				Note:     "buffered completion",
+				Note:     "stream",
 			})
-			s.writeBufferedChatStream(writer, targets, last, result, modelID, body)
-			return
-		}
-		if !result.SSE {
-			message := result.NetErr
-			if message == "" {
-				message = extractAttemptError(result.Out)
-			}
-			trace := model.Trace{
-				Upstream: attempt.Upstream,
-				Status:   result.Status,
-				MS:       time.Since(started).Milliseconds(),
-				Note:     strx.Truncate(message, 160),
-			}
-			last.Trace = append(last.Trace, trace)
-			last.Status = result.Status
-			last.Out = result.Out
-			last.NetErr = result.NetErr
 			last.Account = result.Account
-			s.upstream.LearnFailure(modelID, attempt, message)
-			if s.stopFailover(result.Status) {
-				break
+			last.Status = http.StatusOK
+			contentType := result.Header.Get("Content-Type")
+			if contentType == "" {
+				contentType = "text/event-stream"
 			}
-			continue
-		}
+			writer.Header().Set("Content-Type", contentType)
+			writer.Header().Set("Cache-Control", "no-cache")
+			writer.Header().Set("Connection", "keep-alive")
+			writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
+			writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(last.Trace)))
+			writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
+			writer.WriteHeader(http.StatusOK)
 
-		last.Trace = append(last.Trace, model.Trace{
-			Upstream: attempt.Upstream,
-			Status:   http.StatusOK,
-			MS:       time.Since(started).Milliseconds(),
-			Note:     "stream",
-		})
-		contentType := result.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "text/event-stream"
-		}
-		writer.Header().Set("Content-Type", contentType)
-		writer.Header().Set("Cache-Control", "no-cache")
-		writer.Header().Set("Connection", "keep-alive")
-		writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-		writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(last.Trace)))
-		writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
-		writer.WriteHeader(http.StatusOK)
-
-		tap := &streamTapWriter{writer: writer}
-		rewriter := &sseJSONRewriter{}
-		stats := newStreamStats(started)
-		writeChunk := func(data []byte) error {
-			stats.Observe(data)
-			rewritten, err := rewriter.push(data, rewriteChatReasoningBlock)
-			if err != nil {
+			tap := &streamTapWriter{writer: writer}
+			rewriter := &sseJSONRewriter{}
+			stats := newStreamStats(started)
+			writeChunk := func(data []byte) error {
+				stats.Observe(data)
+				rewritten, err := rewriter.push(data, rewriteChatReasoningBlock)
+				if err != nil {
+					return err
+				}
+				if len(rewritten) == 0 {
+					return nil
+				}
+				_, err = tap.Write(rewritten)
 				return err
 			}
-			if len(rewritten) == 0 {
-				return nil
+			copyErr := writeChunk(result.FirstChunk)
+			if copyErr == nil {
+				copyErr = consumeStream(
+					request.Context(),
+					result.Body,
+					streamKeepaliveInterval(s.upstream.StreamIdleTimeout()),
+					nil,
+					writeChunk,
+					func() error { return writeSSEKeepalive(tap) },
+				)
 			}
-			_, err = tap.Write(rewritten)
-			return err
-		}
-		copyErr := writeChunk(result.FirstChunk)
-		if copyErr == nil {
-			copyErr = consumeStream(
-				request.Context(),
-				result.Body,
-				streamKeepaliveInterval(s.upstream.StreamIdleTimeout()),
-				nil,
-				writeChunk,
-				func() error { return writeSSEKeepalive(tap) },
-			)
-		}
-		if leftover := rewriter.flush(); len(leftover) > 0 && copyErr == nil {
-			_, copyErr = tap.Write(leftover)
-		}
-		_ = result.Body.Close()
+			if leftover := rewriter.flush(); len(leftover) > 0 && copyErr == nil {
+				// A truncated stream can still end with a complete final JSON
+				// payload that never got its blank-line delimiter.
+				stats.ObserveBlock(string(leftover))
+				_, copyErr = tap.Write(leftover)
+			}
+			_ = result.Body.Close()
 
-		provider, canonical := parseStreamRouting(tap.tailText())
-		provider = s.upstream.CanonicalProvider(modelID, provider)
-		errorMessage := (*string)(nil)
-		if copyErr != nil {
-			// The parser fails the stream from the upstream side; say so instead
-			// of letting it look like a client write error.
-			message := copyErr.Error()
-			if errors.Is(copyErr, sse.ErrEventTooLarge) {
-				message = "上游流事件超限: " + message
+			provider, canonical := parseStreamRouting(tap.tailText())
+			provider = s.upstream.CanonicalProvider(modelID, provider)
+			errorMessage := chatStreamFailure(copyErr, stats)
+			entry := model.HistoryEntry{
+				TS:        time.Now().UnixMilli(),
+				Model:     modelID,
+				Provider:  provider,
+				Canonical: canonical,
+				MS:        time.Since(last.Started).Milliseconds(),
+				Stream:    true,
+				Kind:      "chat",
+				Effort:    effortFromChatBody(body),
+				Error:     errorMessage,
+				Account:   result.Account.Name,
+				AccountID: result.Account.ID,
+				Attempts:  traceUpstreams(last.Trace),
+				Trace:     last.Trace,
 			}
-			errorMessage = &message
+			applyStreamStats(&entry, stats)
+			s.record(entry)
+			streamed = true
+			break
 		}
-		entry := model.HistoryEntry{
-			TS:        time.Now().UnixMilli(),
-			Model:     modelID,
-			Provider:  provider,
-			Canonical: canonical,
-			MS:        time.Since(last.Started).Milliseconds(),
-			Stream:    true,
-			Kind:      "chat",
-			Effort:    effortFromChatBody(body),
-			Error:     errorMessage,
-			Account:   result.Account.Name,
-			Attempts:  traceUpstreams(last.Trace),
-			Trace:     last.Trace,
+		if streamed {
+			return
 		}
-		applyStreamStats(&entry, stats)
-		s.record(entry)
-		return
+		if fatal || request.Context().Err() != nil || s.stopFailover(last.Status) {
+			break
+		}
 	}
 
+	s.writeChatStreamFailure(writer, modelID, body, last)
+}
+
+// chatStreamFailure turns the end of a committed chat stream into a history
+// error when the protocol did not reach a terminal state or carried an
+// in-stream error. A bare EOF after partial output is a truncation, not a
+// success.
+func chatStreamFailure(copyErr error, stats *streamStats) *string {
+	message := ""
+	switch {
+	case copyErr != nil:
+		message = friendlyCancelText(copyErr.Error())
+		if errors.Is(copyErr, sse.ErrEventTooLarge) {
+			message = "上游流事件超限: " + message
+		}
+	case stats.StreamError() != "":
+		message = friendlyCancelText(stats.StreamError())
+	case !stats.Terminal():
+		message = "上游流未正常结束：缺少 finish_reason 或 [DONE]"
+	}
+	if message == "" {
+		return nil
+	}
+	return &message
+}
+
+// writeChatStreamFailure is the single exit for a streaming chat request that
+// never committed an upstream stream: it records the account, trace and error
+// before the client receives the error body.
+func (s *Server) writeChatStreamFailure(writer http.ResponseWriter, modelID string, body map[string]any, last chainResult) {
+	message := friendlyCancelText(chainErrorMessage(last))
+	if message == "" {
+		message = "upstream returned no response"
+	}
+	s.record(model.HistoryEntry{
+		TS:        time.Now().UnixMilli(),
+		Model:     modelID,
+		MS:        time.Since(last.Started).Milliseconds(),
+		Stream:    true,
+		Kind:      "chat",
+		Effort:    effortFromChatBody(body),
+		Error:     &message,
+		Account:   last.Account.Name,
+		AccountID: last.Account.ID,
+		Attempts:  traceUpstreams(last.Trace),
+		Trace:     last.Trace,
+	})
+	status := last.Status
+	if status < 400 {
+		status = http.StatusBadGateway
+	}
 	if last.Out == nil {
 		last.Out = map[string]any{
-			"error": map[string]any{"message": "upstream returned no response", "type": "upstream_error"},
+			"error": map[string]any{"message": message, "type": "upstream_error"},
 		}
 	}
-	writeJSON(writer, last.Status, last.Out)
+	writeJSON(writer, status, last.Out)
 }
 
 // writeBufferedChatStream serves a client that asked for SSE when the upstream
@@ -204,6 +273,7 @@ func (s *Server) writeBufferedChatStream(
 		Effort:    effortFromChatBody(body),
 		Error:     errorMessage,
 		Account:   result.Account.Name,
+		AccountID: result.Account.ID,
 		Attempts:  traceUpstreams(last.Trace),
 		Trace:     last.Trace,
 	}

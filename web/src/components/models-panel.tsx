@@ -269,8 +269,11 @@ export function ModelsPanel({
     setFetchingOfficial(true)
     try {
       const result = await onFetchOfficial()
-      if (result.added.length) {
-        toast.success(`已新增 ${result.added.length} 个模型`)
+      // The API always returns an array, but an older or third-party backend
+      // may still answer null; never crash the panel on it.
+      const added = result.added?.length ?? 0
+      if (added) {
+        toast.success(`已新增 ${added} 个模型`)
       } else {
         toast.success(`清单已是最新，共 ${result.total} 个模型`)
       }
