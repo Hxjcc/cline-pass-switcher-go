@@ -75,6 +75,13 @@ type Config struct {
 	// WebSearchUpstream maps the hosted web_search tool onto a gateway
 	// provider tool such as vercel:exa_search. Empty disables the mapping.
 	WebSearchUpstream string `json:"webSearchUpstream,omitempty"`
+	// WebSearchDirectAPIKey turns on proxy-executed web search: the hosted
+	// web_search declaration becomes a function tool the proxy answers itself
+	// with a search API call, so clients can be shown the real queries and
+	// pages as web_search_call items. Empty keeps the gateway mapping.
+	WebSearchDirectAPIKey string `json:"webSearchDirectApiKey,omitempty"`
+	// WebSearchDirectBaseURL overrides the search API endpoint (default Exa).
+	WebSearchDirectBaseURL string `json:"webSearchDirectBaseUrl,omitempty"`
 	// WebFetchUpstream declares a gateway tool that reads a URL the user
 	// pasted, for example vercel:browserbase_fetch. Empty disables it.
 	WebFetchUpstream string    `json:"webFetchUpstream,omitempty"`

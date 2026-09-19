@@ -70,9 +70,26 @@ func ApplyEnvironment(cfg *Config) {
 	if upstream := strings.TrimSpace(os.Getenv("WEB_SEARCH_UPSTREAM")); upstream != "" {
 		cfg.WebSearchUpstream = upstream
 	}
+	// EXA_API_KEY is the user-facing name; WEB_SEARCH_DIRECT_API_KEY is the
+	// provider-neutral spelling used by the config schema.
+	if key := firstNonEmptyEnv("EXA_API_KEY", "WEB_SEARCH_DIRECT_API_KEY"); key != "" {
+		cfg.WebSearchDirectAPIKey = key
+	}
+	if baseURL := firstNonEmptyEnv("EXA_BASE_URL", "WEB_SEARCH_DIRECT_BASE_URL"); baseURL != "" {
+		cfg.WebSearchDirectBaseURL = baseURL
+	}
 	if upstream := strings.TrimSpace(os.Getenv("WEB_FETCH_UPSTREAM")); upstream != "" {
 		cfg.WebFetchUpstream = upstream
 	}
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func NormalizeConfig(cfg *Config) {
@@ -85,6 +102,8 @@ func NormalizeConfig(cfg *Config) {
 	cfg.UpstreamBase = strings.TrimRight(strings.TrimSpace(cfg.UpstreamBase), "/")
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
+	cfg.WebSearchDirectAPIKey = strings.TrimSpace(cfg.WebSearchDirectAPIKey)
+	cfg.WebSearchDirectBaseURL = strings.TrimRight(strings.TrimSpace(cfg.WebSearchDirectBaseURL), "/")
 
 	if len(cfg.Accounts) == 0 && strings.TrimSpace(cfg.APIKey) != "" {
 		cfg.Accounts = []Account{{Name: "默认账号", Key: strings.TrimSpace(cfg.APIKey), Enabled: true}}

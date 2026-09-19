@@ -52,19 +52,75 @@ type Context struct {
 	RequestedReasoningEffort string
 	MappedReasoningEffort    string
 	RawReasoning             bool
+	// ReplayReasoning mirrors Options.ReplayReasoning for code paths that
+	// build upstream messages after the bridge (web search continuations).
+	ReplayReasoning bool
 	// webSearchTool and webFetchTool are gateway provider tools (for example
 	// vercel:exa_search and vercel:browserbase_fetch) that stand in for the
 	// client's hosted web_search and for reading a link the user pasted.
 	// Empty keeps the capability off.
-	webSearchTool   string
-	webFetchTool    string
-	providerTools   map[string]struct{}
-	bindings        map[string]toolBinding
-	originalToChat  map[string]string
-	chatTools       []any
-	toolNames       map[string]struct{}
-	compactionUsers []any
-	outputSchema    *jsonschema.Schema
+	webSearchTool string
+	webFetchTool  string
+	// webSearchDirect makes the proxy answer hosted web_search calls itself:
+	// the model gets a function tool whose calls never reach the client, and
+	// every executed search is reported back as a web_search_call item.
+	webSearchDirect  bool
+	webSearchBinding string
+	webSearches      []WebSearchCall
+	providerTools    map[string]struct{}
+	bindings         map[string]toolBinding
+	originalToChat   map[string]string
+	chatTools        []any
+	toolNames        map[string]struct{}
+	compactionUsers  []any
+	outputSchema     *jsonschema.Schema
+}
+
+// WebSearchCall is one proxy-executed web search. Clients render it as a
+// web_search_call output item.
+type WebSearchCall struct {
+	ID     string
+	Query  string
+	Status string
+}
+
+// WebSearchCallItem renders a WebSearchCall as a Responses API output item.
+// The shape follows the official payload (id/status/action), which Codex
+// Desktop turns into its "searched the web" activity.
+func WebSearchCallItem(call WebSearchCall) map[string]any {
+	status := call.Status
+	if status == "" {
+		status = "completed"
+	}
+	action := map[string]any{"type": "search", "query": call.Query}
+	if call.Query != "" {
+		action["queries"] = []any{call.Query}
+	}
+	return map[string]any{
+		"id": call.ID, "type": "web_search_call", "status": status, "action": action,
+	}
+}
+
+// RecordWebSearch remembers an executed search so buffered conversions can
+// include its output item.
+func (context *Context) RecordWebSearch(call WebSearchCall) {
+	if call.ID == "" {
+		call.ID = newID("ws")
+	}
+	if call.Status == "" {
+		call.Status = "completed"
+	}
+	context.webSearches = append(context.webSearches, call)
+}
+
+// WebSearches returns the searches executed for this request in order.
+func (context *Context) WebSearches() []WebSearchCall {
+	return context.webSearches
+}
+
+// WebSearchDirect reports whether the proxy answers hosted web_search itself.
+func (context *Context) WebSearchDirect() bool {
+	return context.webSearchDirect
 }
 
 func boolValue(value any, fallback bool) bool {
@@ -217,7 +273,7 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		return
 	}
 	if isWebSearchToolType(jsonx.String(tool["type"])) {
-		context.addProviderWebSearch()
+		context.addWebSearchTool()
 		return
 	}
 	if isUnforwardedTool(tool) {
@@ -294,6 +350,53 @@ func isWebSearchToolType(typeName string) bool {
 // ever sees the finished answer.
 func (context *Context) addProviderWebSearch() {
 	context.addProviderTool(context.webSearchTool)
+}
+
+// addWebSearchTool declares the stand-in for the hosted web_search
+// declaration: either the proxy-executed function tool or the
+// gateway-executed provider tool.
+func (context *Context) addWebSearchTool() {
+	if context.webSearchDirect {
+		context.addDirectWebSearchTool()
+		return
+	}
+	context.addProviderWebSearch()
+}
+
+// directWebSearchDescription tells the model when to ask the proxy for a
+// search. The proxy runs the query and answers with real pages.
+const directWebSearchDescription = "Search the live web and return the pages that match a query. " +
+	"Use it whenever the user asks about current events, live data, or anything you cannot " +
+	"verify from the conversation. Write a short, specific query."
+
+func directWebSearchParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "Search query."},
+		},
+		"required":             []any{"query"},
+		"additionalProperties": false,
+	}
+}
+
+// addDirectWebSearchTool declares the function tool the proxy answers itself.
+// Calls to it are consumed by the proxy and reported to the client as
+// web_search_call items instead of function_call items.
+func (context *Context) addDirectWebSearchTool() {
+	if context.webSearchBinding != "" {
+		return
+	}
+	name := context.allocateToolName("", "web_search")
+	context.webSearchBinding = name
+	context.bindings[name] = toolBinding{Kind: "web_search", Name: "web_search"}
+	context.chatTools = append(context.chatTools, functionTool(name, directWebSearchDescription, directWebSearchParameters(), nil))
+}
+
+// isDirectWebSearchTool reports whether a Chat tool name is the proxy-answered
+// web search.
+func (context *Context) isDirectWebSearchTool(name string) bool {
+	return name != "" && context.webSearchBinding != "" && name == context.webSearchBinding
 }
 
 // addProviderTool declares one gateway-executed tool exactly once and remembers
@@ -881,6 +984,10 @@ type Options struct {
 	// tool the upstream gateway executes itself (vercel:exa_search and friends).
 	// Empty keeps the hosted tool unsupported, which is the default.
 	WebSearchUpstream string
+	// WebSearchDirect answers hosted web_search calls inside the proxy. The
+	// model gets a function tool, the proxy runs the query against a search
+	// API, and the client is shown a web_search_call item per search.
+	WebSearchDirect bool
 	// WebFetchUpstream declares a gateway tool that reads a URL the user pasted
 	// (vercel:browserbase_fetch). It is only declared when the request carries a
 	// link in user-authored text.
@@ -1256,8 +1363,10 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		TopP:               body["top_p"],
 		Metadata:           metadata,
 		RawReasoning:       options.RawReasoning,
+		ReplayReasoning:    options.ReplayReasoning,
 		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
+		webSearchDirect:    options.WebSearchDirect,
 		providerTools:      map[string]struct{}{},
 		bindings:           map[string]toolBinding{},
 		originalToChat:     map[string]string{},
@@ -1498,6 +1607,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 				flushAfterToolGroup()
 			}
 			pendingToolCalls = append(pendingToolCalls, functionCallFromResponseItem(item, context))
+		case "web_search_call":
+			// Hosted search items produced by this proxy. The pages the model
+			// used are already reflected in the assistant answer, so replaying
+			// the call as raw user text would only add noise.
+			continue
 		case "function_call_output", "custom_tool_call_output":
 			flushToolCalls()
 			callID := jsonx.String(item["call_id"])
@@ -1957,8 +2071,18 @@ func FromChat(chat map[string]any, context *Context) (map[string]any, error) {
 	}
 	terminal := events[len(events)-1]
 	response := jsonx.Map(terminal.Data["response"])
-	if terminal.Type != "response.failed" {
+	switch terminal.Type {
+	case "response.completed", "response.incomplete":
 		return response, nil
+	case "response.failed":
+	default:
+		// The turn ended by asking the proxy for a web search that the caller
+		// never ran; there is no client-facing answer to return.
+		return nil, &ChatFailure{
+			Code:    "web_search_limit",
+			Type:    "upstream_error",
+			Message: "upstream kept requesting web searches without producing an answer",
+		}
 	}
 	failure := &ChatFailure{Response: response, Message: "upstream response could not be converted"}
 	if responseError := jsonx.Map(response["error"]); responseError != nil {

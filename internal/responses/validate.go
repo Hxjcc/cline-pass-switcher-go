@@ -53,6 +53,9 @@ func validateRequestCapabilities(body map[string]any) error {
 				return err
 			}
 		case "function_call", "custom_tool_call", "tool_search_call":
+		case "web_search_call":
+			// Hosted search items produced by this proxy; the client stores
+			// them in its history and replays them on the next turn.
 		case "function_call_output", "custom_tool_call_output":
 			if err := validateToolOutputMedia(item["output"], path+".output", 0); err != nil {
 				return err
