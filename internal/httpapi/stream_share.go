@@ -85,7 +85,10 @@ type sharedResponsesStream struct {
 
 	ready chan struct{}
 	last  chainResult
-	okSSE bool
+	// header is the snapshot of last taken before ready is closed. Handlers
+	// read it while later search legs keep updating last on the run goroutine.
+	header chainResult
+	okSSE  bool
 
 	targets   []string
 	effort    string
@@ -161,6 +164,16 @@ func (j *sharedResponsesStream) markReady() {
 	case <-j.ready:
 	default:
 		close(j.ready)
+	}
+}
+
+// beforeReady runs fn only while the response has not been published yet, so
+// fields handlers read after ready are never written once they can be seen.
+func (j *sharedResponsesStream) beforeReady(fn func()) {
+	select {
+	case <-j.ready:
+	default:
+		fn()
 	}
 }
 
@@ -255,12 +268,12 @@ func (s *Server) handleStreamingResponses(
 	}
 
 	if !job.okSSE {
-		status := job.last.Status
+		status := job.header.Status
 		if status < 400 {
 			status = http.StatusBadGateway
 		}
-		if job.last.Out != nil {
-			writeJSON(writer, status, job.last.Out)
+		if job.header.Out != nil {
+			writeJSON(writer, status, job.header.Out)
 			return
 		}
 		writeJSON(writer, status, map[string]any{"error": map[string]any{
@@ -272,7 +285,7 @@ func (s *Server) handleStreamingResponses(
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("Connection", "keep-alive")
-	setResponsesHeaders(writer, job.targets, job.last, job.effort)
+	setResponsesHeaders(writer, job.targets, job.header, job.effort)
 	writer.WriteHeader(http.StatusOK)
 
 	controller := http.NewResponseController(writer)
@@ -376,89 +389,148 @@ func (s *Server) runSharedResponses(
 	}
 	defer record()
 
-	for _, attempt := range attempts {
-		started := time.Now()
-		result := s.upstream.StartStreamAttempt(job.ctx, modelID, chatBody, attempt)
-		if isBufferedCompletion(result) {
-			events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
-			if err == nil {
-				s.publishBufferedResponses(job, modelID, result, attempt, started, events)
-				return
+	// One client turn may need several upstream legs: the model asks the proxy
+	// to search, the proxy runs the query, and the model continues with the
+	// results. `previous` carries the client-visible response state across
+	// those legs.
+	var previous *responsesbridge.StreamAdapter
+	for leg := 0; ; leg++ {
+		var finished *responsesbridge.StreamAdapter
+		for _, attempt := range attempts {
+			started := time.Now()
+			result := s.upstream.StartStreamAttempt(job.ctx, modelID, chatBody, attempt)
+			adapter := responsesbridge.NewStreamAdapter(bridgeContext)
+			if previous != nil {
+				adapter = previous.Next()
 			}
-			result.Status = http.StatusBadGateway
-			result.NetErr = err.Error()
-			result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}}
-		}
-		if !result.SSE {
-			message := result.NetErr
-			if message == "" {
-				message = extractAttemptError(result.Out)
+			if isBufferedCompletion(result) {
+				events, err := adapter.FeedCompletion(result.Out)
+				if err == nil {
+					s.publishBufferedResponses(job, modelID, result, attempt, started, events)
+					finished = adapter
+					break
+				}
+				result.Status = http.StatusBadGateway
+				result.NetErr = err.Error()
+				result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}}
 			}
+			if !result.SSE {
+				message := result.NetErr
+				if message == "" {
+					message = extractAttemptError(result.Out)
+				}
+				job.last.Trace = append(job.last.Trace, model.Trace{
+					Upstream: attempt.Upstream, Status: result.Status,
+					MS: time.Since(started).Milliseconds(), Note: strx.Truncate(message, 160),
+				})
+				job.last.Status, job.last.Out, job.last.NetErr, job.last.Account = result.Status, result.Out, result.NetErr, result.Account
+				s.upstream.LearnFailure(modelID, attempt, message)
+				if s.stopFailover(result.Status) {
+					break
+				}
+				continue
+			}
+
 			job.last.Trace = append(job.last.Trace, model.Trace{
-				Upstream: attempt.Upstream, Status: result.Status,
-				MS: time.Since(started).Milliseconds(), Note: strx.Truncate(message, 160),
+				Upstream: attempt.Upstream, Status: http.StatusOK,
+				MS: time.Since(started).Milliseconds(), Note: "responses stream",
 			})
-			job.last.Status, job.last.Out, job.last.NetErr, job.last.Account = result.Status, result.Out, result.NetErr, result.Account
-			s.upstream.LearnFailure(modelID, attempt, message)
-			if s.stopFailover(result.Status) {
-				break
+			job.last.Account = result.Account
+			job.last.Status = http.StatusOK
+			job.last.Out, job.last.NetErr = nil, ""
+			job.stats = newStreamStats(started)
+
+			rawTail := make([]byte, 0, 32<<10)
+			process := func(data []byte) error {
+				job.stats.Observe(data)
+				rawTail = appendRawTail(rawTail, data)
+				events := adapter.Feed(data)
+				return job.publishEvents(events)
 			}
-			continue
+			readErr := process(result.FirstChunk)
+			job.beforeReady(func() {
+				job.okSSE = true
+				job.header = job.last
+			})
+			job.markReady()
+			if readErr == nil && !adapter.Completed() {
+				readErr = consumeStream(
+					job.ctx,
+					result.Body,
+					0,
+					adapter.Completed,
+					process,
+					nil,
+				)
+			}
+			_ = result.Body.Close()
+			// Check cancellation before Finish marks the adapter terminal.
+			job.aborted = job.ctx.Err() != nil && !adapter.Completed()
+			finish := adapter.Finish(readErr)
+			if err := job.publishEvents(finish); err != nil && readErr == nil {
+				readErr = err
+			}
+			if job.outcome.Status == "completed" || job.outcome.Status == "incomplete" {
+				// A terminal sentinel may have been buffered without its trailing
+				// delimiter when cancellation arrived. Finish can still validate it.
+				job.aborted = false
+			}
+			job.provider, job.canonical = parseStreamRouting(string(rawTail))
+			job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
+			if readErr != nil && job.ctx.Err() == nil {
+				job.readError = readErr.Error()
+			}
+			finished = adapter
+			break
 		}
-
-		job.last.Trace = append(job.last.Trace, model.Trace{
-			Upstream: attempt.Upstream, Status: http.StatusOK,
-			MS: time.Since(started).Milliseconds(), Note: "responses stream",
-		})
-		job.last.Account = result.Account
-		job.last.Status = http.StatusOK
-		job.last.Out, job.last.NetErr = nil, ""
-		job.okSSE = true
-		job.stats = newStreamStats(started)
-
-		adapter := responsesbridge.NewStreamAdapter(bridgeContext)
-		rawTail := make([]byte, 0, 32<<10)
-		process := func(data []byte) error {
-			job.stats.Observe(data)
-			rawTail = appendRawTail(rawTail, data)
-			events := adapter.Feed(data)
-			return job.publishEvents(events)
+		if finished == nil {
+			// Every channel failed: the error is what clients will see, so it
+			// must be in the history before they are released.
+			record()
+			job.beforeReady(func() { job.header = job.last })
+			if previous != nil {
+				// The response already started and no further leg can finish
+				// it, so close the client stream with an explicit failure.
+				job.publishEvents(previous.Fail(
+					"web search continuation could not reach the upstream",
+					"upstream_error",
+				))
+			}
+			job.markReady()
+			return
 		}
-		readErr := process(result.FirstChunk)
-		job.markReady()
-		if readErr == nil && !adapter.Completed() {
-			readErr = consumeStream(
-				job.ctx,
-				result.Body,
-				0,
-				adapter.Completed,
-				process,
-				nil,
-			)
+		if job.outcome.Status != "" {
+			// The leg already published a terminal (completed, incomplete or
+			// failed); nothing may follow it on the wire.
+			return
 		}
-		_ = result.Body.Close()
-		// Check cancellation before Finish marks the adapter terminal.
-		job.aborted = job.ctx.Err() != nil && !adapter.Completed()
-		finish := adapter.Finish(readErr)
-		if err := job.publishEvents(finish); err != nil && readErr == nil {
-			readErr = err
+		searches := finished.PendingSearches()
+		if len(searches) == 0 {
+			return
 		}
-		if job.outcome.Status == "completed" || job.outcome.Status == "incomplete" {
-			// A terminal sentinel may have been buffered without its trailing
-			// delimiter when cancellation arrived. Finish can still validate it.
-			job.aborted = false
+		if job.ctx.Err() != nil {
+			// The client went away; do not run searches or another leg.
+			return
 		}
-		job.provider, job.canonical = parseStreamRouting(string(rawTail))
-		job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
-		if readErr != nil && job.ctx.Err() == nil {
-			job.readError = readErr.Error()
+		if leg+1 >= maxWebSearchLegs {
+			job.publishEvents(finished.Fail("web search loop limit reached", "web_search_limit"))
+			return
 		}
-		return
+		provider := s.searchProvider()
+		if provider == nil {
+			job.publishEvents(finished.Fail("proxy-side web search is not configured", "web_search_unavailable"))
+			return
+		}
+		outcomes, traces := s.executeSearches(job.ctx, provider, searches)
+		job.last.Trace = append(job.last.Trace, traces...)
+		messages := []any{finished.SearchAssistantMessage()}
+		for _, outcome := range outcomes {
+			job.publishEvents(finished.PushWebSearchCall(outcome.call))
+			messages = append(messages, outcome.message)
+		}
+		chatBody = responsesbridge.AppendMessages(chatBody, messages...)
+		previous = finished
 	}
-	// Every channel failed: the error is what clients will see, so it must be
-	// in the history before they are released.
-	record()
-	job.markReady()
 }
 
 // isBufferedCompletion reports an upstream that ignored stream:true and
@@ -489,12 +561,15 @@ func (s *Server) publishBufferedResponses(
 	job.last.Out = result.Out
 	job.last.Routing = s.upstream.RoutingFor(modelID, result.Out)
 	job.provider, job.canonical = job.last.Routing.FinalProvider, job.last.Routing.CanonicalSlug
-	job.okSSE = true
 	job.stats = newStreamStats(started)
 	if raw, err := json.Marshal(result.Out); err == nil {
 		job.stats.Observe(append(append([]byte("data: "), raw...), '\n', '\n'))
 	}
 	job.last.Out = nil
+	job.beforeReady(func() {
+		job.okSSE = true
+		job.header = job.last
+	})
 	job.markReady()
 	if err := job.publishEvents(events); err != nil {
 		job.readError = err.Error()

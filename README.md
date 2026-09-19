@@ -50,7 +50,30 @@ docker compose up -d --build
 | `WEB_SEARCH_UPSTREAM` | `exa` | 客户端声明 `web_search` 时改用网关的搜索工具，让模型能查最新信息 |
 | `WEB_FETCH_UPSTREAM` | `browserbase_fetch` | 用户消息里出现链接时声明抓取工具，读取该页面的内容 |
 
-两者都由上游网关（Cline → Vercel）执行，是否真的调用取决于模型：DeepSeek 会调用，GLM 目前不会。搜索不会返回结构化的 `url_citation`，来源以正文 URL 的形式给出。从源码运行时这两项默认关闭，需要在 `config.json` 里填 `webSearchUpstream` / `webFetchUpstream`，或设置同名环境变量。
+两者都由上游网关（Cline → Vercel）执行，是否真的调用取决于模型：DeepSeek 会调用，GLM 目前不会。网关搜索只把结果交给模型，客户端看不到搜索了什么；搜索来源以正文 URL 的形式给出。
+
+### 代理自己执行搜索（官方风格「已搜索网页」卡片）
+
+想让 ChatGPT Desktop 像官方那样显示「已搜索网页：<查询词>」卡片，就让代理自己执行搜索：
+
+1. 在部署目录的 `.env` 里写 `EXA_API_KEY=<你的 Exa API Key>`（compose 已经把该变量传给容器，留空即不启用）；
+2. `git pull` 后执行 `docker compose up -d --build`，让新代码和密钥一起生效。
+
+`EXA_API_KEY` 非空时代理会接管 `web_search`，并优先于 `WEB_SEARCH_UPSTREAM`：
+
+- 模型先调用代理声明的 `web_search` 工具 → 代理调用 Exa 搜索 → 把页面正文回传给模型继续作答；
+- 客户端会收到官方格式的 `web_search_call` 输出项（`action.type=search` + 真实查询词），渲染成「已搜索网页」卡片；
+- 搜索按次计费，走你自己的 Exa 账单，不再走 Cline 套餐里的搜索工具；
+- 搜索失败不会中断回答：代理把失败原因回传给模型，让它如实说明没搜到。
+
+客户端侧还要让它愿意下发 `web_search`：编辑 `model_catalog_json` 指向的模型目录，给用到的模型条目加上
+
+```json
+"supports_search_tool": true,
+"web_search_tool_type": "text"
+```
+
+从源码运行时这些能力默认关闭：在 `config.json` 里填 `webSearchUpstream` / `webFetchUpstream` / `webSearchDirectApiKey`（可配 `webSearchDirectBaseUrl`），或设置同名环境变量。
 
 公网 / 反向代理部署时，把 compose 里注释掉的 `PUBLIC_BASE_URL` 和 `PROXY_KEY` 打开并改成实际值——否则控制台的浏览器请求会因为来源校验返回 403（详见「从旧版本升级」）。
 
@@ -122,6 +145,8 @@ env_key = "CLINE_PROXY_KEY"
 | `DATA_DIR` | 配置和元数据目录，容器内为 `/data` |
 | `STRICT_TOOL_HISTORY` | 设为 `true` 时，工具历史不完整（客户端回放了没有对应调用的工具结果）直接报错；默认 `false`，这类结果会作为用户内容继续转发 |
 | `WEB_SEARCH_UPSTREAM` | 把 `web_search` 声明映射成上游网关执行的搜索工具：`exa`（推荐）/ `tako` / `perplexity` / `browserbase_fetch`；留空或 `off` 表示不映射（默认） |
+| `EXA_API_KEY` | 填上后代理自己执行搜索（官方风格「已搜索网页」卡片），优先于 `WEB_SEARCH_UPSTREAM`；等价写法 `WEB_SEARCH_DIRECT_API_KEY`，留空表示关闭 |
+| `EXA_BASE_URL` | 覆盖搜索 API 地址，默认 `https://api.exa.ai`；自建网关或测试时使用（等价 `WEB_SEARCH_DIRECT_BASE_URL`） |
 | `WEB_FETCH_UPSTREAM` | 用户消息里出现 http(s) 链接时，声明上游网关的抓取工具读取该页面：`browserbase_fetch`；留空或 `off` 表示关闭（默认） |
 
 Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3123` 会覆盖 `config.json` 中的端口，与端口映射保持一致。

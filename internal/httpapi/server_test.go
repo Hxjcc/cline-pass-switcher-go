@@ -30,7 +30,10 @@ func localRequest(method, target string, body io.Reader) *http.Request {
 
 func newTestServer(t *testing.T) (*store.Store, *Server) {
 	t.Helper()
-	for _, name := range []string{"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT"} {
+	for _, name := range []string{
+		"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT",
+		"EXA_API_KEY", "EXA_BASE_URL", "WEB_SEARCH_DIRECT_API_KEY", "WEB_SEARCH_DIRECT_BASE_URL",
+	} {
 		t.Setenv(name, "")
 	}
 	st, err := store.Open(t.TempDir())

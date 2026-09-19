@@ -147,3 +147,26 @@ func TestWebFetchUpstreamEnvironmentOverride(t *testing.T) {
 		t.Fatalf("WEB_FETCH_UPSTREAM was ignored: %q", config.WebFetchUpstream)
 	}
 }
+
+func TestWebSearchDirectEnvironmentOverride(t *testing.T) {
+	for _, name := range []string{
+		"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT", "STRICT_TOOL_HISTORY",
+		"WEB_SEARCH_UPSTREAM", "WEB_FETCH_UPSTREAM",
+		"EXA_API_KEY", "EXA_BASE_URL", "WEB_SEARCH_DIRECT_API_KEY", "WEB_SEARCH_DIRECT_BASE_URL",
+	} {
+		t.Setenv(name, "")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	t.Setenv("EXA_API_KEY", "  secret-key  ")
+	t.Setenv("EXA_BASE_URL", "https://search.example/")
+	config, err := LoadConfig(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.WebSearchDirectAPIKey != "secret-key" {
+		t.Fatalf("EXA_API_KEY was ignored: %q", config.WebSearchDirectAPIKey)
+	}
+	if config.WebSearchDirectBaseURL != "https://search.example" {
+		t.Fatalf("EXA_BASE_URL was ignored: %q", config.WebSearchDirectBaseURL)
+	}
+}
