@@ -56,8 +56,12 @@ type Context struct {
 	// vercel:exa_search and vercel:browserbase_fetch) that stand in for the
 	// client's hosted web_search and for reading a link the user pasted.
 	// Empty keeps the capability off.
-	webSearchTool   string
-	webFetchTool    string
+	webSearchTool string
+	webFetchTool  string
+	// shellCompat restricts forwarded tool schemas that declare a "shell"
+	// parameter to this value and marks the parameter required. Empty keeps
+	// the client's own schema untouched.
+	shellCompat     string
 	providerTools   map[string]struct{}
 	bindings        map[string]toolBinding
 	originalToChat  map[string]string
@@ -275,7 +279,57 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	if parameters == nil {
 		parameters = tool["input_schema"]
 	}
+	parameters = context.lockToolShell(parameters)
 	context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, tool["strict"]))
+}
+
+// lockToolShell restricts a forwarded tool schema's "shell" property to the
+// configured shell and marks it required, so models include the parameter
+// instead of leaving the client to pick a platform default (cmd.exe on
+// Windows). It is schema-driven and copies the maps it touches: tools without
+// a shell property and the caller's original request body stay untouched.
+func (context *Context) lockToolShell(parameters any) any {
+	if context.shellCompat == "" {
+		return parameters
+	}
+	schema := jsonx.Map(parameters)
+	if schema == nil {
+		return parameters
+	}
+	properties := jsonx.Map(schema["properties"])
+	shell := jsonx.Map(properties["shell"])
+	if shell == nil {
+		return parameters
+	}
+	nextSchema := make(map[string]any, len(schema)+1)
+	for key, value := range schema {
+		nextSchema[key] = value
+	}
+	nextProperties := make(map[string]any, len(properties))
+	for key, value := range properties {
+		nextProperties[key] = value
+	}
+	nextShell := make(map[string]any, len(shell)+1)
+	for key, value := range shell {
+		nextShell[key] = value
+	}
+	nextShell["enum"] = []any{context.shellCompat}
+	nextProperties["shell"] = nextShell
+	nextSchema["properties"] = nextProperties
+
+	required := make([]any, 0, len(jsonx.Slice(nextSchema["required"]))+1)
+	found := false
+	for _, raw := range jsonx.Slice(nextSchema["required"]) {
+		if jsonx.String(raw) == "shell" {
+			found = true
+		}
+		required = append(required, raw)
+	}
+	if !found {
+		required = append(required, "shell")
+	}
+	nextSchema["required"] = required
+	return nextSchema
 }
 
 // isWebSearchToolType reports whether the client declared OpenAI's hosted web
@@ -328,6 +382,18 @@ func normaliseWebFetchTool(value string) string {
 			return trimmed
 		}
 		return ""
+	}
+}
+
+// normaliseShellCompat turns the configured shell-compat value into the shell
+// forced into forwarded tool schemas, or "" when the feature is off.
+func normaliseShellCompat(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case "", "off", "none", "false", "disabled":
+		return ""
+	default:
+		return trimmed
 	}
 }
 
@@ -885,6 +951,11 @@ type Options struct {
 	// (vercel:browserbase_fetch). It is only declared when the request carries a
 	// link in user-authored text.
 	WebFetchUpstream string
+	// ShellCompat restricts forwarded tool schemas that declare a "shell"
+	// parameter to this value (for example "powershell") and marks it
+	// required, so Windows clients stop falling back to cmd.exe when a model
+	// omits the parameter. Empty or "off" leaves schemas untouched.
+	ShellCompat string
 }
 
 // ShouldReplayReasoning reports whether reasoning_content can be replayed in
@@ -1258,6 +1329,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		RawReasoning:       options.RawReasoning,
 		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
+		shellCompat:        normaliseShellCompat(options.ShellCompat),
 		providerTools:      map[string]struct{}{},
 		bindings:           map[string]toolBinding{},
 		originalToChat:     map[string]string{},

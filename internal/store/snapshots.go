@@ -67,6 +67,14 @@ func (s *Store) WebFetchUpstream() string {
 	return s.config.WebFetchUpstream
 }
 
+// ShellCompat returns the shell forced into forwarded tool schemas. Empty
+// leaves the client's schemas untouched.
+func (s *Store) ShellCompat() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.ShellCompat
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

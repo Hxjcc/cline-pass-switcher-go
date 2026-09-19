@@ -73,6 +73,18 @@ func ApplyEnvironment(cfg *Config) {
 	if upstream := strings.TrimSpace(os.Getenv("WEB_FETCH_UPSTREAM")); upstream != "" {
 		cfg.WebFetchUpstream = upstream
 	}
+	if shell := firstNonEmptyEnv("SHELL_COMPAT", "EXEC_SHELL_COMPAT"); shell != "" {
+		cfg.ShellCompat = shell
+	}
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func NormalizeConfig(cfg *Config) {
@@ -85,6 +97,7 @@ func NormalizeConfig(cfg *Config) {
 	cfg.UpstreamBase = strings.TrimRight(strings.TrimSpace(cfg.UpstreamBase), "/")
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
+	cfg.ShellCompat = strings.TrimSpace(cfg.ShellCompat)
 
 	if len(cfg.Accounts) == 0 && strings.TrimSpace(cfg.APIKey) != "" {
 		cfg.Accounts = []Account{{Name: "默认账号", Key: strings.TrimSpace(cfg.APIKey), Enabled: true}}
