@@ -11,11 +11,6 @@ services:
       # 上游网关的联网能力，按次计费；不需要时删掉对应行或改成 off
       - WEB_SEARCH_UPSTREAM=exa
       - WEB_FETCH_UPSTREAM=browserbase_fetch
-      # 代理自己执行搜索（官方风格“已搜索网页”卡片）：在 .env 里填 Exa 密钥
-      # 即可启用；留空时继续用上面的网关搜索工具。
-      - EXA_API_KEY=${EXA_API_KEY:-}
-      # 自建搜索网关时才需要覆盖：
-      # - EXA_BASE_URL=https://api.exa.ai
       # 公网 / 反向代理部署时打开，并换成实际域名与自设密钥
       # - PUBLIC_BASE_URL=https://cline.example.com
       # - PROXY_KEY=change-me
