@@ -46,6 +46,54 @@ export function formatCost(value?: number): string {
   return `$${value.toFixed(6)}`
 }
 
+// Cline's quota API returns money as integer 1e-8 USD units. The scale was
+// verified by matching a generation's gateway cost ($0.000006) with the usage
+// ledger entry for the same id (costUsd=600).
+export function formatQuotaUSD(units?: number): string {
+  if (units === undefined || units === null) return "—"
+  const usd = units / 1e8
+  if (usd >= 1) return `$${usd.toFixed(2)}`
+  if (usd >= 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(6)}`
+}
+
+// Compact "recently used" stamp: time only for today, date + time otherwise.
+export function formatCompactTime(timestamp?: number): string {
+  if (!timestamp) return "—"
+  const date = new Date(timestamp)
+  const sameDay = date.toDateString() === new Date().toDateString()
+  return date.toLocaleString("zh-CN", sameDay
+    ? { hour: "2-digit", minute: "2-digit", second: "2-digit" }
+    : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+}
+
+export function formatClock(timestamp?: number): string {
+  if (!timestamp) return "—"
+  return new Date(timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+}
+
+// Quota reset stamps arrive as ISO strings; show the clock for today and the
+// date for anything further out.
+export function formatResetTime(value?: string): string {
+  if (!value) return "—"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "—"
+  const sameDay = date.toDateString() === new Date().toDateString()
+  return date.toLocaleString("zh-CN", sameDay
+    ? { hour: "2-digit", minute: "2-digit" }
+    : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+}
+
+export function formatPlanExpiry(value?: string): string {
+  if (!value) return "—"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "—"
+  return date.toLocaleString("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  })
+}
+
 // The Cline gateway forwards each model through one of two aggregators; we
 // tell them apart by the shape of the routing metadata in the response.
 export function pipelineLabel(pipeline?: string): string {

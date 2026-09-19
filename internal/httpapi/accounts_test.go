@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
@@ -221,5 +223,44 @@ func TestSaveIgnoresDuplicatedIdentity(t *testing.T) {
 	stored := st.Config().Accounts
 	if len(stored) != 1 || stored[0].Key != "key-one" {
 		t.Fatalf("duplicated identity duplicated the key: %#v", stored)
+	}
+}
+
+// The console can test a saved credential by identity, so a revealed key that
+// went stale in the browser is never used for the check.
+func TestAccountTestAcceptsStoredIdentity(t *testing.T) {
+	var seen atomic.Value
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		seen.Store(request.Header.Get("Authorization"))
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+	}))
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.Accounts = []model.Account{{Name: "main", Key: "stored-key", Enabled: true}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	account := st.Config().Accounts[0]
+
+	body, err := json.Marshal(map[string]string{"id": account.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := accountsRequest(t, server, http.MethodPost, "/api/accounts/test", string(body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("test by identity failed: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || !payload.OK {
+		t.Fatalf("stored credential was not accepted: %s", response.Body.String())
+	}
+	if value, _ := seen.Load().(string); value != "Bearer stored-key" {
+		t.Fatalf("stored key was not used: %q", value)
 	}
 }

@@ -77,7 +77,8 @@ export interface OfficialFetch {
   ts: number
   sources: string[]
   found: number
-  added: string[]
+  /** Always an array from this backend; null is tolerated for older ones. */
+  added?: string[] | null
   total: number
 }
 
@@ -93,6 +94,36 @@ export interface AccountStats {
   requests: number
   lastUsed: number
   lastError: string | null
+}
+
+export interface QuotaLimit {
+  type: "five_hour" | "weekly" | "monthly" | string
+  percentUsed: number
+  resetsAt?: string
+}
+
+/** Raw inference cap thresholds. Values are 1e-8 USD units (1e8 = $1). */
+export interface QuotaCaps {
+  fiveHour: number
+  weekly: number
+  monthly: number
+}
+
+export interface AccountQuota {
+  account?: string
+  accountId?: string
+  ok: boolean
+  error?: string
+  plan?: string
+  active?: boolean
+  currentPeriodEnd?: string
+  caps?: QuotaCaps
+  limits?: QuotaLimit[]
+  fetchedAt: number
+}
+
+export interface QuotaResponse {
+  accounts: AccountQuota[]
 }
 
 export interface AccountsResponse {
@@ -199,7 +230,7 @@ export interface OfficialResponse {
   ok: boolean
   sources: string[]
   found: number
-  added: string[]
+  added?: string[] | null
   knownModels: string[]
   ts: number
   total: number

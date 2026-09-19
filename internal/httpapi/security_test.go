@@ -125,3 +125,142 @@ func TestOversizeJSONReturns413(t *testing.T) {
 		}
 	}
 }
+
+// The Host header is client-controlled, so the unauthenticated guard has to
+// classify the connection source instead of trusting it.
+func TestNoKeyAccessRequiresALocalConnection(t *testing.T) {
+	const key = "fake-test-secret"
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(c *model.Config) {
+		c.Accounts = []model.Account{{Name: "main", Key: key, Enabled: true}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		remote  string
+		host    string
+		allowed bool
+	}{
+		{name: "loopback peer", remote: "127.0.0.1:5555", host: "localhost", allowed: true},
+		{name: "loopback ipv6 peer", remote: "[::1]:5555", host: "localhost", allowed: true},
+		{name: "external peer with spoofed host", remote: "203.0.113.9:5555", host: "localhost"},
+		{name: "local peer with attacker host", remote: "127.0.0.1:5555", host: "attacker.example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://"+tc.host+"/api/accounts?reveal=1", nil)
+			request.RemoteAddr = tc.remote
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if tc.allowed {
+				if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), key) {
+					t.Fatalf("local request rejected: %d %s", response.Code, response.Body.String())
+				}
+				return
+			}
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("non-local request accepted: %d %s", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), key) {
+				t.Fatalf("refused response leaked the key: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestTrustedProxyAndLocalPortForwardPolicy(t *testing.T) {
+	const key = "fake-test-secret"
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(c *model.Config) {
+		c.Accounts = []model.Account{{Name: "main", Key: key, Enabled: true}}
+		c.TrustedProxies = []string{"172.18.0.0/16"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(remote, forwarded string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "http://localhost/api/accounts?reveal=1", nil)
+		request.RemoteAddr = remote
+		if forwarded != "" {
+			request.Header.Set("X-Forwarded-For", forwarded)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	if response := send("172.18.0.5:4444", "127.0.0.1"); response.Code != http.StatusOK {
+		t.Fatalf("trusted proxy reporting a loopback client rejected: %d %s", response.Code, response.Body.String())
+	}
+	if response := send("172.18.0.5:4444", "203.0.113.9"); response.Code != http.StatusForbidden {
+		t.Fatalf("trusted proxy reporting a remote client accepted: %d", response.Code)
+	}
+	if response := send("203.0.113.9:4444", "127.0.0.1"); response.Code != http.StatusForbidden {
+		t.Fatalf("untrusted peer vouched for itself: %d", response.Code)
+	}
+
+	// A container cannot observe the host-side binding, so publishing on the
+	// host loopback has to be declared explicitly.
+	if err := st.UpdateConfig(func(c *model.Config) { c.TrustLocalPortForward = true }); err != nil {
+		t.Fatal(err)
+	}
+	if response := send("172.17.0.1:4444", ""); response.Code != http.StatusOK {
+		t.Fatalf("declared local port forward rejected: %d %s", response.Code, response.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://attacker.example/api/accounts?reveal=1", nil)
+	request.RemoteAddr = "172.17.0.1:4444"
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("port-forward trust must still require a loopback host: %d", response.Code)
+	}
+}
+
+// Forwarding headers are only as trustworthy as the hop that produced them:
+// the client-controlled prefix of X-Forwarded-For must never decide locality.
+func TestForwardedClientAddressComesFromTheTrustedHop(t *testing.T) {
+	const key = "fake-test-secret"
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(c *model.Config) {
+		c.Accounts = []model.Account{{Name: "main", Key: key, Enabled: true}}
+		c.TrustedProxies = []string{"172.18.0.0/16"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(remote, forwarded string) int {
+		request := httptest.NewRequest(http.MethodGet, "http://localhost/api/accounts?reveal=1", nil)
+		request.RemoteAddr = remote
+		if forwarded != "" {
+			request.Header.Set("X-Forwarded-For", forwarded)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code == http.StatusOK && !strings.Contains(response.Body.String(), key) {
+			t.Fatalf("accepted response did not carry the console payload: %s", response.Body.String())
+		}
+		return response.Code
+	}
+	for _, tc := range []struct {
+		name      string
+		remote    string
+		forwarded string
+		allowed   bool
+	}{
+		{name: "trusted proxy, spoofed loopback prefix", remote: "172.18.0.5:4444", forwarded: "127.0.0.1, 203.0.113.9"},
+		{name: "trusted proxy, remote client", remote: "172.18.0.5:4444", forwarded: "203.0.113.9"},
+		{name: "trusted proxy behind another trusted hop", remote: "172.18.0.5:4444", forwarded: "203.0.113.9, 172.18.0.6"},
+		{name: "local reverse proxy with remote client", remote: "127.0.0.1:4444", forwarded: "203.0.113.9"},
+		{name: "untrusted peer vouching for itself", remote: "203.0.113.9:4444", forwarded: "127.0.0.1"},
+		{name: "chain of trusted proxies only", remote: "127.0.0.1:4444", forwarded: "172.18.0.5"},
+		{name: "trusted proxy with loopback client", remote: "172.18.0.5:4444", forwarded: "127.0.0.1", allowed: true},
+		{name: "local reverse proxy with local client", remote: "127.0.0.1:4444", forwarded: "127.0.0.1", allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code := send(tc.remote, tc.forwarded)
+			if tc.allowed && code != http.StatusOK {
+				t.Fatalf("local client rejected: %d", code)
+			}
+			if !tc.allowed && code != http.StatusForbidden {
+				t.Fatalf("forwarded chain was spoofed: %d", code)
+			}
+		})
+	}
+}

@@ -20,6 +20,8 @@ type streamStats struct {
 	firstTokenAt time.Time
 	usage        *model.UsageStats
 	finishReason string
+	done         bool
+	streamError  string
 }
 
 func newStreamStats(started time.Time) *streamStats {
@@ -38,6 +40,18 @@ func (stats *streamStats) Observe(data []byte) {
 		stats.consumeBlock(block)
 		return true
 	})
+}
+
+// ObserveBlock consumes a trailing partial block that never got its
+// blank-line delimiter. A truncated upstream can still have delivered the
+// final finish_reason payload, and the stats must see it.
+func (stats *streamStats) ObserveBlock(block string) {
+	if stats == nil || strings.TrimSpace(block) == "" {
+		return
+	}
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+	stats.consumeBlock(block)
 }
 
 func (stats *streamStats) TTFTMs() int64 {
@@ -74,21 +88,53 @@ func (stats *streamStats) FinishReason() string {
 	return stats.finishReason
 }
 
-func (stats *streamStats) consumeBlock(block string) {
-	payloads := sseDataPayloads(block)
-	for _, payload := range payloads {
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var chunk map[string]any
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue
-		}
-		stats.consumeChunk(chunk)
+// Terminal reports whether the upstream protocol reached a terminal state: a
+// [DONE] sentinel or a chunk carrying finish_reason. Without one the stream
+// was cut short even though the HTTP body ended cleanly.
+func (stats *streamStats) Terminal() bool {
+	if stats == nil {
+		return false
 	}
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+	return stats.done || stats.finishReason != ""
+}
+
+// StreamError returns the message of the first in-stream error event, if any.
+func (stats *streamStats) StreamError() string {
+	if stats == nil {
+		return ""
+	}
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+	return stats.streamError
+}
+
+func (stats *streamStats) consumeBlock(block string) {
+	payload := sseDataPayload(block)
+	if payload == "" {
+		return
+	}
+	if payload == "[DONE]" {
+		stats.done = true
+		return
+	}
+	var chunk map[string]any
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		// Refusing to guess is safer than reporting success: an event that is
+		// there but unreadable may well be the error the stream ended with.
+		if stats.streamError == "" {
+			stats.streamError = "上游流包含无法解析的 SSE 事件"
+		}
+		return
+	}
+	stats.consumeChunk(chunk)
 }
 
 func (stats *streamStats) consumeChunk(chunk map[string]any) {
+	if stats.streamError == "" {
+		stats.streamError = chatStreamErrorText(chunk)
+	}
 	if usage := usageFromValue(chunk["usage"]); usage != nil {
 		stats.usage = usage
 	}
@@ -105,15 +151,44 @@ func (stats *streamStats) consumeChunk(chunk map[string]any) {
 	}
 }
 
-func sseDataPayloads(block string) []string {
-	payloads := make([]string, 0, 1)
+// chatStreamErrorText extracts an error carried inside a Chat Completions SSE
+// event. Upstreams report overloads and mid-stream failures this way, and the
+// HTTP response itself still ends with 200.
+func chatStreamErrorText(chunk map[string]any) string {
+	if chunk == nil || len(jsonx.Slice(chunk["choices"])) > 0 {
+		return ""
+	}
+	if _, found := chunk["error"]; found {
+		if message := strings.TrimSpace(extractAttemptError(chunk)); message != "" {
+			return message
+		}
+		return "upstream error"
+	}
+	if strings.EqualFold(strings.TrimSpace(jsonx.String(chunk["type"])), "error") {
+		if message := strings.TrimSpace(jsonx.String(chunk["message"])); message != "" {
+			return message
+		}
+		if code := strings.TrimSpace(jsonx.String(chunk["code"])); code != "" {
+			return code
+		}
+		return "upstream error"
+	}
+	return ""
+}
+
+// sseDataPayload joins every data: line of one event. The SSE spec defines the
+// event payload as the data lines joined with newlines, so decoding each line
+// on its own both mis-parses valid multi-line JSON and silently drops the
+// error events that report a mid-stream failure.
+func sseDataPayload(block string) string {
+	lines := make([]string, 0, 1)
 	for _, line := range strings.Split(block, "\n") {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		payloads = append(payloads, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		lines = append(lines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 	}
-	return payloads
+	return strings.Join(lines, "\n")
 }
 
 func applyChatStats(entry *model.HistoryEntry, chatOut map[string]any, ttftMs int64) {

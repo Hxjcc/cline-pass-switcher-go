@@ -45,6 +45,9 @@ type AttemptResult struct {
 	Routing Routing
 	NetErr  string
 	Account model.Account
+	// Fatal marks a failure no other channel or account can fix: a missing
+	// account or a routing configuration that excludes every channel.
+	Fatal bool
 }
 
 func getMap(value map[string]any, key string) map[string]any {
@@ -500,6 +503,25 @@ func formatInt(value any) int {
 		return int(typed)
 	case string:
 		result, _ := strconv.Atoi(typed)
+		return result
+	default:
+		return 0
+	}
+}
+
+func formatInt64(value any) int64 {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case json.Number:
+		result, _ := typed.Int64()
+		return result
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case string:
+		result, _ := strconv.ParseInt(typed, 10, 64)
 		return result
 	default:
 		return 0

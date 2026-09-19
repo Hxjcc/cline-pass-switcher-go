@@ -101,6 +101,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleSaveAccounts(writer, request)
 	case request.Method == http.MethodPost && path == "/api/accounts/test":
 		s.handleTestAccount(writer, request)
+	case request.Method == http.MethodGet && path == "/api/accounts/quota":
+		s.handleAccountQuota(writer, request)
 	case request.Method == http.MethodGet && path == "/api/security":
 		s.handleGetSecurity(writer)
 	case request.Method == http.MethodPost && path == "/api/security":
@@ -243,17 +245,35 @@ func (s *Server) handleSaveAccounts(writer http.ResponseWriter, request *http.Re
 func (s *Server) handleTestAccount(writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Key string `json:"key"`
+		// ID tests the stored credential without revealing it, so the console
+		// cannot test a stale cached copy after the key changed.
+		ID string `json:"id"`
 	}
 	if err := readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
 	body.Key = strings.TrimSpace(body.Key)
-	if body.Key == "" {
-		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "key required"}})
+	body.ID = strings.TrimSpace(body.ID)
+	if body.Key == "" && body.ID == "" {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "key or account id required"}})
 		return
 	}
-	writeJSON(writer, http.StatusOK, s.upstream.TestAccount(request.Context(), body.Key))
+	writeJSON(writer, http.StatusOK, s.upstream.TestAccount(request.Context(), body.Key, body.ID))
+}
+
+// handleAccountQuota reports the plan utilization of the configured accounts.
+// The upstream endpoints are read-only and never consume inference quota, and
+// the result only feeds the console: retries and routing ignore it.
+func (s *Server) handleAccountQuota(writer http.ResponseWriter, request *http.Request) {
+	refresh := request.URL.Query().Get("refresh") == "1"
+	ids := make([]string, 0, 1)
+	if id := strings.TrimSpace(request.URL.Query().Get("id")); id != "" {
+		ids = append(ids, id)
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"accounts": s.upstream.ProbeQuotas(request.Context(), ids, refresh),
+	})
 }
 
 func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
@@ -498,6 +518,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 		Kind:      "test",
 		Effort:    effortFromChatBody(chatBody),
 		Account:   result.Account.Name,
+		AccountID: result.Account.ID,
 		Attempts:  traceUpstreams(result.Trace),
 		Trace:     result.Trace,
 	}
@@ -515,37 +536,58 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map[string]any, modelConfig model.PerModelConfig, timeout time.Duration) chainResult {
 	attempts := s.upstream.BuildAttempts(modelID, modelConfig)
 	result := chainResult{Status: http.StatusBadGateway, Started: time.Now()}
+	budget := newAttemptBudget(len(attempts), s.upstream.AccountAttemptLimit())
 	for _, attempt := range attempts {
-		started := time.Now()
-		attemptContext, cancel := context.WithTimeout(ctx, timeout)
-		response := s.upstream.AttemptNonStream(attemptContext, modelID, body, attempt)
-		cancel()
-		note := response.NetErr
-		if note == "" && response.Status != http.StatusOK {
-			note = extractAttemptError(response.Out)
-		}
-		if note == "" && response.Status == http.StatusOK {
-			note = "ok"
-		}
-		result.Trace = append(result.Trace, model.Trace{
-			Upstream: attempt.Upstream,
-			Status:   response.Status,
-			MS:       time.Since(started).Milliseconds(),
-			Note:     strx.Truncate(note, 160),
-		})
-		result.Status = response.Status
-		result.Out = response.Out
-		result.Routing = response.Routing
-		result.Account = response.Account
-		result.NetErr = response.NetErr
-		if response.Status != http.StatusOK {
-			s.upstream.LearnFailure(modelID, attempt, extractAttemptError(response.Out))
-			if s.stopFailover(response.Status) {
+		succeeded := false
+		fatal := false
+		// Account failures are retried against the same channel: an HTTP 401
+		// is a property of the key, not of the pinned provider, and with a
+		// single channel the old loop had no way to reach a healthy account.
+		for accountsUsed := 1; ; accountsUsed++ {
+			if !budget.acquire() {
+				return result
+			}
+			started := time.Now()
+			attemptContext, cancel := context.WithTimeout(ctx, timeout)
+			response := s.upstream.AttemptNonStream(attemptContext, modelID, body, attempt)
+			cancel()
+			note := response.NetErr
+			if note == "" && response.Status != http.StatusOK {
+				note = extractAttemptError(response.Out)
+			}
+			if note == "" && response.Status == http.StatusOK {
+				note = "ok"
+			}
+			result.Trace = append(result.Trace, model.Trace{
+				Upstream: attempt.Upstream,
+				Status:   response.Status,
+				MS:       time.Since(started).Milliseconds(),
+				Note:     strx.Truncate(note, 160),
+			})
+			result.Status = response.Status
+			result.Out = response.Out
+			result.Routing = response.Routing
+			result.Account = response.Account
+			result.NetErr = response.NetErr
+			if response.Status == http.StatusOK {
+				succeeded = true
 				break
 			}
-			continue
+			s.upstream.LearnFailure(modelID, attempt, extractAttemptError(response.Out))
+			if response.Fatal {
+				fatal = true
+				break
+			}
+			if ctx.Err() != nil || !s.accountRetryAllowed(response.Status, accountsUsed, budget) {
+				break
+			}
 		}
-		break
+		if succeeded {
+			break
+		}
+		if fatal || ctx.Err() != nil || s.stopFailover(result.Status) {
+			break
+		}
 	}
 	return result
 }
@@ -558,6 +600,53 @@ func (s *Server) stopFailover(status int) bool {
 		return false
 	}
 	return !s.upstream.AccountFailoverAvailable()
+}
+
+// maxChainAttempts bounds the total number of upstream calls one client
+// request may make. Channel failover multiplies with per-channel account
+// failover, so without a ceiling a large pool could amplify one request.
+const maxChainAttempts = 16
+
+// attemptBudget holds the remaining upstream calls for one client request.
+type attemptBudget struct {
+	remaining int
+}
+
+func newAttemptBudget(channels, accountAttempts int) *attemptBudget {
+	if channels < 1 {
+		channels = 1
+	}
+	if accountAttempts < 1 {
+		accountAttempts = 1
+	}
+	limit := channels * accountAttempts
+	if limit > maxChainAttempts {
+		limit = maxChainAttempts
+	}
+	return &attemptBudget{remaining: limit}
+}
+
+func (b *attemptBudget) acquire() bool {
+	if b == nil || b.remaining <= 0 {
+		return false
+	}
+	b.remaining--
+	return true
+}
+
+// accountRetryAllowed reports whether the failed status should be retried on
+// the same channel with another account. The failed account is already cooling
+// down, so pickAccount returns a different one while a healthy account is left.
+func (s *Server) accountRetryAllowed(status, accountsUsed int, budget *attemptBudget) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+	default:
+		return false
+	}
+	if accountsUsed >= s.upstream.AccountAttemptLimit() || budget == nil || budget.remaining <= 0 {
+		return false
+	}
+	return s.upstream.AccountFailoverAvailable()
 }
 
 func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
@@ -598,6 +687,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		Effort:    effortFromChatBody(body),
 		Error:     errorMessage,
 		Account:   result.Account.Name,
+		AccountID: result.Account.ID,
 		Attempts:  traceUpstreams(result.Trace),
 		Trace:     result.Trace,
 	}

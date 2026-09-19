@@ -62,6 +62,14 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.Port = port
 		}
 	}
+	if proxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); proxies != "" {
+		cfg.TrustedProxies = strings.Split(proxies, ",")
+	}
+	if rawTrust := strings.TrimSpace(os.Getenv("TRUST_LOCAL_PORT_FORWARD")); rawTrust != "" {
+		if trust, err := strconv.ParseBool(rawTrust); err == nil {
+			cfg.TrustLocalPortForward = trust
+		}
+	}
 	if rawStrict := strings.TrimSpace(os.Getenv("STRICT_TOOL_HISTORY")); rawStrict != "" {
 		if strict, err := strconv.ParseBool(rawStrict); err == nil {
 			cfg.StrictToolHistory = strict
@@ -99,11 +107,16 @@ func NormalizeConfig(cfg *Config) {
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
 	cfg.ShellCompat = strings.TrimSpace(cfg.ShellCompat)
 
+	// The top-level apiKey is a legacy field. It is folded into the account
+	// pool exactly once and then dropped, so it can never come back as a
+	// runtime fallback that ignores a disabled or removed account.
 	if len(cfg.Accounts) == 0 && strings.TrimSpace(cfg.APIKey) != "" {
 		cfg.Accounts = []Account{{Name: "默认账号", Key: strings.TrimSpace(cfg.APIKey), Enabled: true}}
 		cfg.AccountMode = "single"
 		cfg.ActiveAccount = 0
 	}
+	cfg.APIKey = ""
+	cfg.TrustedProxies = strx.UniqueTrimmed(cfg.TrustedProxies)
 	if cfg.AccountMode != "roundrobin" {
 		cfg.AccountMode = "single"
 	}
@@ -207,6 +220,9 @@ func NormalizeMetadata(meta *Metadata) {
 	}
 	if len(meta.History) > 100 {
 		meta.History = meta.History[:100]
+	}
+	if meta.OfficialModelsFetch != nil && meta.OfficialModelsFetch.Added == nil {
+		meta.OfficialModelsFetch.Added = []string{}
 	}
 	for id, modelMeta := range meta.Models {
 		if modelMeta.UpstreamDetail == nil {

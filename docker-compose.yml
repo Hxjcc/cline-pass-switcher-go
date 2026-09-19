@@ -8,6 +8,10 @@ services:
     environment:
       - DATA_DIR=/data
       - BIND_HOST=0.0.0.0
+      # 端口只映射到宿主机回环（见下面的 ports），但容器内看到的来源地址
+      # 是网桥网关而不是回环地址，所以这里显式声明这层边界。若把 ports 改
+      # 成对外暴露，请删除本行并设置 PROXY_KEY。
+      - TRUST_LOCAL_PORT_FORWARD=1
       # 上游网关的联网能力，按次计费；不需要时删掉对应行或改成 off
       - WEB_SEARCH_UPSTREAM=exa
       - WEB_FETCH_UPSTREAM=browserbase_fetch

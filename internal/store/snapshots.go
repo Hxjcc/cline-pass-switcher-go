@@ -24,6 +24,15 @@ func (s *Store) ModelMeta(modelID string) model.ModelMeta {
 	return meta
 }
 
+// Accounts returns a detached copy of the account pool. Accounts only carry
+// value fields, so this is cheaper than cloning the whole configuration on
+// every upstream attempt.
+func (s *Store) Accounts() []model.Account {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.config.Accounts)
+}
+
 func (s *Store) ModelConfig(modelID string) model.PerModelConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -43,10 +52,25 @@ func (s *Store) ProxyKey() string {
 	return s.config.ProxyKey
 }
 
-func (s *Store) AccessSettings() (key, publicBase string) {
+// AccessPolicy is the immutable snapshot the request guard evaluates: the
+// proxy key, the optional public console URL, and the explicit trust the
+// operator declared for unauthenticated local access.
+type AccessPolicy struct {
+	ProxyKey              string
+	PublicBaseURL         string
+	TrustedProxies        []string
+	TrustLocalPortForward bool
+}
+
+func (s *Store) AccessPolicy() AccessPolicy {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.config.ProxyKey, s.config.PublicBaseURL
+	return AccessPolicy{
+		ProxyKey:              s.config.ProxyKey,
+		PublicBaseURL:         s.config.PublicBaseURL,
+		TrustedProxies:        slices.Clone(s.config.TrustedProxies),
+		TrustLocalPortForward: s.config.TrustLocalPortForward,
+	}
 }
 
 func (s *Store) StrictToolHistory() bool {

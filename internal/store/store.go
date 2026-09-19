@@ -65,6 +65,16 @@ func Open(dataDir string) (*Store, error) {
 	}
 	model.ApplyEnvironment(&store.config)
 	model.NormalizeConfig(&store.config)
+	if migrateStatsToIDs(store.config, &store.meta) {
+		// The rewrite has to be part of the durable state before any new
+		// journal record is written. Otherwise a crash can leave a snapshot
+		// that still counts under the old name while the journal counts under
+		// the identity, and recovery would only see one of the two halves.
+		// Replaying this migration is safe: it merges equal counters.
+		if err := store.UpdateMetadata(func(*model.Metadata) {}); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		if err := store.writeConfigLocked(); err != nil {
 			return nil, err
@@ -150,9 +160,12 @@ func (s *Store) PickAccount() model.Account {
 }
 
 // PickAccountExcluding applies the configured selection mode while skipping
-// the named accounts (typically ones cooling down after 401/403/429). When
+// the given account IDs (typically ones cooling down after 401/403/429). When
 // every usable account is excluded the exclusion is ignored rather than
-// returning nothing, so a single-account setup keeps working.
+// returning nothing, so a single-account setup keeps working. Callers that
+// need at least one account must check the returned Key: an empty account
+// means nothing is configured, and the legacy top-level apiKey is never a
+// runtime fallback.
 func (s *Store) PickAccountExcluding(excluded map[string]struct{}) model.Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,7 +174,7 @@ func (s *Store) PickAccountExcluding(excluded map[string]struct{}) model.Account
 		return account.Key != "" && account.Enabled
 	}
 	allowed := func(account model.Account) bool {
-		_, skip := excluded[account.Name]
+		_, skip := excluded[account.ID]
 		return usable(account) && !skip
 	}
 	enabled := make([]model.Account, 0, len(s.config.Accounts))
@@ -179,7 +192,7 @@ func (s *Store) PickAccountExcluding(excluded map[string]struct{}) model.Account
 		}
 	}
 	if len(enabled) == 0 {
-		return model.Account{Name: "默认", Key: s.config.APIKey, Enabled: true}
+		return model.Account{}
 	}
 	if s.config.AccountMode == "roundrobin" && len(enabled) > 1 {
 		account := enabled[s.rrCounter%uint64(len(enabled))]
@@ -195,18 +208,81 @@ func (s *Store) PickAccountExcluding(excluded map[string]struct{}) model.Account
 	return enabled[0]
 }
 
+// FindAccount returns one configured account by its stable identity.
+func (s *Store) FindAccount(id string) model.Account {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, account := range s.config.Accounts {
+		if id != "" && account.ID == id {
+			return account
+		}
+	}
+	return model.Account{}
+}
+
 func (s *Store) IsConfigured() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.config.APIKey != "" {
-		return true
-	}
 	for _, account := range s.config.Accounts {
 		if account.Key != "" && account.Enabled {
 			return true
 		}
 	}
 	return false
+}
+
+// migrateStatsToIDs rekeys counters written before per-account identities
+// existed, which used the (mutable) account name. The rewrite only happens
+// when a name identifies exactly one account, so duplicate names keep their
+// old keys instead of merging two counters. It reports whether anything
+// changed, so the caller can commit the rewrite durably.
+//
+// Counts under both keys are summed: they belong to the same account, and a
+// crash can leave a name-keyed snapshot next to id-keyed journal records.
+func migrateStatsToIDs(config model.Config, meta *model.Metadata) bool {
+	if len(meta.Stats) == 0 || len(config.Accounts) == 0 {
+		return false
+	}
+	counts := make(map[string]int, len(config.Accounts))
+	ids := make(map[string]struct{}, len(config.Accounts))
+	for _, account := range config.Accounts {
+		if account.Name != "" {
+			counts[account.Name]++
+		}
+		if account.ID != "" {
+			ids[account.ID] = struct{}{}
+		}
+	}
+	changed := false
+	for _, account := range config.Accounts {
+		if account.ID == "" || account.Name == "" || counts[account.Name] != 1 {
+			continue
+		}
+		if _, nameIsAnIdentity := ids[account.Name]; nameIsAnIdentity {
+			// A legacy name that is another account's identity is ambiguous;
+			// leave it alone instead of merging two different accounts.
+			continue
+		}
+		legacy, found := meta.Stats[account.Name]
+		if !found {
+			continue
+		}
+		meta.Stats[account.ID] = mergeAccountStats(meta.Stats[account.ID], legacy)
+		delete(meta.Stats, account.Name)
+		changed = true
+	}
+	return changed
+}
+
+// mergeAccountStats combines a legacy name-keyed counter with the identity
+// keyed one, keeping the most recent usage and error.
+func mergeAccountStats(current, legacy model.AccountStats) model.AccountStats {
+	merged := current
+	merged.Requests = current.Requests + legacy.Requests
+	if legacy.LastUsed > current.LastUsed {
+		merged.LastUsed, merged.LastError = legacy.LastUsed, legacy.LastError
+	}
+	return merged
 }
 
 func (s *Store) ResetRoundRobin() {

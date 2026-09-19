@@ -102,9 +102,14 @@ func TestFriendlyCancelText(t *testing.T) {
 	}
 }
 
-func TestSSEDataPayloads(t *testing.T) {
-	payloads := sseDataPayloads("event: x\ndata: {\"a\":1}\n")
-	if len(payloads) != 1 || !strings.Contains(payloads[0], `"a":1`) {
-		t.Fatalf("payloads: %#v", payloads)
+func TestSSEDataPayloadJoinsEventLines(t *testing.T) {
+	payload := sseDataPayload("event: x\ndata: {\"a\":\ndata: 1}\n")
+	if payload != "{\"a\":\n1}" {
+		t.Fatalf("payload: %q", payload)
+	}
+	stats := newStreamStats(time.Now())
+	stats.Observe([]byte("data: {\"error\":\ndata: {\"message\":\"boom\"}}\n\n"))
+	if !strings.Contains(stats.StreamError(), "boom") {
+		t.Fatalf("multi-line error event was ignored: %q", stats.StreamError())
 	}
 }

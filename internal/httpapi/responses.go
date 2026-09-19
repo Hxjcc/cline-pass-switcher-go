@@ -67,7 +67,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(result.Started).Milliseconds(),
 			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -83,7 +83,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 			Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": conversionErrorBody(err)})
@@ -93,7 +93,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		TS: time.Now().UnixMilli(), Model: modelID, Provider: result.Routing.FinalProvider,
 		Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 		Stream: false, Kind: "responses",
-		Error: nil, Account: result.Account.Name,
+		Error: nil, Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
@@ -173,7 +173,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
 		if stream {
@@ -205,7 +205,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
 		if stream {
@@ -220,7 +220,8 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		TS: time.Now().UnixMilli(), Model: modelID,
 		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
 		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
-		Account: result.Account.Name, Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		Account: result.Account.Name, AccountID: result.Account.ID,
+		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 	}
 	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&compactEntry, result.Out, compactEntry.MS)

@@ -37,6 +37,7 @@ import type {
   ModelsResponse,
   OfficialResponse,
   ProbeResponse,
+  QuotaResponse,
   SecurityResponse,
   TestResponse,
   ValidationResponse,
@@ -213,15 +214,22 @@ function App() {
     setAccounts(response)
   }
 
-  const testAccount = (key: string) =>
+  const testAccount = (key: string, id?: string) =>
     api<AccountTestResponse>("/api/accounts/test", {
       key: authKey,
-      body: { key },
+      body: { key, id },
     })
 
   // Stored keys stay hidden until the user asks for them; the reveal response
   // is kept in the panel and never written to the cached snapshot.
   const revealAccounts = () => api<AccountsResponse>("/api/accounts?reveal=1", { key: authKey })
+
+  // Plan utilization is read-only and never reaches the routing logic; the
+  // panel decides when to ask for it.
+  const loadQuota = useCallback((refresh = false) =>
+    api<QuotaResponse>(refresh ? "/api/accounts/quota?refresh=1" : "/api/accounts/quota", {
+      key: authKey,
+    }), [authKey])
 
   const saveSecurity = async (
     value: Pick<SecurityResponse, "proxyKey" | "publicBaseUrl" | "exposeCatalog">,
@@ -472,6 +480,7 @@ function App() {
                 onSave={saveAccounts}
                 onTest={testAccount}
                 onReveal={revealAccounts}
+                onQuota={loadQuota}
               />
             )}
           </TabsContent>
