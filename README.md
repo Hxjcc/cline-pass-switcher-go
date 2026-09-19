@@ -123,6 +123,7 @@ env_key = "CLINE_PROXY_KEY"
 | `STRICT_TOOL_HISTORY` | 设为 `true` 时，工具历史不完整（客户端回放了没有对应调用的工具结果）直接报错；默认 `false`，这类结果会作为用户内容继续转发 |
 | `WEB_SEARCH_UPSTREAM` | 把 `web_search` 声明映射成上游网关执行的搜索工具：`exa`（推荐）/ `tako` / `perplexity` / `browserbase_fetch`；留空或 `off` 表示不映射（默认） |
 | `WEB_FETCH_UPSTREAM` | 用户消息里出现 http(s) 链接时，声明上游网关的抓取工具读取该页面：`browserbase_fetch`；留空或 `off` 表示关闭（默认） |
+| `SHELL_COMPAT` | 转发给模型的工具 schema 里，凡是声明了 `shell` 参数的工具（`exec_command` 等）都限定为该值并设为必填，例如 `powershell`；留空或 `off` 表示不改（默认）。只对 Windows 客户端有意义——模型忘带 `shell` 时客户端会回退 `cmd.exe`，PowerShell 语法的命令就会报"不是内部或外部命令" |
 
 Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3123` 会覆盖 `config.json` 中的端口，与端口映射保持一致。
 

@@ -38,6 +38,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		StrictToolHistory: s.store.StrictToolHistory(),
 		WebSearchUpstream: s.store.WebSearchUpstream(),
 		WebFetchUpstream:  s.store.WebFetchUpstream(),
+		ShellCompat:       s.store.ShellCompat(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)

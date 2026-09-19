@@ -11,6 +11,9 @@ services:
       # 上游网关的联网能力，按次计费；不需要时删掉对应行或改成 off
       - WEB_SEARCH_UPSTREAM=exa
       - WEB_FETCH_UPSTREAM=browserbase_fetch
+      # Windows 客户端兼容：把工具的 shell 参数收窄成必填的 powershell，
+      # 模型忘带 shell 时客户端就不会回退 cmd.exe。留空 = 关闭（默认）。
+      - SHELL_COMPAT=${SHELL_COMPAT:-}
       # 公网 / 反向代理部署时打开，并换成实际域名与自设密钥
       # - PUBLIC_BASE_URL=https://cline.example.com
       # - PROXY_KEY=change-me
