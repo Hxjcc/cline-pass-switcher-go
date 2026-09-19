@@ -37,7 +37,6 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
 		StrictToolHistory: s.store.StrictToolHistory(),
 		WebSearchUpstream: s.store.WebSearchUpstream(),
-		WebSearchDirect:   s.directSearchEnabled(),
 		WebFetchUpstream:  s.store.WebFetchUpstream(),
 	})
 	if err != nil {
@@ -53,12 +52,6 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 
 	result := s.runNonStreamChain(request.Context(), modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
-	// Proxy-side search legs: the model may ask the proxy to search before it
-	// can answer. Every executed search is recorded so the buffered response
-	// still carries the official web_search_call items.
-	if provider := s.searchProvider(); provider != nil {
-		result, chatBody = s.runBufferedSearchLegs(request.Context(), provider, result, chatBody, bridgeContext, modelID, modelConfig)
-	}
 	if result.Out == nil {
 		writeJSON(writer, http.StatusBadGateway, map[string]any{
 			"error": map[string]any{"message": "no upstream response", "type": "upstream_error"},
@@ -95,7 +88,6 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": conversionErrorBody(err)})
 		return
 	}
-	insertWebSearchItems(response, bridgeContext.WebSearches())
 	entry := model.HistoryEntry{
 		TS: time.Now().UnixMilli(), Model: modelID, Provider: result.Routing.FinalProvider,
 		Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),

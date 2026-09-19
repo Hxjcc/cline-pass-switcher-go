@@ -61,14 +61,6 @@ func (s *Store) WebSearchUpstream() string {
 	return s.config.WebSearchUpstream
 }
 
-// WebSearchDirect reports the proxy-side search credentials. An empty key
-// keeps hosted web_search on the upstream gateway tool.
-func (s *Store) WebSearchDirect() (apiKey, baseURL string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.WebSearchDirectAPIKey, s.config.WebSearchDirectBaseURL
-}
-
 func (s *Store) WebFetchUpstream() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

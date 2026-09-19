@@ -129,22 +129,6 @@ type toolState struct {
 	Done        bool
 }
 
-// SearchRequest is one web search the upstream model asked the proxy to run.
-// The proxy answers it itself instead of handing it to the client.
-type SearchRequest struct {
-	CallID    string
-	ChatName  string
-	Arguments string
-	Query     string
-}
-
-// WebSearchResult is one page returned by a proxy-side search.
-type WebSearchResult struct {
-	Title string
-	URL   string
-	Text  string
-}
-
 // outputEntry pairs a completed output item with its output_index so the
 // final response lists items in wire order even when they were closed out of
 // order (interleaved thinking, text after tool calls).
@@ -163,13 +147,10 @@ type StreamState struct {
 	completed         bool
 	finishReason      string
 	usage             any
-	carriedUsage      any
 	output            []outputEntry
 	nextOutputIndex   int
 	reasoning         *textState
 	message           *messageState
-	legText           strings.Builder
-	legReasoning      strings.Builder
 	inlineThinkMode   inlineThinkMode
 	inlineThinkRaw    string
 	inlineThinkSeen   bool
@@ -177,8 +158,6 @@ type StreamState struct {
 	tools             map[int]*toolState
 	lastToolIndex     int
 	droppedTools      int
-	forwardedTools    int
-	searches          []SearchRequest
 }
 
 func NewStreamState(context *Context) *StreamState {
@@ -213,7 +192,7 @@ func (state *StreamState) outputItems() []any {
 }
 
 func (state *StreamState) baseResponse(status string, responseError any, incompleteReason string) map[string]any {
-	usage := mergeResponsesUsage(state.carriedUsage, state.usage)
+	usage := state.usage
 	output := state.outputItems()
 	if status == "in_progress" {
 		usage = nil
@@ -278,7 +257,6 @@ func (state *StreamState) pushReasoning(delta string) []Event {
 	}
 	events := state.ensureReasoning()
 	state.reasoning.Text.WriteString(delta)
-	state.legReasoning.WriteString(delta)
 	events = append(events, event("response.reasoning_summary_text.delta", map[string]any{
 		"item_id": state.reasoning.ItemID, "output_index": state.reasoning.OutputIndex,
 		"summary_index": 0, "delta": delta,
@@ -383,7 +361,6 @@ func (state *StreamState) emitText(delta string) []Event {
 	events := state.closeReasoning()
 	events = append(events, state.ensureMessage("output_text")...)
 	state.message.PartText.WriteString(delta)
-	state.legText.WriteString(delta)
 	return append(events, event("response.output_text.delta", map[string]any{
 		"item_id": state.message.ItemID, "output_index": state.message.OutputIndex,
 		"content_index": len(state.message.Parts), "delta": delta,
@@ -587,21 +564,15 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 }
 
 func (state *StreamState) pushToolCall(raw map[string]any) []Event {
-	function := jsonx.Map(raw["function"])
-	name := jsonx.String(function["name"])
-	if state.context.isProviderTool(name) {
+	if function := jsonx.Map(raw["function"]); state.context.isProviderTool(jsonx.String(function["name"])) {
 		// Provider-executed tools (web search and friends) run inside the
 		// gateway; surfacing them would hand the client a tool it never declared.
 		return nil
 	}
 	current := state.ensureTool(raw)
+	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
-	if state.context.isDirectWebSearchTool(name) {
-		// The proxy answers this call itself. It stays off the client wire:
-		// once the search has run it is reported as a web_search_call item.
-		return nil
-	}
 	events := []Event{}
 	if !current.Added && current.ChatName != "" {
 		base := state.context.responseOutputItemFromTool(map[string]any{
@@ -611,7 +582,6 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 		current.ItemID = jsonx.String(base["id"])
 		current.Kind = jsonx.String(base["type"])
 		current.Added = true
-		state.forwardedTools++
 		events = append(events, state.closeReasoning()...)
 		events = append(events, state.closeMessage()...)
 		events = append(events, event("response.output_item.added", map[string]any{
@@ -643,15 +613,6 @@ func (state *StreamState) closeTools() []Event {
 			continue
 		}
 		current.Done = true
-		if state.context.isDirectWebSearchTool(current.ChatName) {
-			request, ok := state.webSearchRequest(current)
-			if !ok {
-				state.droppedTools++
-				continue
-			}
-			state.searches = append(state.searches, request)
-			continue
-		}
 		if !current.Added || current.ChatName == "" {
 			state.droppedTools++
 			continue
@@ -688,45 +649,6 @@ func (state *StreamState) closeTools() []Event {
 		state.addOutput(current.OutputIndex, base)
 	}
 	return events
-}
-
-// webSearchRequest turns one accumulated proxy-side search call into a
-// request the caller can execute.
-func (state *StreamState) webSearchRequest(current *toolState) (SearchRequest, bool) {
-	arguments, valid := canonicalToolArguments(current.Arguments.String())
-	if !valid {
-		return SearchRequest{}, false
-	}
-	query := searchQueryFromArguments(arguments)
-	if query == "" {
-		return SearchRequest{}, false
-	}
-	callID := current.CallID
-	if callID == "" {
-		callID = newID("call")
-	}
-	return SearchRequest{
-		CallID: callID, ChatName: current.ChatName, Arguments: arguments, Query: query,
-	}, true
-}
-
-// searchQueryFromArguments reads the query out of a web search call. The
-// proxy declares a single "query" argument; "queries" is accepted as well so
-// a model that imitates the hosted tool still gets served.
-func searchQueryFromArguments(arguments string) string {
-	decoded := map[string]any{}
-	if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
-		return ""
-	}
-	if query := strings.TrimSpace(jsonx.String(decoded["query"])); query != "" {
-		return query
-	}
-	for _, raw := range jsonx.Slice(decoded["queries"]) {
-		if query := strings.TrimSpace(jsonx.String(raw)); query != "" {
-			return query
-		}
-	}
-	return ""
 }
 
 func streamsFunctionArguments(kind string) bool {
@@ -894,12 +816,6 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 			fmt.Sprintf("upstream returned %d structurally incomplete tool call(s)", state.droppedTools),
 			"upstream_tool_call_dropped",
 		)...)
-	}
-	if len(state.searches) > 0 && state.forwardedTools == 0 {
-		// The model asked the proxy to search. This leg is not a client-facing
-		// terminal: the caller executes the searches, publishes the
-		// web_search_call items and continues the turn with another leg.
-		return events
 	}
 
 	hasMessage := false
