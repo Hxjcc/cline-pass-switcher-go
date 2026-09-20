@@ -1647,7 +1647,7 @@ func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
 	}
 }
 
-func TestProviderToolCallNeverReachesTheClient(t *testing.T) {
+func TestProviderSearchCallBecomesWebSearchCall(t *testing.T) {
 	_, context, err := ToChatWithOptions(map[string]any{
 		"model": "cline-pass/glm-5.3-flash", "input": "search", "stream": true,
 		"tools": []any{map[string]any{"type": "web_search"}},
@@ -1658,18 +1658,221 @@ func TestProviderToolCallNeverReachesTheClient(t *testing.T) {
 	if !context.isProviderTool("vercel:exa_search") || !context.isProviderTool("exa_search") {
 		t.Fatal("gateway provider tool names were not tracked")
 	}
-	state := NewStreamState(context)
-	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
-		"tool_calls": []any{map[string]any{
-			"index": 0, "id": "call_1",
-			"function": map[string]any{"name": "vercel:exa_search", "arguments": "{}"},
-		}},
-	}}}})
+	adapter := NewStreamAdapter(context)
+	events := adapter.Feed([]byte(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"vercel:exa_search","arguments":"{\"query\":\"今日"}}]},"finish_reason":null}]}` + "\n\n" +
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"新闻\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n" +
+			"data: [DONE]\n\n",
+	))
+	var added, completedCall map[string]any
+	types := make([]string, 0, len(events))
 	for _, event := range events {
-		item := jsonx.Map(event.Data["item"])
-		if item != nil && jsonx.String(item["type"]) == "function_call" {
-			t.Fatalf("provider tool call leaked to the client: %#v", item)
+		types = append(types, event.Type)
+		if event.Type == "response.output_item.added" {
+			item := jsonx.Map(event.Data["item"])
+			if jsonx.String(item["type"]) == "web_search_call" {
+				added = item
+			}
+			if jsonx.String(item["type"]) == "function_call" {
+				t.Fatalf("provider tool call leaked as a client function call: %#v", item)
+			}
 		}
+		if event.Type == "response.output_item.done" {
+			item := jsonx.Map(event.Data["item"])
+			if jsonx.String(item["type"]) == "web_search_call" {
+				completedCall = item
+			}
+			if jsonx.String(item["type"]) == "function_call" {
+				t.Fatalf("provider tool call leaked as a client function call: %#v", item)
+			}
+		}
+	}
+	joined := strings.Join(types, ",")
+	for _, expected := range []string{
+		"response.output_item.added",
+		"response.web_search_call.in_progress",
+		"response.web_search_call.searching",
+		"response.web_search_call.completed",
+		"response.output_item.done",
+		"response.completed",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing %s in %s", expected, joined)
+		}
+	}
+	if added == nil || jsonx.String(added["status"]) != "in_progress" {
+		t.Fatalf("unexpected in-progress web_search_call: %#v", added)
+	}
+	if completedCall == nil ||
+		jsonx.String(completedCall["status"]) != "completed" ||
+		jsonx.String(jsonx.Map(completedCall["action"])["type"]) != "search" ||
+		jsonx.String(jsonx.Map(completedCall["action"])["query"]) != "今日新闻" {
+		t.Fatalf("unexpected completed web_search_call: %#v", completedCall)
+	}
+	if !strings.HasPrefix(jsonx.String(completedCall["id"]), "ws_") {
+		t.Fatalf("web_search_call used an unexpected id: %#v", completedCall)
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("provider search should complete the turn: %#v", events)
+	}
+	output := jsonx.Slice(jsonx.Map(terminal.Data["response"])["output"])
+	if len(output) != 1 ||
+		jsonx.String(jsonx.Map(output[0])["type"]) != "web_search_call" ||
+		jsonx.String(jsonx.Map(jsonx.Map(output[0])["action"])["query"]) != "今日新闻" {
+		t.Fatalf("completed response did not retain the search item: %#v", output)
+	}
+}
+
+func TestProviderFetchCallBecomesOpenPage(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash",
+		"input": "读一下 https://example.com/page",
+	}, Options{WebFetchUpstream: "browserbase_fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !context.isProviderTool("vercel:browserbase_fetch") {
+		t.Fatal("gateway fetch tool name was not tracked")
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_fetch",
+			"function": map[string]any{
+				"name": "vercel:browserbase_fetch", "arguments": `{"url":"https://example.com/page"}`,
+			},
+		}}},
+		"finish_reason": "tool_calls",
+	}}})
+	events = append(events, state.Finalize(true, nil)...)
+	var item map[string]any
+	for _, event := range events {
+		if event.Type == "response.output_item.done" {
+			candidate := jsonx.Map(event.Data["item"])
+			if jsonx.String(candidate["type"]) == "web_search_call" {
+				item = candidate
+			}
+		}
+	}
+	action := jsonx.Map(item["action"])
+	if item == nil ||
+		jsonx.String(item["status"]) != "completed" ||
+		jsonx.String(action["type"]) != "open_page" ||
+		jsonx.String(action["url"]) != "https://example.com/page" {
+		t.Fatalf("unexpected fetch item: %#v", item)
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("provider fetch should complete the turn: %#v", events)
+	}
+}
+
+func TestProviderSearchPrecedesFollowingMessage(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "search",
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1",
+			"function": map[string]any{
+				"name": "vercel:exa_search", "arguments": `{"query":"今日新闻"}`,
+			},
+		}}},
+		"finish_reason": nil,
+	}}})
+	events = append(events, state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta":         map[string]any{"content": "答案"},
+		"finish_reason": "stop",
+	}}})...)
+	events = append(events, state.Finalize(true, nil)...)
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("search followed by an answer should complete: %#v", events)
+	}
+	output := jsonx.Slice(jsonx.Map(terminal.Data["response"])["output"])
+	if len(output) != 2 ||
+		jsonx.String(jsonx.Map(output[0])["type"]) != "web_search_call" ||
+		jsonx.String(jsonx.Map(output[1])["type"]) != "message" {
+		t.Fatalf("search item did not precede the answer: %#v", output)
+	}
+	completedSearch := -1
+	answerDelta := -1
+	for index, event := range events {
+		if event.Type == "response.web_search_call.completed" {
+			completedSearch = index
+		}
+		if event.Type == "response.output_text.delta" && answerDelta < 0 {
+			answerDelta = index
+		}
+	}
+	if completedSearch < 0 || answerDelta < 0 || completedSearch > answerDelta {
+		t.Fatalf("search completion did not precede answer text: %#v", events)
+	}
+}
+
+func TestFromChatProducesWebSearchCall(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "search",
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := FromChat(map[string]any{
+		"id": "chatcmpl-test", "model": "cline-pass/glm-5.3-flash", "created": json.Number("12"),
+		"choices": []any{map[string]any{
+			"finish_reason": "tool_calls",
+			"message": map[string]any{
+				"tool_calls": []any{map[string]any{
+					"id": "call_1",
+					"function": map[string]any{
+						"name": "vercel:exa_search", "arguments": `{"query":"今日要闻"}`,
+					},
+				}},
+			},
+		}},
+	}, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := jsonx.Slice(response["output"])
+	if len(output) != 1 ||
+		jsonx.String(jsonx.Map(output[0])["type"]) != "web_search_call" ||
+		jsonx.String(jsonx.Map(jsonx.Map(output[0])["action"])["query"]) != "今日要闻" {
+		t.Fatalf("buffered response did not retain the search item: %#v", output)
+	}
+}
+
+func TestWebSearchCallReplayItemIsIgnored(t *testing.T) {
+	chat, _, err := ToChat(map[string]any{
+		"model": "cline-pass/glm-5.3-flash",
+		"input": []any{
+			map[string]any{
+				"type": "web_search_call", "id": "ws_replay", "status": "completed",
+				"action": map[string]any{"type": "search", "query": "今日新闻"},
+			},
+			map[string]any{"type": "message", "role": "assistant", "content": "answer"},
+			map[string]any{"type": "message", "role": "user", "content": "follow-up"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	if len(messages) != 2 ||
+		jsonx.String(jsonx.Map(messages[0])["role"]) != "assistant" ||
+		jsonx.String(jsonx.Map(messages[1])["role"]) != "user" {
+		t.Fatalf("web_search_call replay was not ignored: %#v", messages)
+	}
+	raw, _ := json.Marshal(messages)
+	if strings.Contains(string(raw), "web_search_call") || strings.Contains(string(raw), "ws_replay") {
+		t.Fatalf("web_search_call replay leaked into Chat history: %s", raw)
 	}
 }
 

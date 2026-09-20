@@ -1557,6 +1557,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		switch jsonx.String(item["type"]) {
 		case "reasoning":
 			appendReasoning(reasoningTextFromItem(item))
+		case "web_search_call":
+			// Gateway-executed search activity is already reflected in the
+			// following assistant message; it has no client tool result to
+			// replay and must not be sent back as a Chat tool call.
+			continue
 		case "function_call", "custom_tool_call":
 			if !toolGroupOpen() {
 				flushAfterToolGroup()
