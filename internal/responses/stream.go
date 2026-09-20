@@ -174,6 +174,8 @@ type StreamState struct {
 	lastToolIndex     int
 	providerCalls     map[int]*providerToolState
 	lastProviderIndex int
+	gatewayToolCalls  map[string]int
+	gatewayToolOrder  []string
 	droppedTools      int
 }
 
@@ -187,6 +189,7 @@ func NewStreamState(context *Context) *StreamState {
 		lastToolIndex:     -1,
 		providerCalls:     map[int]*providerToolState{},
 		lastProviderIndex: -1,
+		gatewayToolCalls:  map[string]int{},
 	}
 }
 
@@ -746,6 +749,93 @@ func providerToolItem(id, status, name, rawArguments string) map[string]any {
 	}
 }
 
+func gatewayToolKey(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if index := strings.LastIndex(key, ":"); index >= 0 {
+		key = key[index+1:]
+	}
+	key = strings.Trim(key, "_- ")
+	if strings.Contains(key, "browserbase") || strings.Contains(key, "fetch") {
+		return "browserbase_fetch"
+	}
+	return key
+}
+
+func gatewayToolChatName(name string) string {
+	key := gatewayToolKey(name)
+	if key == "" {
+		return ""
+	}
+	return "vercel:" + key
+}
+
+// recordGatewayToolCalls captures the aggregate server-tool counts Vercel AI
+// Gateway reports in provider_metadata. The gateway executes server tools
+// internally and does not expose their arguments or results, so these counts
+// are the only signal that a search or page fetch happened.
+func (state *StreamState) recordGatewayToolCalls(payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	gateway := jsonx.Map(jsonx.Map(payload["provider_metadata"])["gateway"])
+	calls := jsonx.Map(gateway["gatewayToolCalls"])
+	for name, raw := range calls {
+		key := gatewayToolKey(name)
+		count := int(intValue(raw))
+		if key == "" || count <= 0 {
+			continue
+		}
+		if _, seen := state.gatewayToolCalls[key]; !seen {
+			state.gatewayToolOrder = append(state.gatewayToolOrder, key)
+		}
+		if count > state.gatewayToolCalls[key] {
+			state.gatewayToolCalls[key] = count
+		}
+	}
+}
+
+// addGatewayToolCalls turns gateway-side counts into synthetic web_search_call
+// items. The counts do not carry the original query or URL, so the items still
+// tell the client that search or fetch activity happened without inventing
+// arguments the gateway never returned.
+func (state *StreamState) addGatewayToolCalls() {
+	if len(state.gatewayToolCalls) == 0 {
+		return
+	}
+	existing := map[string]int{}
+	for _, current := range state.providerCalls {
+		if current == nil || current.ChatName == "" {
+			continue
+		}
+		existing[gatewayToolKey(current.ChatName)]++
+	}
+	keys := append([]string(nil), state.gatewayToolOrder...)
+	sort.Strings(keys)
+	const maxSyntheticProviderCalls = 8
+	for _, key := range keys {
+		remaining := state.gatewayToolCalls[key] - existing[key]
+		if remaining <= 0 {
+			continue
+		}
+		if remaining > maxSyntheticProviderCalls {
+			remaining = maxSyntheticProviderCalls
+		}
+		for index := 0; index < remaining; index++ {
+			providerKey := 0
+			for state.providerCalls[providerKey] != nil {
+				providerKey++
+			}
+			state.providerCalls[providerKey] = &providerToolState{
+				Key:         providerKey,
+				OutputIndex: state.nextOutputIndex,
+				ItemID:      newID("ws"),
+				ChatName:    gatewayToolChatName(key),
+			}
+			state.nextOutputIndex++
+		}
+	}
+}
+
 func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 	function := jsonx.Map(raw["function"])
 	if state.context.isProviderTool(jsonx.String(function["name"])) || state.isProviderToolDelta(raw) {
@@ -996,6 +1086,7 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 	events := state.ensureStarted()
 	delta := jsonx.Map(choice["delta"])
 	if delta != nil {
+		state.recordGatewayToolCalls(delta)
 		if reasoning := reasoningDeltaText(delta); reasoning != "" {
 			events = append(events, state.pushReasoning(reasoning)...)
 		}
@@ -1022,6 +1113,9 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 				}
 			}
 		}
+	}
+	if message := jsonx.Map(choice["message"]); message != nil {
+		state.recordGatewayToolCalls(message)
 	}
 	if finishReason := jsonx.String(choice["finish_reason"]); finishReason != "" {
 		state.finishReason = finishReason
@@ -1079,6 +1173,7 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 		return state.Fail(readErr.Error(), "stream_error")
 	}
 	events := state.flushInlineThink()
+	state.addGatewayToolCalls()
 	events = append(events, state.closeReasoning()...)
 	events = append(events, state.closeMessage()...)
 	events = append(events, state.closePendingTools()...)

@@ -1816,6 +1816,179 @@ func TestProviderSearchPrecedesFollowingMessage(t *testing.T) {
 	}
 }
 
+func TestGatewaySearchMetadataBecomesWebSearchCall(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash", "input": "search", "stream": true,
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"content": "答案"}, "finish_reason": nil,
+	}}})
+	events = append(events, state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"provider_metadata": map[string]any{
+			"gateway": map[string]any{"gatewayToolCalls": map[string]any{"exa_search": 2}},
+		}},
+		"finish_reason": "stop",
+	}}})...)
+	events = append(events, state.Finalize(true, nil)...)
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("gateway search metadata should complete the turn: %#v", events)
+	}
+	output := jsonx.Slice(jsonx.Map(terminal.Data["response"])["output"])
+	searches := 0
+	for _, raw := range output {
+		item := jsonx.Map(raw)
+		if jsonx.String(item["type"]) != "web_search_call" {
+			continue
+		}
+		searches++
+		if jsonx.String(item["status"]) != "completed" ||
+			jsonx.String(jsonx.Map(item["action"])["type"]) != "search" ||
+			jsonx.String(jsonx.Map(item["action"])["query"]) != "" {
+			t.Fatalf("unexpected synthetic web_search_call: %#v", item)
+		}
+	}
+	if searches != 2 {
+		t.Fatalf("expected two synthetic searches, got %d: %#v", searches, output)
+	}
+	searching := 0
+	for _, event := range events {
+		if event.Type == "response.web_search_call.searching" {
+			searching++
+		}
+	}
+	if searching != 2 {
+		t.Fatalf("expected two searching events, got %d: %#v", searching, events)
+	}
+}
+
+func TestGatewayFetchMetadataBecomesOpenPage(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash",
+		"input": "读一下 https://example.com/page",
+	}, Options{WebFetchUpstream: "browserbase_fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"content": "ok"}, "finish_reason": nil,
+	}}})
+	events = append(events, state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"provider_metadata": map[string]any{
+			"gateway": map[string]any{"gatewayToolCalls": map[string]any{"browserbase_fetch": 1}},
+		}},
+		"finish_reason": "stop",
+	}}})...)
+	events = append(events, state.Finalize(true, nil)...)
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("gateway fetch metadata should complete the turn: %#v", events)
+	}
+	output := jsonx.Slice(jsonx.Map(terminal.Data["response"])["output"])
+	var item map[string]any
+	for _, raw := range output {
+		candidate := jsonx.Map(raw)
+		if jsonx.String(candidate["type"]) == "web_search_call" {
+			item = candidate
+		}
+	}
+	if item == nil ||
+		jsonx.String(item["status"]) != "completed" ||
+		jsonx.String(jsonx.Map(item["action"])["type"]) != "open_page" ||
+		jsonx.String(jsonx.Map(item["action"])["url"]) != "" {
+		t.Fatalf("unexpected synthetic open_page item: %#v", item)
+	}
+	for _, event := range events {
+		if event.Type == "response.web_search_call.searching" {
+			t.Fatalf("open_page must not emit a searching event: %#v", events)
+		}
+	}
+}
+
+func TestGatewaySearchMetadataDoesNotDuplicateProviderCall(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash", "input": "search", "stream": true,
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewStreamState(context)
+	events := state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1",
+			"function": map[string]any{
+				"name": "vercel:exa_search", "arguments": `{"query":"news"}`,
+			},
+		}}},
+		"finish_reason": "tool_calls",
+	}}})
+	events = append(events, state.HandleChunk(map[string]any{"choices": []any{map[string]any{
+		"delta": map[string]any{"provider_metadata": map[string]any{
+			"gateway": map[string]any{"gatewayToolCalls": map[string]any{"exa_search": 1}},
+		}},
+		"finish_reason": "stop",
+	}}})...)
+	events = append(events, state.Finalize(true, nil)...)
+	terminal := events[len(events)-1]
+	if terminal.Type != "response.completed" {
+		t.Fatalf("provider call plus metadata should complete: %#v", events)
+	}
+	output := jsonx.Slice(jsonx.Map(terminal.Data["response"])["output"])
+	if len(output) != 1 {
+		t.Fatalf("metadata duplicated the provider call: %#v", output)
+	}
+	item := jsonx.Map(output[0])
+	if jsonx.String(item["type"]) != "web_search_call" ||
+		jsonx.String(jsonx.Map(item["action"])["query"]) != "news" {
+		t.Fatalf("unexpected deduplicated provider call: %#v", item)
+	}
+}
+
+func TestFromChatGatewayMetadataProducesWebSearchCall(t *testing.T) {
+	_, context, err := ToChatWithOptions(map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash", "input": "search",
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := FromChat(map[string]any{
+		"id": "chatcmpl-test", "model": "cline-pass/deepseek-v4.1-flash", "created": json.Number("12"),
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]any{
+				"content": "answer",
+				"provider_metadata": map[string]any{
+					"gateway": map[string]any{"gatewayToolCalls": map[string]any{"exa_search": 1}},
+				},
+			},
+		}},
+	}, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := jsonx.Slice(response["output"])
+	var item map[string]any
+	for _, raw := range output {
+		candidate := jsonx.Map(raw)
+		if jsonx.String(candidate["type"]) == "web_search_call" {
+			item = candidate
+		}
+	}
+	if item == nil ||
+		jsonx.String(item["status"]) != "completed" ||
+		jsonx.String(jsonx.Map(item["action"])["type"]) != "search" {
+		t.Fatalf("buffered gateway metadata did not produce a search item: %#v", output)
+	}
+}
+
 func TestFromChatProducesWebSearchCall(t *testing.T) {
 	_, context, err := ToChatWithOptions(map[string]any{
 		"model": "cline-pass/glm-5.3-flash", "input": "search",
