@@ -143,6 +143,12 @@ const sortItems: Record<string, string> = {
   tps: "最高吞吐",
 }
 
+// The backend cannot always carry an explicit false through older metadata
+// (the JSON tag used to omit it), so the reason is a second reliable signal.
+function isPinDisabled(model: SubscriptionModel): boolean {
+  return model.meta?.pinnable === false || Boolean(model.meta?.pinReason)
+}
+
 export function ModelsPanel({
   data,
   onRefresh,
@@ -247,7 +253,7 @@ export function ModelsPanel({
       } else if (!config.upstreams.length || result.actual === config.upstreams[0]) {
         toast.success(`实际命中 ${providerLabel(result.actual) || "未知渠道"}`)
       } else {
-        const ignored = model.meta?.pinnable === false ? "（网关已忽略钉住）" : ""
+        const ignored = isPinDisabled(model) ? "（网关已忽略钉住）" : ""
         toast.warning(`实际命中 ${providerLabel(result.actual) || "未知渠道"}，未命中首选${ignored}`)
       }
     } catch (error) {
@@ -293,7 +299,7 @@ export function ModelsPanel({
     const selected = config.upstreams.includes(upstreamSlug)
     // Keep removing stale pins possible, but never add a new one while the
     // gateway ignores the preference.
-    if (model.meta?.pinnable === false && !selected) return
+    if (isPinDisabled(model) && !selected) return
     const upstreams = selected
       ? config.upstreams.filter((value) => value !== upstreamSlug)
       : [...config.upstreams, upstreamSlug]
@@ -305,7 +311,7 @@ export function ModelsPanel({
     const config = normalizeModelConfig(model.config)
     const excluded = config.exclude.includes(upstreamSlug)
     // As with pins, allow cleanup of an old exclusion but not new ones.
-    if (model.meta?.pinnable === false && !excluded) return
+    if (isPinDisabled(model) && !excluded) return
     const exclude = excluded
       ? config.exclude.filter((value) => value !== upstreamSlug)
       : [...config.exclude, upstreamSlug]
@@ -314,7 +320,7 @@ export function ModelsPanel({
   }
 
   const movePriority = (model: SubscriptionModel, upstreamSlug: string, offset: number) => {
-    if (model.meta?.pinnable === false) return
+    if (isPinDisabled(model)) return
     const config = normalizeModelConfig(model.config)
     const upstreams = [...config.upstreams]
     const index = upstreams.indexOf(upstreamSlug)
@@ -325,7 +331,7 @@ export function ModelsPanel({
   }
 
   const bulkAll = (model: SubscriptionModel) => {
-    if (model.meta?.pinnable === false) return
+    if (isPinDisabled(model)) return
     const config = normalizeModelConfig(model.config)
     const upstreams = orderedUpstreams(model).filter((value) => !config.exclude.includes(value))
     void updateConfig(model.id, { ...config, upstreams })
@@ -420,7 +426,7 @@ export function ModelsPanel({
                 const isExpanded = expanded === model.id
                 const action = busy[model.id]
                 const result = testResults[model.id]
-                const pinDisabled = model.meta?.pinnable === false
+                const pinDisabled = isPinDisabled(model)
                 const pinnedFirst = config.upstreams[0]
                 const actualProvider = model.meta?.lastProvider
                 const pinMismatch = Boolean(

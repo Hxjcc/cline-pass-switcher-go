@@ -67,7 +67,8 @@ export function CatalogPanel({
           {models.map((modelID) => {
             const model = data.subscription.find((item) => item.id === modelID)
             const pinnable = model?.meta?.pinnable === true
-            const pinDisabled = model?.meta?.pinnable === false
+            const pinDisabled =
+              model?.meta?.pinnable === false || Boolean(model?.meta?.pinReason)
             return (
               <div
                 key={modelID}

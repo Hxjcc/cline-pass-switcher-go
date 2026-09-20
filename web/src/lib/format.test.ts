@@ -90,6 +90,10 @@ test("pipelineHint explains when pinning is unavailable", () => {
   expect(pipelineHint("planner", false, "gateway_ignores_provider_preferences")).toContain(
     "网关已忽略上游偏好",
   )
+  // Older metadata can carry the reason without the boolean false.
+  expect(pipelineHint("planner", undefined, "gateway_ignores_provider_preferences")).toContain(
+    "网关已忽略上游偏好",
+  )
   expect(pipelineHint("planner", false, "single_provider")).toContain("只有一个候选渠道")
   expect(pipelineHint("planner", true)).toContain("providerOptions.gateway")
   expect(pipelineHint("direct", true)).toContain("provider 字段")

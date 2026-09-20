@@ -41,3 +41,7 @@ func TestParsePlannedProviders(t *testing.T) {
 		})
 	}
 }
+
+func boolPtr(value bool) *bool {
+	return &value
+}

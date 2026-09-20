@@ -197,7 +197,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	meta, err := s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
 		current.OK = true
 		current.Pipeline = routing.Pipeline
-		current.Pinnable = pinnable
+		current.Pinnable = &pinnable
 		current.PinReason = pinReason
 		current.AvailableProviders = strx.Unique(append(probe.providers, current.AvailableProviders...))
 		current.CanonicalSlug = routing.CanonicalSlug
@@ -355,7 +355,7 @@ func (s *Service) orEndpoints(ctx context.Context, slug string) ([]model.Upstrea
 func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (ValidationResult, error) {
 	meta := s.store.Metadata()
 	modelMeta := meta.Models[modelID]
-	if !modelMeta.Pinnable || len(modelMeta.Upstreams) == 0 {
+	if modelMeta.Pinnable == nil || !*modelMeta.Pinnable || len(modelMeta.Upstreams) == 0 {
 		reason := modelMeta.PinReason
 		if reason == "" {
 			reason = pinReasonNoChannels

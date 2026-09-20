@@ -79,7 +79,7 @@ func TestProbeModelHarvestsPlannerChannels(t *testing.T) {
 		t.Fatalf("probe calls = %d, harvest calls = %d", probes.Load(), harvests.Load())
 	}
 	meta := result.ModelMeta
-	if meta.Pipeline != "planner" || !meta.Pinnable {
+	if meta.Pipeline != "planner" || meta.Pinnable == nil || !*meta.Pinnable {
 		t.Fatalf("pipeline = %q, pinnable = %v", meta.Pipeline, meta.Pinnable)
 	}
 	if meta.PinReason != "" {
@@ -125,7 +125,7 @@ func TestProbeModelMarksPlannerUnpinnableWhenPreferenceIgnored(t *testing.T) {
 		t.Fatalf("probe calls = %d, preference probes = %d", probes.Load(), preferenceProbes.Load())
 	}
 	meta := result.ModelMeta
-	if meta.Pipeline != "planner" || meta.Pinnable {
+	if meta.Pipeline != "planner" || meta.Pinnable == nil || *meta.Pinnable {
 		t.Fatalf("pipeline = %q, pinnable = %v", meta.Pipeline, meta.Pinnable)
 	}
 	if meta.PinReason != pinReasonGatewayIgnores {
@@ -164,7 +164,7 @@ func TestProbeModelMarksSingleProviderPlannerAsNotPinnable(t *testing.T) {
 		t.Fatalf("preference probes = %d, want 1", probes.Load())
 	}
 	meta := result.ModelMeta
-	if meta.Pinnable || meta.PinReason != pinReasonSingleProvider {
+	if meta.Pinnable == nil || *meta.Pinnable || meta.PinReason != pinReasonSingleProvider {
 		t.Fatalf("pinnable = %v, pinReason = %q, want single-provider", meta.Pinnable, meta.PinReason)
 	}
 	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"openai-compatible-private"})
@@ -234,7 +234,7 @@ func TestProbeModelResolvesDirectProviderAgainstOpenRouterEndpoints(t *testing.T
 	if meta.LastProvider != "z-ai" {
 		t.Fatalf("lastProvider = %q, want z-ai", meta.LastProvider)
 	}
-	if !meta.Pinnable || meta.PinReason != "" {
+	if meta.Pinnable == nil || !*meta.Pinnable || meta.PinReason != "" {
 		t.Fatalf("direct pin should be supported: pinnable=%v reason=%q", meta.Pinnable, meta.PinReason)
 	}
 	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"z-ai", "atlas-cloud"})

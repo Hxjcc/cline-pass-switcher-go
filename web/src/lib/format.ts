@@ -143,10 +143,13 @@ export function pinReasonLabel(reason?: string): string {
 }
 
 export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: string): string {
-  if (pinnable === false && pinReason === "single_provider") {
+  // Older metadata may have dropped the boolean false because of the JSON
+  // omitempty tag; the reason is also a reliable "not pinnable" signal.
+  const pinDisabled = pinnable === false || Boolean(pinReason)
+  if (pinDisabled && pinReason === "single_provider") {
     return "这个模型只有一个候选渠道，无需钉住，也没有其他渠道可校验。"
   }
-  if (pinnable === false) {
+  if (pinDisabled) {
     const reason = pinReasonLabel(pinReason)
     switch (pipeline) {
       case "direct":

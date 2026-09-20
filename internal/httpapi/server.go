@@ -608,10 +608,11 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
 	s.record(entry)
+	modelMeta := s.store.ModelMeta(body.Model)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok": true, "ms": time.Since(started).Milliseconds(), "targets": modelConfig.Upstreams,
 		"exclude": modelConfig.Exclude, "actual": routing.FinalProvider, "actualName": routing.FinalProviderName,
-		"pipeline": routing.Pipeline, "pinnable": routing.Pipeline != "", "canonicalSlug": routing.CanonicalSlug,
+		"pipeline": routing.Pipeline, "pinnable": modelMeta.Pinnable != nil && *modelMeta.Pinnable, "canonicalSlug": routing.CanonicalSlug,
 		"fallbacks": routing.Fallbacks, "content": strx.Truncate(routing.Content, 120), "account": result.Account.Name,
 		"trace": result.Trace,
 	})

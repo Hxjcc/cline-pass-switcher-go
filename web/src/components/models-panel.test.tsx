@@ -25,7 +25,6 @@ const data: ModelsResponse = {
       },
       meta: {
         pipeline: "planner",
-        pinnable: false,
         pinReason: "gateway_ignores_provider_preferences",
         upstreams: ["deepseek", "fireworks"],
         lastProvider: "deepseek",

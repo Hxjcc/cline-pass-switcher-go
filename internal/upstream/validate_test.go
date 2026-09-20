@@ -38,7 +38,7 @@ func TestValidateUpstreamsRecordsLatency(t *testing.T) {
 	st := newStreamTestStore(t, upstreamServer.URL)
 	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
 		meta.Upstreams = []string{"talker", "thinker"}
-		meta.Pinnable = true
+		meta.Pinnable = boolPtr(true)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestValidateUpstreamsSkipsWhenNotPinnable(t *testing.T) {
 	st := newStreamTestStore(t, upstreamServer.URL)
 	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
 		meta.Upstreams = []string{"a", "b"}
-		meta.Pinnable = false
+		meta.Pinnable = boolPtr(false)
 		meta.PinReason = pinReasonGatewayIgnores
 		meta.UpstreamStatus = map[string]model.UpstreamStatus{
 			"a": {Status: "ok"},
