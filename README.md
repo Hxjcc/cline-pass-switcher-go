@@ -51,7 +51,7 @@ docker compose up -d --build
 | `WEB_SEARCH_UPSTREAM` | `exa` | 客户端声明 `web_search` 时改用网关的搜索工具，让模型能查最新信息 |
 | `WEB_FETCH_UPSTREAM` | `browserbase_fetch` | 用户消息里出现链接时声明抓取工具，读取该页面的内容 |
 
-两者都由上游网关（Cline → Vercel）执行，是否真的调用取决于模型：DeepSeek 会调用，GLM 目前不会。客户端会显示标准 `web_search_call` 活动；若网关只返回 `gatewayToolCalls` 计数（当前 Cline/Vercel 的 `exa_search` 就是这种情况），则显示不带 query 的通用搜索活动，拿不到实际搜索词。Exa 实际读取的页面列表和结构化 `url_citation` 都不会返回。从源码运行时这两项默认关闭，需要在 `config.json` 里填 `webSearchUpstream` / `webFetchUpstream`，或设置同名环境变量。
+两者都由上游网关（Cline → Vercel）执行，是否真的调用取决于模型：DeepSeek 会调用，GLM 目前不会。搜索不会返回结构化的 `url_citation`，来源以正文 URL 的形式给出。从源码运行时这两项默认关闭，需要在 `config.json` 里填 `webSearchUpstream` / `webFetchUpstream`，或设置同名环境变量。
 
 公网 / 反向代理部署时，把 compose 里注释掉的 `PUBLIC_BASE_URL` 和 `PROXY_KEY` 打开并改成实际值——否则控制台的浏览器请求会因为来源校验返回 403（详见「从旧版本升级」）。
 

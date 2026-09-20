@@ -129,21 +129,6 @@ type toolState struct {
 	Done        bool
 }
 
-// providerToolState accumulates a gateway-executed tool call (web search or
-// page fetch) so it can be exposed as the hosted web_search_call item that the
-// client declared. The arguments arrive in fragments, just like a normal Chat
-// tool call.
-type providerToolState struct {
-	Key         int
-	OutputIndex int
-	CallID      string
-	ChatName    string
-	ItemID      string
-	Arguments   strings.Builder
-	Added       bool
-	Done        bool
-}
-
 // outputEntry pairs a completed output item with its output_index so the
 // final response lists items in wire order even when they were closed out of
 // order (interleaved thinking, text after tool calls).
@@ -172,24 +157,17 @@ type StreamState struct {
 	inlineTrimLeading bool
 	tools             map[int]*toolState
 	lastToolIndex     int
-	providerCalls     map[int]*providerToolState
-	lastProviderIndex int
-	gatewayToolCalls  map[string]int
-	gatewayToolOrder  []string
 	droppedTools      int
 }
 
 func NewStreamState(context *Context) *StreamState {
 	return &StreamState{
-		context:           context,
-		responseID:        newID("resp"),
-		model:             context.Model,
-		createdAt:         time.Now().Unix(),
-		tools:             map[int]*toolState{},
-		lastToolIndex:     -1,
-		providerCalls:     map[int]*providerToolState{},
-		lastProviderIndex: -1,
-		gatewayToolCalls:  map[string]int{},
+		context:       context,
+		responseID:    newID("resp"),
+		model:         context.Model,
+		createdAt:     time.Now().Unix(),
+		tools:         map[int]*toolState{},
+		lastToolIndex: -1,
 	}
 }
 
@@ -242,7 +220,6 @@ func (state *StreamState) ensureReasoning() []Event {
 		return nil
 	}
 	events := state.ensureStarted()
-	events = append(events, state.closeProviderTools()...)
 	// A new thinking segment after visible text (interleaved thinking) ends
 	// the current message item so output_index order matches the wire order.
 	events = append(events, state.closeMessage()...)
@@ -334,7 +311,6 @@ func (state *StreamState) closeReasoning() []Event {
 func (state *StreamState) ensureMessage(kind string) []Event {
 	events := state.ensureStarted()
 	if state.message == nil || state.message.Done {
-		events = append(events, state.closeProviderTools()...)
 		state.message = &messageState{ItemID: newID("msg"), OutputIndex: state.nextOutputIndex}
 		state.nextOutputIndex++
 		message := state.message
@@ -587,264 +563,17 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 	return current
 }
 
-func providerToolIndex(raw map[string]any) (int, bool) {
-	if value, found := raw["index"]; found {
-		index := int(intValue(value))
-		if index >= 0 {
-			return index, true
-		}
-	}
-	return 0, false
-}
-
-func (state *StreamState) isProviderToolDelta(raw map[string]any) bool {
-	if len(state.providerCalls) == 0 {
-		return false
-	}
-	index, found := providerToolIndex(raw)
-	if found {
-		current, exists := state.providerCalls[index]
-		return exists && !current.Done
-	}
-	callID := jsonx.String(raw["id"])
-	if callID == "" {
-		return false
-	}
-	for _, current := range state.providerCalls {
-		if !current.Done && current.CallID == callID {
-			return true
-		}
-	}
-	return false
-}
-
-func (state *StreamState) ensureProviderTool(raw map[string]any) *providerToolState {
-	index, found := providerToolIndex(raw)
-	callID := jsonx.String(raw["id"])
-	if !found && callID != "" {
-		for key, current := range state.providerCalls {
-			if current.CallID == callID {
-				index, found = key, true
-				break
-			}
-		}
-	}
-	if !found && callID != "" {
-		index = len(state.providerCalls)
-		for state.providerCalls[index] != nil {
-			index++
-		}
-		found = true
-	}
-	if !found {
-		if state.lastProviderIndex >= 0 {
-			index = state.lastProviderIndex
-		} else {
-			index = 0
-		}
-	}
-	state.lastProviderIndex = index
-	current := state.providerCalls[index]
-	if current == nil {
-		current = &providerToolState{
-			Key:         index,
-			OutputIndex: state.nextOutputIndex,
-			CallID:      callID,
-			ItemID:      newID("ws"),
-		}
-		state.nextOutputIndex++
-		state.providerCalls[index] = current
-	}
-	if callID != "" {
-		current.CallID = callID
-	}
-	if function := jsonx.Map(raw["function"]); function != nil {
-		if name := jsonx.String(function["name"]); name != "" {
-			current.ChatName = name
-		}
-	}
-	return current
-}
-
-func (state *StreamState) pushProviderTool(raw map[string]any) []Event {
-	current := state.ensureProviderTool(raw)
-	if function := jsonx.Map(raw["function"]); function != nil {
-		current.Arguments.WriteString(jsonx.String(function["arguments"]))
-	}
-	if current.Added || current.ChatName == "" {
+func (state *StreamState) pushToolCall(raw map[string]any) []Event {
+	if function := jsonx.Map(raw["function"]); state.context.isProviderTool(jsonx.String(function["name"])) {
+		// Provider-executed tools (web search and friends) run inside the
+		// gateway; surfacing them would hand the client a tool it never declared.
 		return nil
 	}
-	current.Added = true
-	item := providerToolItem(current.ItemID, "in_progress", current.ChatName, current.Arguments.String())
-	events := state.closeReasoning()
-	events = append(events, state.closeMessage()...)
-	events = append(events,
-		event("response.output_item.added", map[string]any{
-			"output_index": current.OutputIndex, "item": item,
-		}),
-		event("response.web_search_call.in_progress", map[string]any{
-			"item_id": current.ItemID, "output_index": current.OutputIndex,
-		}),
-	)
-	return events
-}
-
-func providerToolFetchesPage(name string) bool {
-	name = strings.ToLower(name)
-	return strings.Contains(name, "fetch") ||
-		strings.Contains(name, "browserbase") ||
-		strings.Contains(name, "open_page")
-}
-
-func providerToolURL(arguments map[string]any) string {
-	for _, key := range []string{"url", "uri", "link"} {
-		if value := jsonx.String(arguments[key]); value != "" {
-			return value
-		}
-	}
-	for _, raw := range jsonx.Slice(arguments["urls"]) {
-		if value := jsonx.String(raw); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func providerToolQueries(arguments map[string]any) []string {
-	values := jsonx.Slice(arguments["queries"])
-	queries := make([]string, 0, len(values))
-	for _, raw := range values {
-		if query := jsonx.String(raw); query != "" {
-			queries = append(queries, query)
-		}
-	}
-	return queries
-}
-
-func providerToolAction(name, rawArguments string) map[string]any {
-	arguments := jsonx.Map(parseArgumentsObject(rawArguments))
-	if providerToolFetchesPage(name) {
-		action := map[string]any{"type": "open_page"}
-		if url := providerToolURL(arguments); url != "" {
-			action["url"] = url
-		}
-		return action
-	}
-	action := map[string]any{"type": "search"}
-	if query := jsonx.String(arguments["query"]); query != "" {
-		action["query"] = query
-	}
-	if queries := providerToolQueries(arguments); len(queries) > 0 {
-		action["queries"] = queries
-	}
-	return action
-}
-
-func providerToolItem(id, status, name, rawArguments string) map[string]any {
-	return map[string]any{
-		"id":     id,
-		"type":   "web_search_call",
-		"status": status,
-		"action": providerToolAction(name, rawArguments),
-	}
-}
-
-func gatewayToolKey(name string) string {
-	key := strings.ToLower(strings.TrimSpace(name))
-	if index := strings.LastIndex(key, ":"); index >= 0 {
-		key = key[index+1:]
-	}
-	key = strings.Trim(key, "_- ")
-	if strings.Contains(key, "browserbase") || strings.Contains(key, "fetch") {
-		return "browserbase_fetch"
-	}
-	return key
-}
-
-func gatewayToolChatName(name string) string {
-	key := gatewayToolKey(name)
-	if key == "" {
-		return ""
-	}
-	return "vercel:" + key
-}
-
-// recordGatewayToolCalls captures the aggregate server-tool counts Vercel AI
-// Gateway reports in provider_metadata. The gateway executes server tools
-// internally and does not expose their arguments or results, so these counts
-// are the only signal that a search or page fetch happened.
-func (state *StreamState) recordGatewayToolCalls(payload map[string]any) {
-	if payload == nil {
-		return
-	}
-	gateway := jsonx.Map(jsonx.Map(payload["provider_metadata"])["gateway"])
-	calls := jsonx.Map(gateway["gatewayToolCalls"])
-	for name, raw := range calls {
-		key := gatewayToolKey(name)
-		count := int(intValue(raw))
-		if key == "" || count <= 0 {
-			continue
-		}
-		if _, seen := state.gatewayToolCalls[key]; !seen {
-			state.gatewayToolOrder = append(state.gatewayToolOrder, key)
-		}
-		if count > state.gatewayToolCalls[key] {
-			state.gatewayToolCalls[key] = count
-		}
-	}
-}
-
-// addGatewayToolCalls turns gateway-side counts into synthetic web_search_call
-// items. The counts do not carry the original query or URL, so the items still
-// tell the client that search or fetch activity happened without inventing
-// arguments the gateway never returned.
-func (state *StreamState) addGatewayToolCalls() {
-	if len(state.gatewayToolCalls) == 0 {
-		return
-	}
-	existing := map[string]int{}
-	for _, current := range state.providerCalls {
-		if current == nil || current.ChatName == "" {
-			continue
-		}
-		existing[gatewayToolKey(current.ChatName)]++
-	}
-	keys := append([]string(nil), state.gatewayToolOrder...)
-	sort.Strings(keys)
-	const maxSyntheticProviderCalls = 8
-	for _, key := range keys {
-		remaining := state.gatewayToolCalls[key] - existing[key]
-		if remaining <= 0 {
-			continue
-		}
-		if remaining > maxSyntheticProviderCalls {
-			remaining = maxSyntheticProviderCalls
-		}
-		for index := 0; index < remaining; index++ {
-			providerKey := 0
-			for state.providerCalls[providerKey] != nil {
-				providerKey++
-			}
-			state.providerCalls[providerKey] = &providerToolState{
-				Key:         providerKey,
-				OutputIndex: state.nextOutputIndex,
-				ItemID:      newID("ws"),
-				ChatName:    gatewayToolChatName(key),
-			}
-			state.nextOutputIndex++
-		}
-	}
-}
-
-func (state *StreamState) pushToolCall(raw map[string]any) []Event {
-	function := jsonx.Map(raw["function"])
-	if state.context.isProviderTool(jsonx.String(function["name"])) || state.isProviderToolDelta(raw) {
-		return state.pushProviderTool(raw)
-	}
-	events := state.closeProviderTools()
 	current := state.ensureTool(raw)
+	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
+	events := []Event{}
 	if !current.Added && current.ChatName != "" {
 		base := state.context.responseOutputItemFromTool(map[string]any{
 			"id":       current.CallID,
@@ -871,144 +600,53 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 	return events
 }
 
-func (state *StreamState) closePendingTools() []Event {
-	type pendingTool struct {
-		outputIndex int
-		key         int
-		provider    bool
-	}
-	pending := make([]pendingTool, 0, len(state.tools)+len(state.providerCalls))
-	for key, current := range state.tools {
-		if current != nil && !current.Done {
-			pending = append(pending, pendingTool{outputIndex: current.OutputIndex, key: key})
-		}
-	}
-	for key, current := range state.providerCalls {
-		if current != nil && !current.Done {
-			pending = append(pending, pendingTool{
-				outputIndex: current.OutputIndex,
-				key:         key,
-				provider:    true,
-			})
-		}
-	}
-	sort.SliceStable(pending, func(left, right int) bool {
-		if pending[left].outputIndex != pending[right].outputIndex {
-			return pending[left].outputIndex < pending[right].outputIndex
-		}
-		if pending[left].provider != pending[right].provider {
-			return !pending[left].provider
-		}
-		return pending[left].key < pending[right].key
-	})
-	events := []Event{}
-	for _, item := range pending {
-		if item.provider {
-			events = append(events, state.closeProviderTool(item.key)...)
-		} else {
-			events = append(events, state.closeTool(item.key)...)
-		}
-	}
-	return events
-}
-
-func (state *StreamState) closeTool(key int) []Event {
-	current := state.tools[key]
-	if current == nil || current.Done {
-		return nil
-	}
-	current.Done = true
-	if !current.Added || current.ChatName == "" {
-		state.droppedTools++
-		return nil
-	}
-	arguments, valid := canonicalToolArguments(current.Arguments.String())
-	if !valid {
-		state.droppedTools++
-		return nil
-	}
-	base := state.context.responseOutputItemFromTool(map[string]any{
-		"id":       current.CallID,
-		"function": map[string]any{"name": current.ChatName, "arguments": arguments},
-	}, "completed")
-	base["id"] = current.ItemID
-	events := []Event{}
-	switch jsonx.String(base["type"]) {
-	case "custom_tool_call":
-		events = append(events,
-			event("response.custom_tool_call_input.delta", map[string]any{
-				"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "delta": base["input"],
-			}),
-			event("response.custom_tool_call_input.done", map[string]any{
-				"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "input": base["input"],
-			}),
-		)
-	case "function_call", "tool_search_call":
-		events = append(events, event("response.function_call_arguments.done", map[string]any{
-			"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex,
-			"arguments": toolArgumentsJSON(base["arguments"]),
-		}))
-	}
-	events = append(events, event("response.output_item.done", map[string]any{
-		"output_index": current.OutputIndex, "item": base,
-	}))
-	state.addOutput(current.OutputIndex, base)
-	return events
-}
-
-func (state *StreamState) closeProviderTool(key int) []Event {
-	current := state.providerCalls[key]
-	if current == nil || current.Done {
-		return nil
-	}
-	current.Done = true
-	if current.ChatName == "" {
-		return nil
-	}
-	events := []Event{}
-	if !current.Added {
-		current.Added = true
-		item := providerToolItem(current.ItemID, "in_progress", current.ChatName, current.Arguments.String())
-		events = append(events, state.closeReasoning()...)
-		events = append(events, state.closeMessage()...)
-		events = append(events,
-			event("response.output_item.added", map[string]any{
-				"output_index": current.OutputIndex, "item": item,
-			}),
-			event("response.web_search_call.in_progress", map[string]any{
-				"item_id": current.ItemID, "output_index": current.OutputIndex,
-			}),
-		)
-	}
-	item := providerToolItem(current.ItemID, "completed", current.ChatName, current.Arguments.String())
-	if jsonx.String(jsonx.Map(item["action"])["type"]) == "search" {
-		events = append(events, event("response.web_search_call.searching", map[string]any{
-			"item_id": current.ItemID, "output_index": current.OutputIndex,
-		}))
-	}
-	events = append(events,
-		event("response.web_search_call.completed", map[string]any{
-			"item_id": current.ItemID, "output_index": current.OutputIndex,
-		}),
-		event("response.output_item.done", map[string]any{
-			"output_index": current.OutputIndex, "item": item,
-		}),
-	)
-	state.addOutput(current.OutputIndex, item)
-	return events
-}
-
-func (state *StreamState) closeProviderTools() []Event {
-	keys := make([]int, 0, len(state.providerCalls))
-	for key, current := range state.providerCalls {
-		if current != nil && !current.Done {
-			keys = append(keys, key)
-		}
+func (state *StreamState) closeTools() []Event {
+	keys := make([]int, 0, len(state.tools))
+	for key := range state.tools {
+		keys = append(keys, key)
 	}
 	sort.Ints(keys)
 	events := []Event{}
 	for _, key := range keys {
-		events = append(events, state.closeProviderTool(key)...)
+		current := state.tools[key]
+		if current.Done {
+			continue
+		}
+		current.Done = true
+		if !current.Added || current.ChatName == "" {
+			state.droppedTools++
+			continue
+		}
+		arguments, valid := canonicalToolArguments(current.Arguments.String())
+		if !valid {
+			state.droppedTools++
+			continue
+		}
+		base := state.context.responseOutputItemFromTool(map[string]any{
+			"id":       current.CallID,
+			"function": map[string]any{"name": current.ChatName, "arguments": arguments},
+		}, "completed")
+		base["id"] = current.ItemID
+		switch jsonx.String(base["type"]) {
+		case "custom_tool_call":
+			events = append(events,
+				event("response.custom_tool_call_input.delta", map[string]any{
+					"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "delta": base["input"],
+				}),
+				event("response.custom_tool_call_input.done", map[string]any{
+					"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex, "input": base["input"],
+				}),
+			)
+		case "function_call", "tool_search_call":
+			events = append(events, event("response.function_call_arguments.done", map[string]any{
+				"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex,
+				"arguments": toolArgumentsJSON(base["arguments"]),
+			}))
+		}
+		events = append(events, event("response.output_item.done", map[string]any{
+			"output_index": current.OutputIndex, "item": base,
+		}))
+		state.addOutput(current.OutputIndex, base)
 	}
 	return events
 }
@@ -1086,7 +724,6 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 	events := state.ensureStarted()
 	delta := jsonx.Map(choice["delta"])
 	if delta != nil {
-		state.recordGatewayToolCalls(delta)
 		if reasoning := reasoningDeltaText(delta); reasoning != "" {
 			events = append(events, state.pushReasoning(reasoning)...)
 		}
@@ -1113,9 +750,6 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 				}
 			}
 		}
-	}
-	if message := jsonx.Map(choice["message"]); message != nil {
-		state.recordGatewayToolCalls(message)
 	}
 	if finishReason := jsonx.String(choice["finish_reason"]); finishReason != "" {
 		state.finishReason = finishReason
@@ -1173,10 +807,9 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 		return state.Fail(readErr.Error(), "stream_error")
 	}
 	events := state.flushInlineThink()
-	state.addGatewayToolCalls()
 	events = append(events, state.closeReasoning()...)
 	events = append(events, state.closeMessage()...)
-	events = append(events, state.closePendingTools()...)
+	events = append(events, state.closeTools()...)
 
 	if state.droppedTools > 0 {
 		return append(events, state.Fail(
@@ -1193,7 +826,7 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 			if strings.TrimSpace(textFromParts(entry.item["content"])) != "" {
 				hasMessage = true
 			}
-		case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			hasToolCall = true
 		}
 	}

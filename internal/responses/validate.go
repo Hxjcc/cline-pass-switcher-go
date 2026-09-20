@@ -52,7 +52,7 @@ func validateRequestCapabilities(body map[string]any) error {
 			if err := validateMessageContent([]any{item}, path); err != nil {
 				return err
 			}
-		case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 		case "function_call_output", "custom_tool_call_output":
 			if err := validateToolOutputMedia(item["output"], path+".output", 0); err != nil {
 				return err
