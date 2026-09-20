@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { errorMessage } from "@/lib/api"
+import { pinReasonLabel } from "@/lib/format"
 import type { ModelsResponse, ProbeResponse } from "@/types"
 
 export function CatalogPanel({
@@ -65,7 +66,8 @@ export function CatalogPanel({
         <div className="grid max-h-[680px] gap-2 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
           {models.map((modelID) => {
             const model = data.subscription.find((item) => item.id === modelID)
-            const pinnable = modelID.includes(":free")
+            const pinnable = model?.meta?.pinnable === true
+            const pinDisabled = model?.meta?.pinnable === false
             return (
               <div
                 key={modelID}
@@ -77,6 +79,15 @@ export function CatalogPanel({
                 {pinnable && (
                   <Badge variant="default" className="h-5 px-1.5 text-2xs">
                     可精确钉住
+                  </Badge>
+                )}
+                {pinDisabled && (
+                  <Badge
+                    variant="outline"
+                    className="h-5 px-1.5 text-2xs"
+                    title={pinReasonLabel(model?.meta?.pinReason)}
+                  >
+                    钉住不可用
                   </Badge>
                 )}
                 {model?.meta?.lastProvider && (

@@ -54,6 +54,7 @@ export interface ModelMeta {
   capabilityUpdatedAt?: number
   pipeline?: "direct" | "planner"
   pinnable?: boolean
+  pinReason?: string
   availableProviders?: string[]
   canonicalSlug?: string
   openrouterSlug?: string
@@ -225,6 +226,8 @@ export interface TestResponse {
 
 export interface ValidationResponse {
   ok: boolean
+  supported?: boolean
+  reason?: string
   summary: Record<UpstreamState, number>
   results: Record<string, UpstreamStatus>
   upstreams: string[]

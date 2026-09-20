@@ -348,7 +348,8 @@ func (s *Server) handleValidate(writer http.ResponseWriter, request *http.Reques
 	}
 	meta := s.store.ModelMeta(body.Model)
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok": true, "summary": result.Summary, "results": result.Results, "upstreams": meta.Upstreams,
+		"ok": true, "supported": result.Supported, "reason": result.Reason,
+		"summary": result.Summary, "results": result.Results, "upstreams": meta.Upstreams,
 	})
 }
 

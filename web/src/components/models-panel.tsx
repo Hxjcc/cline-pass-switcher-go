@@ -19,6 +19,7 @@ import {
   Sparkles,
   Timer,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -60,6 +61,7 @@ import type { ProbeBatchResult } from "@/lib/probe-batch"
 import {
   formatTime,
   normalizeModelConfig,
+  pinReasonLabel,
   pipelineHint,
   pipelineLabel,
   providerLabel,
@@ -74,6 +76,7 @@ import type {
   ProbeResponse,
   SubscriptionModel,
   TestResponse,
+  ValidationResponse,
 } from "@/types"
 
 interface ModelsPanelProps {
@@ -84,7 +87,7 @@ interface ModelsPanelProps {
   /** Non-null while a batch is running, so the button can show progress. */
   probeAllProgress: { done: number; total: number } | null
   onCancelProbeAll: () => void
-  onValidate: (modelID: string) => Promise<void>
+  onValidate: (modelID: string) => Promise<ValidationResponse>
   onTest: (modelID: string, upstreams: string[], exclude: string[]) => Promise<TestResponse>
   onUpdateConfig: (modelID: string, config: ModelConfig) => Promise<void>
   onFetchOfficial: () => Promise<OfficialResponse>
@@ -220,8 +223,12 @@ export function ModelsPanel({
   const validate = async (modelID: string) => {
     setModelBusy(modelID, "validate")
     try {
-      await onValidate(modelID)
-      toast.success("渠道校验已完成")
+      const result = await onValidate(modelID)
+      if (result.supported === false) {
+        toast.warning(`跳过校验：${pinReasonLabel(result.reason)}`)
+      } else {
+        toast.success("渠道校验已完成")
+      }
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -240,7 +247,8 @@ export function ModelsPanel({
       } else if (!config.upstreams.length || result.actual === config.upstreams[0]) {
         toast.success(`实际命中 ${providerLabel(result.actual) || "未知渠道"}`)
       } else {
-        toast.warning(`实际命中 ${providerLabel(result.actual) || "未知渠道"}，未命中首选`)
+        const ignored = model.meta?.pinnable === false ? "（网关已忽略钉住）" : ""
+        toast.warning(`实际命中 ${providerLabel(result.actual) || "未知渠道"}，未命中首选${ignored}`)
       }
     } catch (error) {
       toast.error(errorMessage(error))
@@ -283,6 +291,9 @@ export function ModelsPanel({
   const togglePriority = (model: SubscriptionModel, upstreamSlug: string) => {
     const config = normalizeModelConfig(model.config)
     const selected = config.upstreams.includes(upstreamSlug)
+    // Keep removing stale pins possible, but never add a new one while the
+    // gateway ignores the preference.
+    if (model.meta?.pinnable === false && !selected) return
     const upstreams = selected
       ? config.upstreams.filter((value) => value !== upstreamSlug)
       : [...config.upstreams, upstreamSlug]
@@ -293,6 +304,8 @@ export function ModelsPanel({
   const toggleExclude = (model: SubscriptionModel, upstreamSlug: string) => {
     const config = normalizeModelConfig(model.config)
     const excluded = config.exclude.includes(upstreamSlug)
+    // As with pins, allow cleanup of an old exclusion but not new ones.
+    if (model.meta?.pinnable === false && !excluded) return
     const exclude = excluded
       ? config.exclude.filter((value) => value !== upstreamSlug)
       : [...config.exclude, upstreamSlug]
@@ -301,6 +314,7 @@ export function ModelsPanel({
   }
 
   const movePriority = (model: SubscriptionModel, upstreamSlug: string, offset: number) => {
+    if (model.meta?.pinnable === false) return
     const config = normalizeModelConfig(model.config)
     const upstreams = [...config.upstreams]
     const index = upstreams.indexOf(upstreamSlug)
@@ -311,6 +325,7 @@ export function ModelsPanel({
   }
 
   const bulkAll = (model: SubscriptionModel) => {
+    if (model.meta?.pinnable === false) return
     const config = normalizeModelConfig(model.config)
     const upstreams = orderedUpstreams(model).filter((value) => !config.exclude.includes(value))
     void updateConfig(model.id, { ...config, upstreams })
@@ -405,6 +420,15 @@ export function ModelsPanel({
                 const isExpanded = expanded === model.id
                 const action = busy[model.id]
                 const result = testResults[model.id]
+                const pinDisabled = model.meta?.pinnable === false
+                const pinnedFirst = config.upstreams[0]
+                const actualProvider = model.meta?.lastProvider
+                const pinMismatch = Boolean(
+                  pinnedFirst &&
+                    actualProvider &&
+                    pinnedFirst !== actualProvider &&
+                    (pinDisabled || config.pinMode === "strict"),
+                )
                 return (
                   <Fragment key={model.id}>
                     <TableRow data-state={isExpanded ? "selected" : undefined}>
@@ -459,7 +483,11 @@ export function ModelsPanel({
                           </TooltipTrigger>
                           <TooltipContent className="max-w-72">
                             {model.meta?.pipeline || model.meta?.probedAt
-                              ? pipelineHint(model.meta?.pipeline)
+                              ? pipelineHint(
+                                  model.meta?.pipeline,
+                                  model.meta?.pinnable,
+                                  model.meta?.pinReason,
+                                )
                               : "执行探测后才能识别这个模型走的线路。"}
                           </TooltipContent>
                         </Tooltip>
@@ -469,17 +497,31 @@ export function ModelsPanel({
                       </TableCell>
                       <TableCell>
                         {model.meta?.lastProvider ? (
-                          <Badge
-                            variant="outline"
-                            className={cn(chipClass, "bg-muted/40 gap-1.5 font-normal")}
-                          >
-                            <ProviderName slug={model.meta.lastProvider} className="font-medium" />
-                            <span aria-hidden className="bg-border h-3 w-px" />
-                            <Timer className="text-muted-foreground" />
-                            <span className="text-muted-foreground font-mono tabular-nums">
-                              {shortDuration(model.meta.lastMs)}
-                            </span>
-                          </Badge>
+                          <div className="flex flex-wrap items-center gap-1">
+                            {pinMismatch && (
+                              <Badge
+                                variant="destructive"
+                                className={chipClass}
+                                title={`首选 ${pinnedFirst}，最近实际命中 ${actualProvider}${
+                                  pinDisabled ? "；网关当前忽略钉住" : ""
+                                }`}
+                              >
+                                <TriangleAlert data-icon="inline-start" />
+                                未命中
+                              </Badge>
+                            )}
+                            <Badge
+                              variant="outline"
+                              className={cn(chipClass, "bg-muted/40 gap-1.5 font-normal")}
+                            >
+                              <ProviderName slug={model.meta.lastProvider} className="font-medium" />
+                              <span aria-hidden className="bg-border h-3 w-px" />
+                              <Timer className="text-muted-foreground" />
+                              <span className="text-muted-foreground font-mono tabular-nums">
+                                {shortDuration(model.meta.lastMs)}
+                              </span>
+                            </Badge>
+                          </div>
                         ) : (
                           <span className="text-muted-foreground">尚无请求</span>
                         )}
@@ -536,8 +578,16 @@ export function ModelsPanel({
                             <FlaskConical className={action === "test" ? "animate-pulse" : ""} />
                           </RowAction>
                           <RowAction
-                            label="校验全部渠道"
-                            disabled={action === "validate" || !model.meta?.upstreams?.length}
+                            label={
+                              pinDisabled
+                                ? `不可校验：${pinReasonLabel(model.meta?.pinReason)}`
+                                : "校验全部渠道"
+                            }
+                            disabled={
+                              action === "validate" ||
+                              !model.meta?.upstreams?.length ||
+                              pinDisabled
+                            }
                             onClick={() => validate(model.id)}
                           >
                             <ShieldCheck
@@ -558,6 +608,23 @@ export function ModelsPanel({
                       <TableRow>
                         <TableCell colSpan={7} className="bg-muted/25 p-0 whitespace-normal">
                           <div className="space-y-4 p-4">
+                            {pinDisabled && (
+                              <Alert
+                                variant={
+                                  model.meta?.pinReason === "single_provider"
+                                    ? "default"
+                                    : "destructive"
+                                }
+                              >
+                                <TriangleAlert />
+                                <AlertTitle>{pinReasonLabel(model.meta?.pinReason)}</AlertTitle>
+                                <AlertDescription>
+                                  {model.meta?.pinReason === "single_provider"
+                                    ? "这个模型只有一个候选渠道，没有可钉或可校验的其他渠道。"
+                                    : "请求仍会正常发送，但实际渠道由 Cline 决定；下面的钉住、排除、排序和校验都不会生效。"}
+                                </AlertDescription>
+                              </Alert>
+                            )}
                             <div className="flex flex-wrap items-center gap-2">
                               <div className="flex items-center gap-2">
                                 <span className="text-muted-foreground text-sm">模式</span>
@@ -571,7 +638,7 @@ export function ModelsPanel({
                                     })
                                   }
                                 >
-                                  <SelectTrigger size="sm" className="w-40">
+                                  <SelectTrigger size="sm" className="w-40" disabled={pinDisabled}>
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -595,7 +662,7 @@ export function ModelsPanel({
                                     })
                                   }
                                 >
-                                  <SelectTrigger size="sm" className="w-40">
+                                  <SelectTrigger size="sm" className="w-40" disabled={pinDisabled}>
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -607,7 +674,12 @@ export function ModelsPanel({
                                   </SelectContent>
                                 </Select>
                               </div>
-                              <Button variant="outline" size="sm" onClick={() => bulkAll(model)}>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={pinDisabled}
+                                onClick={() => bulkAll(model)}
+                              >
                                 <ListRestart data-icon="inline-start" />
                                 全部加入
                               </Button>
@@ -712,7 +784,9 @@ export function ModelsPanel({
                                                     variant="ghost"
                                                     size="icon-sm"
                                                     disabled={
-                                                      priorityIndex === 0 || action === "save"
+                                                      priorityIndex === 0 ||
+                                                      action === "save" ||
+                                                      pinDisabled
                                                     }
                                                     onClick={() =>
                                                       movePriority(model, upstreamSlug, -1)
@@ -734,7 +808,8 @@ export function ModelsPanel({
                                                     disabled={
                                                       priorityIndex ===
                                                         config.upstreams.length - 1 ||
-                                                      action === "save"
+                                                      action === "save" ||
+                                                      pinDisabled
                                                     }
                                                     onClick={() =>
                                                       movePriority(model, upstreamSlug, 1)
@@ -753,7 +828,7 @@ export function ModelsPanel({
                                           variant={pinned ? "ghost" : "outline"}
                                           size="sm"
                                           className="w-20"
-                                          disabled={action === "save"}
+                                          disabled={action === "save" || (pinDisabled && !pinned)}
                                           onClick={() => togglePriority(model, upstreamSlug)}
                                         >
                                           {pinned ? "取消优先" : "设为优先"}
@@ -769,7 +844,7 @@ export function ModelsPanel({
                                                     ? "text-destructive hover:text-destructive"
                                                     : "text-muted-foreground"
                                                 }
-                                                disabled={action === "save"}
+                                                disabled={action === "save" || (pinDisabled && !excluded)}
                                                 onClick={() => toggleExclude(model, upstreamSlug)}
                                                 aria-label={excluded ? "取消排除" : "排除渠道"}
                                               />

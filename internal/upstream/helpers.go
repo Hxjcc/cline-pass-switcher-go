@@ -390,12 +390,22 @@ func classifyUpstreamError(message string) string {
 	}
 }
 
+// pinProbeSlug is deliberately syntactically valid: some gateways drop
+// underscore-shaped probe names before routing, which would make the probe
+// look like "the preference is ignored" even when it is still honoured.
+const pinProbeSlug = "zzz-not-a-provider"
+
 var (
 	availableProvidersRE = regexp.MustCompile(`(?i)Available providers are:\s*([^.]+)`)
 	slugTokenRE          = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// Provider names may carry dots ("Z.AI"), so the winner token cannot be
 	// limited to word characters and dashes.
 	tier0RE = regexp.MustCompile(`([\w.-]+) won tier 0 over ([^."]+)`)
+	// A routing rejection proves the gateway read the client's provider
+	// preference. The phrases cover both the planner and OpenRouter shapes.
+	routingRejectionRE  = regexp.MustCompile(`(?i)no (?:allowed|available) providers|available providers are|provider\.only|requested_providers|no provider matches`)
+	planOrderPrefix     = "Total execution order:"
+	planProvidersPrefix = "System credentials planned for:"
 )
 
 func parseAvailableProviders(message string) []string {
@@ -428,6 +438,70 @@ func parseTier0(plan string) []string {
 		}
 	}
 	return strx.Unique(result)
+}
+
+// parsePlannedProviders extracts the channel order Cline's planner reports in
+// provider_metadata.gateway.routing.planningReasoning. It is the most reliable
+// channel source when the gateway stops honouring providerOptions:
+// fallbacksAvailable deliberately omits the chain head.
+func parsePlannedProviders(plan string) []string {
+	if plan == "" {
+		return nil
+	}
+	if order := planSegment(plan, planOrderPrefix); order != "" {
+		order = strings.ReplaceAll(order, "->", "→")
+		if providers := parsePlanTokens(order, "→"); len(providers) > 0 {
+			return providers
+		}
+	}
+	if planned := planSegment(plan, planProvidersPrefix); planned != "" {
+		// The sentence continues after the list. Planner tokens are slugs, so
+		// the first period safely ends the provider list.
+		if dot := strings.Index(planned, "."); dot >= 0 {
+			planned = planned[:dot]
+		}
+		if providers := parsePlanTokens(planned, ","); len(providers) > 0 {
+			return providers
+		}
+	}
+	return nil
+}
+
+func planSegment(plan, prefix string) string {
+	index := strings.Index(plan, prefix)
+	if index < 0 {
+		index = strings.Index(strings.ToLower(plan), strings.ToLower(prefix))
+		if index < 0 {
+			return ""
+		}
+	}
+	segment := plan[index+len(prefix):]
+	if newline := strings.IndexAny(segment, "\r\n"); newline >= 0 {
+		segment = segment[:newline]
+	}
+	return strings.TrimSpace(segment)
+}
+
+func parsePlanTokens(value, separator string) []string {
+	var result []string
+	for _, part := range strings.Split(value, separator) {
+		if token := normalisePlanToken(part); token != "" {
+			result = append(result, token)
+		}
+	}
+	return strx.Unique(result)
+}
+
+func normalisePlanToken(value string) string {
+	token := strings.ToLower(strings.TrimSpace(value))
+	if index := strings.Index(token, "("); index >= 0 {
+		token = token[:index]
+	}
+	token = strings.Trim(token, " .,;:'\"")
+	if !slugTokenRE.MatchString(token) {
+		return ""
+	}
+	return token
 }
 
 func (s *Service) fetchJSON(ctx context.Context, method, endpoint string, headers map[string]string, body any, timeout time.Duration) (int, any, error) {

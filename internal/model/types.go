@@ -146,6 +146,7 @@ type ModelMeta struct {
 	CapabilityUpdatedAt int64                     `json:"capabilityUpdatedAt,omitempty"`
 	Pipeline            string                    `json:"pipeline,omitempty"`
 	Pinnable            bool                      `json:"pinnable,omitempty"`
+	PinReason           string                    `json:"pinReason,omitempty"`
 	AvailableProviders  []string                  `json:"availableProviders,omitempty"`
 	CanonicalSlug       string                    `json:"canonicalSlug,omitempty"`
 	OpenRouterSlug      string                    `json:"openrouterSlug,omitempty"`

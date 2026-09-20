@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func TestValidateUpstreamsRecordsLatency(t *testing.T) {
 	st := newStreamTestStore(t, upstreamServer.URL)
 	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
 		meta.Upstreams = []string{"talker", "thinker"}
+		meta.Pinnable = true
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +46,9 @@ func TestValidateUpstreamsRecordsLatency(t *testing.T) {
 	result, err := New(st).ValidateUpstreams(t.Context(), "cline-pass/test")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Supported {
+		t.Fatalf("pinnable validation should be supported: %#v", result)
 	}
 	if result.Summary["ok"] != 2 {
 		t.Fatalf("both channels should validate as ok: %#v", result.Summary)
@@ -63,5 +68,50 @@ func TestValidateUpstreamsRecordsLatency(t *testing.T) {
 	stored := st.Metadata().Models["cline-pass/test"].UpstreamStatus["talker"]
 	if stored.MS != result.Results["talker"].MS {
 		t.Fatalf("latency should be persisted with the status: %#v", stored)
+	}
+}
+
+func TestValidateUpstreamsSkipsWhenNotPinnable(t *testing.T) {
+	var requests atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+	}))
+	defer upstreamServer.Close()
+
+	st := newStreamTestStore(t, upstreamServer.URL)
+	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.Upstreams = []string{"a", "b"}
+		meta.Pinnable = false
+		meta.PinReason = pinReasonGatewayIgnores
+		meta.UpstreamStatus = map[string]model.UpstreamStatus{
+			"a": {Status: "ok"},
+			"b": {Status: "ok"},
+		}
+		meta.ValidatedAt = 123
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := New(st).ValidateUpstreams(t.Context(), "cline-pass/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Supported {
+		t.Fatalf("validation should be marked unsupported: %#v", result)
+	}
+	if result.Reason != pinReasonGatewayIgnores {
+		t.Fatalf("reason = %q, want %q", result.Reason, pinReasonGatewayIgnores)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("unpinnable validation must not call upstream, requests = %d", requests.Load())
+	}
+	if len(result.Results) != 0 || len(result.Summary) != 0 {
+		t.Fatalf("unpinnable validation should return empty results: %#v", result)
+	}
+	stored := st.Metadata().Models["cline-pass/test"]
+	if stored.ValidatedAt != 0 || len(stored.UpstreamStatus) != 0 {
+		t.Fatalf("stale validation state should be cleared: %#v", stored)
 	}
 }

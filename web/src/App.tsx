@@ -601,9 +601,7 @@ function App() {
                 onProbeAll={probeAll}
                 probeAllProgress={batchProbe}
                 onCancelProbeAll={cancelProbeAll}
-                onValidate={async (modelID) => {
-                  await validate(modelID)
-                }}
+                onValidate={validate}
                 onTest={testModel}
                 onUpdateConfig={updateModelConfig}
                 onFetchOfficial={fetchOfficial}

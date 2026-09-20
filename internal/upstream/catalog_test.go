@@ -82,7 +82,10 @@ func TestProbeModelHarvestsPlannerChannels(t *testing.T) {
 	if meta.Pipeline != "planner" || !meta.Pinnable {
 		t.Fatalf("pipeline = %q, pinnable = %v", meta.Pipeline, meta.Pinnable)
 	}
-	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"alpha", "beta", "atlas-cloud"})
+	if meta.PinReason != "" {
+		t.Fatalf("pinReason = %q, want empty for a supported pin", meta.PinReason)
+	}
+	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"alpha", "beta", "atlas-cloud", "z-ai"})
 	assertSameStringSet(t, "availableProviders", meta.AvailableProviders, []string{"alpha", "beta"})
 	// The gateway names the winner ("Z.AI"); pins and traces use its slug.
 	if meta.LastProvider != "z-ai" {
@@ -94,6 +97,77 @@ func TestProbeModelHarvestsPlannerChannels(t *testing.T) {
 	if meta.ProbedAt == 0 {
 		t.Fatalf("probe timestamp missing: %#v", meta)
 	}
+}
+
+// When the gateway accepts an impossible provider, the planner ignored the
+// preference. The channel list still has to come from planningReasoning, and
+// the model must not be advertised as pinnable.
+func TestProbeModelMarksPlannerUnpinnableWhenPreferenceIgnored(t *testing.T) {
+	var probes, preferenceProbes atomic.Int32
+	plan := "System credentials planned for: deepseek, alibaba, baseten, fireworks. Total execution order: deepseek(system) → alibaba(system) → baseten(system) → fireworks(system)"
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if _, probing := decodeRequestBody(t, request)["providerOptions"]; probing {
+			preferenceProbes.Add(1)
+			_, _ = io.WriteString(writer, `{"id":"chatcmpl-2","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+			return
+		}
+		probes.Add(1)
+		_, _ = io.WriteString(writer, `{"id":"chatcmpl-1","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK","provider_metadata":{"gateway":{"routing":{"canonicalSlug":"deepseek/deepseek-v4.1-flash","finalProvider":"deepseek","fallbacksAvailable":["alibaba","baseten","fireworks"],"planningReasoning":"`+plan+`"}}}},"finish_reason":"stop"}]}`)
+	}))
+	defer upstreamServer.Close()
+
+	result, err := New(newStreamTestStore(t, upstreamServer.URL)).ProbeModel(t.Context(), "cline-pass/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probes.Load() != 1 || preferenceProbes.Load() != 1 {
+		t.Fatalf("probe calls = %d, preference probes = %d", probes.Load(), preferenceProbes.Load())
+	}
+	meta := result.ModelMeta
+	if meta.Pipeline != "planner" || meta.Pinnable {
+		t.Fatalf("pipeline = %q, pinnable = %v", meta.Pipeline, meta.Pinnable)
+	}
+	if meta.PinReason != pinReasonGatewayIgnores {
+		t.Fatalf("pinReason = %q, want %q", meta.PinReason, pinReasonGatewayIgnores)
+	}
+	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"deepseek", "alibaba", "baseten", "fireworks"})
+	if meta.LastProvider != "deepseek" {
+		t.Fatalf("lastProvider = %q, want deepseek", meta.LastProvider)
+	}
+	if len(meta.AvailableProviders) != 0 {
+		t.Fatalf("availableProviders = %#v, want empty when the probe is ignored", meta.AvailableProviders)
+	}
+}
+
+// A planner plan whose execution order has only one provider has nothing to
+// pin. It must be reported as single-provider rather than as an ignored pin.
+func TestProbeModelMarksSingleProviderPlannerAsNotPinnable(t *testing.T) {
+	var probes atomic.Int32
+	plan := "Routed via VMC 'deepseek-v4-flash-contributor-fallbacks' → private/deepseek-v4-flash-contributor. System credentials planned for: openai-compatible-private. Total execution order: openai-compatible-private(system)"
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if _, probing := decodeRequestBody(t, request)["providerOptions"]; probing {
+			probes.Add(1)
+			_, _ = io.WriteString(writer, `{"id":"chatcmpl-2","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"id":"chatcmpl-1","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK","provider_metadata":{"gateway":{"routing":{"canonicalSlug":"vmc/deepseek-v4-flash-contributor-fallbacks","finalProvider":"openai-compatible-private","fallbacksAvailable":[],"planningReasoning":"`+plan+`"}}}},"finish_reason":"stop"}]}`)
+	}))
+	defer upstreamServer.Close()
+
+	result, err := New(newStreamTestStore(t, upstreamServer.URL)).ProbeModel(t.Context(), "cline-pass/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probes.Load() != 1 {
+		t.Fatalf("preference probes = %d, want 1", probes.Load())
+	}
+	meta := result.ModelMeta
+	if meta.Pinnable || meta.PinReason != pinReasonSingleProvider {
+		t.Fatalf("pinnable = %v, pinReason = %q, want single-provider", meta.Pinnable, meta.PinReason)
+	}
+	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"openai-compatible-private"})
 }
 
 // A direct-pipeline completion names its provider and canonical model, which
@@ -123,10 +197,10 @@ func TestProbeModelResolvesDirectProviderAgainstOpenRouterEndpoints(t *testing.T
 		// A direct-pipeline probe also harvests the channel list, with the same
 		// impossible pin expressed through the "provider" field.
 		if provider, ok := decodeRequestBody(t, request)["provider"].(map[string]any); ok {
-			if only, _ := provider["only"].([]any); len(only) == 1 && only[0] == "__probe__" {
+			if only, _ := provider["only"].([]any); len(only) == 1 && only[0] == pinProbeSlug {
 				harvests.Add(1)
 				writer.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(writer, `{"error":{"message":"no provider matches __probe__","type":"upstream_error"}}`)
+				_, _ = io.WriteString(writer, `{"error":{"message":"no provider matches `+pinProbeSlug+`","type":"upstream_error"}}`)
 				return
 			}
 		}
@@ -159,6 +233,9 @@ func TestProbeModelResolvesDirectProviderAgainstOpenRouterEndpoints(t *testing.T
 	}
 	if meta.LastProvider != "z-ai" {
 		t.Fatalf("lastProvider = %q, want z-ai", meta.LastProvider)
+	}
+	if !meta.Pinnable || meta.PinReason != "" {
+		t.Fatalf("direct pin should be supported: pinnable=%v reason=%q", meta.Pinnable, meta.PinReason)
 	}
 	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"z-ai", "atlas-cloud"})
 	if detail := meta.UpstreamDetail["z-ai"]; detail.Name != "Z.AI" || detail.Context != 200000 || detail.Uptime != 99 || detail.Endpoints != 1 {

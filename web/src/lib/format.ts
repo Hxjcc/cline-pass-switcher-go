@@ -123,7 +123,40 @@ export function providerHint(slug?: string): string {
   return entry ? `${slug}\n${entry.hint}` : ""
 }
 
-export function pipelineHint(pipeline?: string): string {
+// Pin support is discovered by probing the gateway, not by assuming that a
+// pipeline name implies it works. Keep the backend reason codes readable.
+export function pinReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "gateway_ignores_provider_preferences":
+      return "网关已忽略上游偏好"
+    case "single_provider":
+      return "只有一个候选渠道，无需钉住"
+    case "probe_failed":
+      return "无法确认网关是否支持钉住"
+    case "no_channels":
+      return "没有可用渠道"
+    case "unsupported_pipeline":
+      return "无法识别路由线路"
+    default:
+      return reason ? `当前不可钉（${reason}）` : "当前不可钉"
+  }
+}
+
+export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: string): string {
+  if (pinnable === false && pinReason === "single_provider") {
+    return "这个模型只有一个候选渠道，无需钉住，也没有其他渠道可校验。"
+  }
+  if (pinnable === false) {
+    const reason = pinReasonLabel(pinReason)
+    switch (pipeline) {
+      case "direct":
+        return `Cline 经 OpenRouter 路由，但${reason}；钉住、排除、排序与校验不会生效。`
+      case "planner":
+        return `Cline 经 Vercel AI Gateway 路由，但${reason}；钉住、排除、排序与校验不会生效。`
+      default:
+        return `${reason}；无法确认钉住、排除、排序与校验是否生效。`
+    }
+  }
   if (pipeline === "direct") {
     return "Cline 网关经 OpenRouter 路由到各渠道，钉住与排序通过 provider 字段下发。"
   }

@@ -56,9 +56,27 @@ type ProbeResult struct {
 	model.ModelMeta
 }
 
+// routingProbe records what the impossible-provider probe proved about the
+// gateway's support for the pipeline's routing preference.
+type routingProbe struct {
+	providers []string
+	supported bool
+	ignored   bool
+}
+
+const (
+	pinReasonGatewayIgnores = "gateway_ignores_provider_preferences"
+	pinReasonSingleProvider = "single_provider"
+	pinReasonProbeFailed    = "probe_failed"
+	pinReasonNoChannels     = "no_channels"
+	pinReasonUnsupported    = "unsupported_pipeline"
+)
+
 type ValidationResult struct {
-	Summary map[string]int
-	Results map[string]model.UpstreamStatus
+	Supported bool
+	Reason    string
+	Summary   map[string]int
+	Results   map[string]model.UpstreamStatus
 }
 
 type OfficialResult struct {
@@ -112,6 +130,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 			map[string]any{"role": "user", "content": "Reply with the word OK"},
 		},
 		"max_tokens": 256,
+		"stream":     false,
 	}
 	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
 	if err != nil {
@@ -122,9 +141,12 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		return ProbeResult{}, errors.New(message)
 	}
 	routing := ParseRouting(root)
-	var harvested []string
+	var planned []string
+	var probe routingProbe
+	var probeErr error
 	if routing.Pipeline != "" {
-		harvested = s.harvestAvailableProviders(ctx, modelID, routing.Pipeline)
+		planned = parsePlannedProviders(routing.Plan)
+		probe, probeErr = s.probeRoutingPreference(ctx, modelID, routing.Pipeline)
 	}
 	var endpoints []model.UpstreamDetail
 	orSlug := ""
@@ -141,13 +163,32 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	}
 	var upstreams []string
 	if routing.Pipeline == "planner" {
-		upstreams = strx.Unique(append(append([]string{}, harvested...), routing.Fallbacks...))
+		finalSlug := CanonicalProvider(model.ModelMeta{Upstreams: planned, UpstreamDetail: detail}, routing.FinalProvider)
+		upstreams = strx.Unique(append(append(append(append([]string{}, planned...), finalSlug), routing.Fallbacks...), probe.providers...))
 	} else {
 		keys := make([]string, 0, len(detail))
 		for key := range detail {
 			keys = append(keys, key)
 		}
-		upstreams = strx.Unique(append(append(routing.Fallbacks, harvested...), keys...))
+		upstreams = strx.Unique(append(append(append(append([]string{}, routing.Fallbacks...), routing.FinalProvider), probe.providers...), keys...))
+	}
+	pinnable := false
+	pinReason := ""
+	switch {
+	case routing.Pipeline == "":
+		pinReason = pinReasonUnsupported
+	case routing.Pipeline == "planner" && (len(planned) == 1 || (len(planned) == 0 && len(upstreams) == 1)):
+		pinReason = pinReasonSingleProvider
+	case len(upstreams) == 0:
+		pinReason = pinReasonNoChannels
+	case probeErr != nil:
+		pinReason = pinReasonProbeFailed
+	case probe.supported:
+		pinnable = true
+	case probe.ignored:
+		pinReason = pinReasonGatewayIgnores
+	default:
+		pinReason = pinReasonProbeFailed
 	}
 	tier0 := strx.Unique(append(previous.Tier0, parseTier0(routing.Plan)...))
 	// The channel list was just (re)built; resolve the hit against it rather
@@ -156,8 +197,9 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	meta, err := s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
 		current.OK = true
 		current.Pipeline = routing.Pipeline
-		current.Pinnable = routing.Pipeline != ""
-		current.AvailableProviders = strx.Unique(append(harvested, current.AvailableProviders...))
+		current.Pinnable = pinnable
+		current.PinReason = pinReason
+		current.AvailableProviders = strx.Unique(append(probe.providers, current.AvailableProviders...))
 		current.CanonicalSlug = routing.CanonicalSlug
 		current.OpenRouterSlug = orSlug
 		current.UpstreamDetail = detail
@@ -166,6 +208,12 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		current.LastProvider = routing.FinalProvider
 		current.LastMS = time.Since(started).Milliseconds()
 		current.ProbedAt = time.Now().UnixMilli()
+		if !pinnable {
+			// A previous probe may have stored a green board from when the
+			// gateway still honoured pins; stale data is worse than none.
+			current.UpstreamStatus = nil
+			current.ValidatedAt = 0
+		}
 	})
 	if err != nil {
 		return ProbeResult{}, err
@@ -173,41 +221,56 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	return ProbeResult{OK: true, MS: time.Since(started).Milliseconds(), ModelMeta: meta}, nil
 }
 
-func (s *Service) harvestAvailableProviders(ctx context.Context, modelID, pipeline string) []string {
+// probeRoutingPreference checks whether the upstream still honours the
+// provider-routing field for the model's pipeline. A routing rejection proves
+// the field is read and also yields the candidate list; a normal completion
+// means the gateway silently ignored the impossible pin.
+func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline string) (routingProbe, error) {
 	account := s.store.PickAccount()
 	if account.Key == "" {
-		return nil
+		return routingProbe{}, errNoAccount
 	}
 	cfg := s.store.Config()
-	base := map[string]any{
+	body := map[string]any{
 		"model": modelID,
 		"messages": []any{
 			map[string]any{"role": "user", "content": "hi"},
 		},
 		"max_tokens": 16,
+		"stream":     false,
 	}
 	if pipeline == "planner" {
-		base["providerOptions"] = map[string]any{"gateway": map[string]any{"only": []string{"__probe__"}}}
+		body["providerOptions"] = map[string]any{"gateway": map[string]any{"only": []string{pinProbeSlug}}}
 	} else {
-		base["provider"] = map[string]any{"only": []string{"__probe__"}}
+		body["provider"] = map[string]any{"only": []string{pinProbeSlug}}
 	}
-	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), base, 60*time.Second)
+	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 60*time.Second)
 	if err != nil {
-		return nil
+		return routingProbe{}, err
 	}
-	message := extractError(jsonx.Map(raw))
+	root := jsonx.Map(raw)
+	if hasChoices(root) {
+		// The impossible provider was accepted, so the preference was ignored
+		// rather than enforced.
+		return routingProbe{ignored: true}, nil
+	}
+	message := extractError(root)
+	var providers []string
 	if pipeline == "planner" {
-		return parseAvailableProviders(message)
+		providers = parseAvailableProviders(message)
+	} else if index := strings.Index(message, "{"); index >= 0 {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(message[index:]), &parsed); err == nil {
+			providers = getStringSlice(getMap(getMap(parsed, "error"), "metadata"), "available_providers")
+		}
 	}
-	index := strings.Index(message, "{")
-	if index < 0 {
-		return nil
+	if len(providers) > 0 || routingRejectionRE.MatchString(message) {
+		return routingProbe{providers: providers, supported: true}, nil
 	}
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(message[index:]), &parsed); err != nil {
-		return nil
-	}
-	return getStringSlice(getMap(getMap(parsed, "error"), "metadata"), "available_providers")
+	// Any other response - a 200 completion, an empty-content error, a model
+	// error that is not about provider routing - means the impossible provider
+	// did not trigger a routing rejection, so the preference was not enforced.
+	return routingProbe{ignored: true}, nil
 }
 
 func (s *Service) orModelList(ctx context.Context) []string {
@@ -292,6 +355,26 @@ func (s *Service) orEndpoints(ctx context.Context, slug string) ([]model.Upstrea
 func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (ValidationResult, error) {
 	meta := s.store.Metadata()
 	modelMeta := meta.Models[modelID]
+	if !modelMeta.Pinnable || len(modelMeta.Upstreams) == 0 {
+		reason := modelMeta.PinReason
+		if reason == "" {
+			reason = pinReasonNoChannels
+		}
+		// Per-channel validation is meaningless when the gateway ignores the
+		// pin. Clear any older all-green board instead of leaving it behind.
+		if _, err := s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
+			current.UpstreamStatus = nil
+			current.ValidatedAt = 0
+		}); err != nil {
+			return ValidationResult{}, err
+		}
+		return ValidationResult{
+			Supported: false,
+			Reason:    reason,
+			Summary:   map[string]int{},
+			Results:   map[string]model.UpstreamStatus{},
+		}, nil
+	}
 	account := s.store.PickAccount()
 	if account.Key == "" {
 		return ValidationResult{}, errNoAccount
@@ -364,7 +447,7 @@ func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (Valida
 	for _, result := range results {
 		summary[result.Status]++
 	}
-	return ValidationResult{Summary: summary, Results: results}, nil
+	return ValidationResult{Supported: true, Summary: summary, Results: results}, nil
 }
 
 func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, error) {
