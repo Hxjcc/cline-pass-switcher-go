@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   Boxes,
@@ -14,13 +14,18 @@ import {
 import { toast } from "sonner"
 
 import { BrandMark } from "@/components/brand-mark"
+import { AccountsPanel } from "@/components/accounts-panel"
+import { CatalogPanel } from "@/components/catalog-panel"
+import { HistoryPanel } from "@/components/history-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
+import { ModelsPanel } from "@/components/models-panel"
+import { SecurityPanel } from "@/components/security-panel"
+import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
@@ -43,36 +48,6 @@ const ADMIN_KEY_STORAGE = "cline-pass-switcher-admin-key"
 const SNAPSHOT_STORAGE = "cline-pass-switcher-snapshot"
 const TAB_STORAGE = "cline-pass-switcher-tab"
 const HISTORY_PAGE_SIZE = 50
-
-// Each tab is its own chunk: the console ships a table-heavy model panel, a
-// history table and a test bench, and nobody needs all three to sign in.
-const AccountsPanel = lazy(() =>
-  import("@/components/accounts-panel").then((module) => ({ default: module.AccountsPanel })),
-)
-const CatalogPanel = lazy(() =>
-  import("@/components/catalog-panel").then((module) => ({ default: module.CatalogPanel })),
-)
-const HistoryPanel = lazy(() =>
-  import("@/components/history-panel").then((module) => ({ default: module.HistoryPanel })),
-)
-const ModelsPanel = lazy(() =>
-  import("@/components/models-panel").then((module) => ({ default: module.ModelsPanel })),
-)
-const SecurityPanel = lazy(() =>
-  import("@/components/security-panel").then((module) => ({ default: module.SecurityPanel })),
-)
-const TestBench = lazy(() =>
-  import("@/components/test-bench").then((module) => ({ default: module.TestBench })),
-)
-
-function PanelFallback() {
-  return (
-    <div className="space-y-3">
-      <Skeleton className="h-20 w-full" />
-      <Skeleton className="h-64 w-full" />
-    </div>
-  )
-}
 
 // The proxy key is the only credential for the console and the API. It is kept
 // in sessionStorage by default (gone when the tab closes) and only written to
@@ -617,91 +592,75 @@ function App() {
               />
             </div>
             {models && (
-              <Suspense fallback={<PanelFallback />}>
-                <ModelsPanel
-                  data={models}
-                  onRefresh={async () => {
-                    await loadModels()
-                  }}
-                  onProbe={probe}
-                  onProbeAll={probeAll}
-                  probeAllProgress={batchProbe}
-                  onCancelProbeAll={cancelProbeAll}
-                  onValidate={async (modelID) => {
-                    await validate(modelID)
-                  }}
-                  onTest={testModel}
-                  onUpdateConfig={updateModelConfig}
-                  onFetchOfficial={fetchOfficial}
-                  onRemove={removeModel}
-                />
-              </Suspense>
+              <ModelsPanel
+                data={models}
+                onRefresh={async () => {
+                  await loadModels()
+                }}
+                onProbe={probe}
+                onProbeAll={probeAll}
+                probeAllProgress={batchProbe}
+                onCancelProbeAll={cancelProbeAll}
+                onValidate={async (modelID) => {
+                  await validate(modelID)
+                }}
+                onTest={testModel}
+                onUpdateConfig={updateModelConfig}
+                onFetchOfficial={fetchOfficial}
+                onRemove={removeModel}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="accounts">
             {accounts && (
-              <Suspense fallback={<PanelFallback />}>
-                <AccountsPanel
-                  data={accounts}
-                  onSave={saveAccounts}
-                  onTest={testAccount}
-                  onReveal={revealAccounts}
-                  onQuota={loadQuota}
-                />
-              </Suspense>
+              <AccountsPanel
+                data={accounts}
+                onSave={saveAccounts}
+                onTest={testAccount}
+                onReveal={revealAccounts}
+                onQuota={loadQuota}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="security">
             {security && (
-              <Suspense fallback={<PanelFallback />}>
-                <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
-              </Suspense>
+              <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
             )}
           </TabsContent>
 
           <TabsContent value="test">
-            {models && (
-              <Suspense fallback={<PanelFallback />}>
-                <TestBench models={models.subscription} onTest={testModel} />
-              </Suspense>
-            )}
+            {models && <TestBench models={models.subscription} onTest={testModel} />}
           </TabsContent>
 
           <TabsContent value="history">
-            <Suspense fallback={<PanelFallback />}>
-              <HistoryPanel
-                history={history}
-                total={historyTotal}
-                hasMore={historyHasMore}
-                query={historyQuery}
-                onQueryChange={applyHistoryQuery}
-                onRefresh={async () => {
-                  try {
-                    await refreshHistory()
-                  } catch (error) {
-                    handleError(error)
-                  }
-                }}
-                onLoadMore={async () => {
-                  try {
-                    await loadMoreHistory()
-                  } catch (error) {
-                    handleError(error)
-                  }
-                }}
-                onClear={clearHistory}
-              />
-            </Suspense>
+            <HistoryPanel
+              history={history}
+              total={historyTotal}
+              hasMore={historyHasMore}
+              query={historyQuery}
+              onQueryChange={applyHistoryQuery}
+              onRefresh={async () => {
+                try {
+                  await refreshHistory()
+                } catch (error) {
+                  handleError(error)
+                }
+              }}
+              onLoadMore={async () => {
+                try {
+                  await loadMoreHistory()
+                } catch (error) {
+                  handleError(error)
+                }
+              }}
+              onClear={clearHistory}
+            />
           </TabsContent>
 
           <TabsContent value="catalog">
-            {models && (
-              <Suspense fallback={<PanelFallback />}>
-                <CatalogPanel data={models} onProbe={probe} />
-              </Suspense>
-            )}
+            {models && <CatalogPanel data={models} onProbe={probe} />}
           </TabsContent>
         </Tabs>
       </main>
