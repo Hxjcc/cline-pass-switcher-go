@@ -64,8 +64,8 @@ import {
   pipelineLabel,
   providerLabel,
   shortDuration,
-  upstreamRank,
 } from "@/lib/format"
+import { orderedUpstreams } from "@/lib/upstream-order"
 import { cn } from "@/lib/utils"
 import type {
   ModelConfig,
@@ -74,7 +74,6 @@ import type {
   ProbeResponse,
   SubscriptionModel,
   TestResponse,
-  UpstreamState,
 } from "@/types"
 
 interface ModelsPanelProps {
@@ -90,10 +89,6 @@ interface ModelsPanelProps {
   onUpdateConfig: (modelID: string, config: ModelConfig) => Promise<void>
   onFetchOfficial: () => Promise<OfficialResponse>
   onRemove: (modelID: string) => Promise<void>
-}
-
-function getStatus(state?: UpstreamState): UpstreamState {
-  return state ?? "unknown"
 }
 
 // One chip spec for every tag in the table: capability, pipeline, last hit,
@@ -143,26 +138,6 @@ const sortItems: Record<string, string> = {
   cost: "最低成本",
   ttft: "最快首字",
   tps: "最高吞吐",
-}
-
-function orderedUpstreams(model: SubscriptionModel) {
-  const config = normalizeModelConfig(model.config)
-  const meta = model.meta
-  const all = new Set<string>([
-    ...(meta?.upstreams ?? []),
-    ...config.upstreams,
-    ...config.exclude,
-    ...Object.keys(meta?.upstreamDetail ?? {}),
-  ])
-  const selected = config.upstreams.filter((value) => all.has(value))
-  const rest = [...all]
-    .filter((value) => !selected.includes(value))
-    .sort((left, right) => {
-      const leftState = getStatus(meta?.upstreamStatus?.[left]?.status)
-      const rightState = getStatus(meta?.upstreamStatus?.[right]?.status)
-      return upstreamRank[leftState] - upstreamRank[rightState] || left.localeCompare(right)
-    })
-  return [...selected, ...rest]
 }
 
 export function ModelsPanel({
