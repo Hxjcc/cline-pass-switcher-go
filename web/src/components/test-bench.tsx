@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { FlaskConical, Play, RotateCcw } from "lucide-react"
+import { FlaskConical, Play, RotateCcw, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -24,6 +24,7 @@ import { ProviderName } from "@/components/provider-name"
 import { TraceList } from "@/components/trace-list"
 import { errorMessage } from "@/lib/api"
 import {
+  isPinDisabled,
   normalizeModelConfig,
   pipelineLabel,
   providerLabel,
@@ -54,6 +55,10 @@ export function TestBench({ models, onTest }: TestBenchProps) {
   }
 
   const selected = models.find((model) => model.id === modelID)
+  const pinDisabled = isPinDisabled(selected?.meta)
+  if (pinDisabled && upstream !== "auto") {
+    setUpstream("auto")
+  }
   const config = normalizeModelConfig(selected?.config)
   const upstreams = [...new Set(selected?.meta?.upstreams ?? [])].sort((left, right) => {
     const leftState = selected?.meta?.upstreamStatus?.[left]?.status ?? "unknown"
@@ -78,7 +83,7 @@ export function TestBench({ models, onTest }: TestBenchProps) {
       // default must forward the saved pins for the hint below to hold true.
       const response = await onTest(
         modelID,
-        upstream === "auto" ? config.upstreams : [upstream],
+        pinDisabled || upstream === "auto" ? config.upstreams : [upstream],
         config.exclude,
       )
       setResult(response)
@@ -132,7 +137,7 @@ export function TestBench({ models, onTest }: TestBenchProps) {
                 if (value) setUpstream(value)
               }}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" disabled={pinDisabled}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -143,6 +148,15 @@ export function TestBench({ models, onTest }: TestBenchProps) {
                 ))}
               </SelectContent>
             </Select>
+            {pinDisabled && (
+              <Alert>
+                <TriangleAlert />
+                <AlertTitle>当前模型不可指定目标渠道</AlertTitle>
+                <AlertDescription>
+                  网关已忽略上游偏好；测试台只能跟随当前配置，实际渠道由 Cline 决定。
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div className="flex gap-2">

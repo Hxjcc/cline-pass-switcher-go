@@ -3,6 +3,7 @@ import {
   formatCost,
   formatQuotaUSD,
   formatTokenCount,
+  isPinDisabled,
   normalizeModelConfig,
   pinReasonLabel,
   pipelineLabel,
@@ -84,6 +85,13 @@ test("pinReasonLabel maps the backend probe reasons", () => {
   expect(pinReasonLabel("single_provider")).toBe("只有一个候选渠道，无需钉住")
   expect(pinReasonLabel("probe_failed")).toBe("无法确认网关是否支持钉住")
   expect(pinReasonLabel(undefined)).toBe("当前不可钉")
+})
+
+test("isPinDisabled accepts either the explicit false or the legacy reason", () => {
+  expect(isPinDisabled({ pinnable: false })).toBe(true)
+  expect(isPinDisabled({ pinReason: "gateway_ignores_provider_preferences" })).toBe(true)
+  expect(isPinDisabled({ pinnable: true })).toBe(false)
+  expect(isPinDisabled(undefined)).toBe(false)
 })
 
 test("pipelineHint explains when pinning is unavailable", () => {

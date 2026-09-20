@@ -142,10 +142,16 @@ export function pinReasonLabel(reason?: string): string {
   }
 }
 
+// An explicit false is the normal source of truth, but older metadata can
+// carry only the reason because the boolean used to be omitted from JSON.
+export function isPinDisabled(
+  meta?: { pinnable?: boolean; pinReason?: string } | null,
+): boolean {
+  return meta?.pinnable === false || Boolean(meta?.pinReason)
+}
+
 export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: string): string {
-  // Older metadata may have dropped the boolean false because of the JSON
-  // omitempty tag; the reason is also a reliable "not pinnable" signal.
-  const pinDisabled = pinnable === false || Boolean(pinReason)
+  const pinDisabled = isPinDisabled({ pinnable, pinReason })
   if (pinDisabled && pinReason === "single_provider") {
     return "这个模型只有一个候选渠道，无需钉住，也没有其他渠道可校验。"
   }
