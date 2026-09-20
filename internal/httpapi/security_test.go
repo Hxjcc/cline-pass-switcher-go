@@ -264,3 +264,28 @@ func TestForwardedClientAddressComesFromTheTrustedHop(t *testing.T) {
 		})
 	}
 }
+
+// The three model-list aliases are the same handler, so they have to answer to
+// the same credential. The bare /models alias was reachable without a key
+// because the guard classified routes by path prefix.
+func TestEveryModelsAliasRequiresTheProxyKey(t *testing.T) {
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(c *model.Config) { c.ProxyKey = "test-key" }); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/models", "/v1/models", "/api/v1/models"} {
+		anonymous := httptest.NewRecorder()
+		server.ServeHTTP(anonymous, localRequest(http.MethodGet, path, nil))
+		if anonymous.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without a key: %d", path, anonymous.Code)
+		}
+
+		authorized := httptest.NewRecorder()
+		request := localRequest(http.MethodGet, path, nil)
+		request.Header.Set("X-Admin-Key", "test-key")
+		server.ServeHTTP(authorized, request)
+		if authorized.Code != http.StatusOK {
+			t.Fatalf("%s with a key: %d", path, authorized.Code)
+		}
+	}
+}

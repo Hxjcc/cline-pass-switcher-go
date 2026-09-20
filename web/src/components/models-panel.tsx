@@ -19,6 +19,7 @@ import {
   Sparkles,
   Timer,
   Trash2,
+  X,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -55,6 +56,7 @@ import { ProviderName } from "@/components/provider-name"
 import { StatusDot } from "@/components/status-dot"
 import { TraceList } from "@/components/trace-list"
 import { errorMessage } from "@/lib/api"
+import type { ProbeBatchResult } from "@/lib/probe-batch"
 import {
   formatTime,
   normalizeModelConfig,
@@ -79,7 +81,10 @@ interface ModelsPanelProps {
   data: ModelsResponse
   onRefresh: () => Promise<void>
   onProbe: (modelID: string) => Promise<ProbeResponse>
-  onProbeAll: () => Promise<void>
+  onProbeAll: () => Promise<ProbeBatchResult>
+  /** Non-null while a batch is running, so the button can show progress. */
+  probeAllProgress: { done: number; total: number } | null
+  onCancelProbeAll: () => void
   onValidate: (modelID: string) => Promise<void>
   onTest: (modelID: string, upstreams: string[], exclude: string[]) => Promise<TestResponse>
   onUpdateConfig: (modelID: string, config: ModelConfig) => Promise<void>
@@ -165,6 +170,8 @@ export function ModelsPanel({
   onRefresh,
   onProbe,
   onProbeAll,
+  probeAllProgress,
+  onCancelProbeAll,
   onValidate,
   onTest,
   onUpdateConfig,
@@ -175,7 +182,6 @@ export function ModelsPanel({
   const [filter, setFilter] = useState("")
   const [refreshing, setRefreshing] = useState(false)
   const [fetchingOfficial, setFetchingOfficial] = useState(false)
-  const [probingAll, setProbingAll] = useState(false)
   const [busy, setBusy] = useState<Record<string, string>>({})
   const [testResults, setTestResults] = useState<Record<string, TestResponse>>({})
   const [removing, setRemoving] = useState<string | null>(null)
@@ -222,14 +228,17 @@ export function ModelsPanel({
   }
 
   const probeAll = async () => {
-    setProbingAll(true)
     try {
-      await onProbeAll()
-      toast.success("批量探测已完成")
+      const result = await onProbeAll()
+      if (result.aborted) {
+        toast.info(`批量探测已停止，已完成 ${result.ok} 个模型`)
+      } else if (result.failed > 0) {
+        toast.warning(`批量探测完成：成功 ${result.ok} 个，失败 ${result.failed} 个`)
+      } else {
+        toast.success(`批量探测完成：${result.ok} 个模型`)
+      }
     } catch (error) {
       toast.error(errorMessage(error))
-    } finally {
-      setProbingAll(false)
     }
   }
 
@@ -360,10 +369,21 @@ export function ModelsPanel({
             <RefreshCw className={refreshing ? "animate-spin" : ""} data-icon="inline-start" />
             刷新
           </Button>
-          <Button variant="outline" size="sm" onClick={probeAll} disabled={probingAll}>
-            <Radar className={probingAll ? "animate-pulse" : ""} data-icon="inline-start" />
-            {probingAll ? "批量探测中" : "批量探测"}
+          <Button variant="outline" size="sm" onClick={probeAll} disabled={probeAllProgress !== null}>
+            <Radar
+              className={probeAllProgress ? "animate-pulse" : ""}
+              data-icon="inline-start"
+            />
+            {probeAllProgress
+              ? `批量探测 ${probeAllProgress.done}/${probeAllProgress.total}`
+              : "批量探测"}
           </Button>
+          {probeAllProgress && (
+            <Button variant="ghost" size="sm" onClick={onCancelProbeAll}>
+              <X data-icon="inline-start" />
+              停止
+            </Button>
+          )}
           <Button size="sm" onClick={fetchOfficial} disabled={fetchingOfficial}>
             <Download className={fetchingOfficial ? "animate-pulse" : ""} data-icon="inline-start" />
             拉取官方模型

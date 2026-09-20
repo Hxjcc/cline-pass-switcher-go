@@ -2,13 +2,16 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +29,9 @@ type Server struct {
 	assets   fs.FS
 	file     http.Handler
 	index    []byte
+	csp      string
 	shares   *streamShareHub
+	throttle *authThrottle
 }
 
 type chainResult struct {
@@ -50,13 +55,23 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 		assets:   assets,
 		file:     http.FileServer(http.FS(assets)),
 		index:    index,
+		csp:      contentSecurityPolicy(index),
 		shares:   newStreamShareHub(),
+		throttle: newAuthThrottle(),
 	}, nil
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("Cache-Control", "no-store")
+	// The console keeps the proxy key in browser storage, so a script injected
+	// into the page could read it straight out. These headers keep the page on
+	// its own origin and stop it being framed.
+	writer.Header().Set("Content-Security-Policy", s.csp)
+	writer.Header().Set("X-Frame-Options", "DENY")
+	writer.Header().Set("Referrer-Policy", "no-referrer")
+	writer.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+	writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 	if !s.browserRequestAllowed(request) {
 		writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
 		return
@@ -81,10 +96,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
-	if s.isProtected(path) && !s.authOK(request) {
-		writeJSON(writer, http.StatusUnauthorized, map[string]any{
-			"error": map[string]any{"message": "unauthorized: 代理密钥缺失或错误", "type": "auth_error"},
-		})
+	if s.isProtected(path) && !s.authorizeProtected(writer, request) {
 		return
 	}
 
@@ -114,14 +126,14 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && path == "/api/models/remove":
 		s.handleRemoveModel(writer, request)
 	case request.Method == http.MethodGet && path == "/api/history":
-		s.handleHistory(writer)
+		s.handleHistory(writer, request)
 	case request.Method == http.MethodPost && path == "/api/history/clear":
 		s.handleClearHistory(writer)
 	case request.Method == http.MethodGet && path == "/api/config":
 		s.handleGetConfig(writer)
 	case request.Method == http.MethodPost && path == "/api/config":
 		s.handleSaveConfig(writer, request)
-	case request.Method == http.MethodGet && (path == "/v1/models" || path == "/api/v1/models" || path == "/models"):
+	case request.Method == http.MethodGet && isModelsPath(path):
 		s.handleListModels(writer, request)
 	case request.Method == http.MethodPost && isChatPath(path):
 		s.handleChat(writer, request)
@@ -150,14 +162,10 @@ func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request)
 	meta := s.store.Metadata()
 	subscription := make([]map[string]any, 0, len(cfg.KnownModels))
 	for _, id := range cfg.KnownModels {
-		var modelMeta any
-		if value, found := meta.Models[id]; found {
-			modelMeta = value
-		}
 		subscription = append(subscription, map[string]any{
 			"id":     id,
-			"config": cfg.PerModel[id],
-			"meta":   modelMeta,
+			"config": modelConfigView(cfg.PerModel[id]),
+			"meta":   meta.Models[id],
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -373,8 +381,83 @@ func (s *Server) handleRemoveModel(writer http.ResponseWriter, request *http.Req
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "total": len(s.store.Config().KnownModels)})
 }
 
-func (s *Server) handleHistory(writer http.ResponseWriter) {
-	writeJSON(writer, http.StatusOK, map[string]any{"history": s.store.Metadata().History})
+const (
+	defaultHistoryPage = 50
+	maxHistoryPage     = 200
+)
+
+// handleHistory serves the newest-first request log with paging and filtering.
+// The store keeps model.HistoryLimit entries; the console only asks for what it
+// shows, so a long log does not turn every refresh into a full dump.
+func (s *Server) handleHistory(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	entries := filterHistory(s.store.Metadata().History, strings.TrimSpace(query.Get("q")), query.Get("result"))
+	limit := clampQueryInt(query.Get("limit"), defaultHistoryPage, 1, maxHistoryPage)
+	offset := clampQueryInt(query.Get("offset"), 0, 0, len(entries))
+	end := min(offset+limit, len(entries))
+	page := entries[offset:end]
+	if page == nil {
+		page = []model.HistoryEntry{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"history": page,
+		"total":   len(entries),
+		"offset":  offset,
+		"limit":   limit,
+		"hasMore": end < len(entries),
+	})
+}
+
+// filterHistory matches the free-text term against the fields the table shows.
+// "result" accepts "error" or "ok" to split failures from successes.
+func filterHistory(entries []model.HistoryEntry, term, result string) []model.HistoryEntry {
+	onlyErrors := result == "error"
+	onlyOK := result == "ok"
+	needle := strings.ToLower(term)
+	if needle == "" && !onlyErrors && !onlyOK {
+		return entries
+	}
+	filtered := make([]model.HistoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if onlyErrors && entry.Error == nil {
+			continue
+		}
+		if onlyOK && entry.Error != nil {
+			continue
+		}
+		if needle != "" && !historyMatches(entry, needle) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func historyMatches(entry model.HistoryEntry, needle string) bool {
+	fields := []string{entry.Model, entry.Provider, entry.Canonical, entry.Account, entry.Kind, entry.Effort}
+	if entry.Error != nil {
+		fields = append(fields, *entry.Error)
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func clampQueryInt(raw string, fallback, low, high int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 func (s *Server) handleClearHistory(writer http.ResponseWriter) {
@@ -738,7 +821,7 @@ func (s *Server) serveStatic(writer http.ResponseWriter, request *http.Request) 
 
 func (s *Server) isProtected(path string) bool {
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/") ||
-		isChatPath(path) || isResponsesPath(path) || isResponsesCompactPath(path)
+		isModelsPath(path) || isChatPath(path) || isResponsesPath(path) || isResponsesCompactPath(path)
 }
 
 func (s *Server) authOK(request *http.Request) bool {
@@ -756,11 +839,62 @@ func (s *Server) authOK(request *http.Request) bool {
 	return constantTimeEqual(header, expected) || constantTimeEqual(admin, expected)
 }
 
+// authorizeProtected gates every protected route and writes the refusal itself.
+// A source address that has exhausted its attempts is refused before the key is
+// compared at all, so guessing cannot continue at full speed; addresses that
+// present the right key clear their counter.
+func (s *Server) authorizeProtected(writer http.ResponseWriter, request *http.Request) bool {
+	client := clientKey(request.RemoteAddr)
+	if delay, blocked := s.throttle.blocked(client); blocked {
+		writeThrottled(writer, delay)
+		return false
+	}
+	if s.authOK(request) {
+		s.throttle.succeed(client)
+		return true
+	}
+	if delay := s.throttle.fail(client); delay > 0 {
+		writeThrottled(writer, delay)
+		return false
+	}
+	writeJSON(writer, http.StatusUnauthorized, map[string]any{
+		"error": map[string]any{"message": "unauthorized: 代理密钥缺失或错误", "type": "auth_error"},
+	})
+	return false
+}
+
+func writeThrottled(writer http.ResponseWriter, delay time.Duration) {
+	if delay < time.Second {
+		delay = time.Second
+	}
+	seconds := int((delay + time.Second - 1) / time.Second)
+	writer.Header().Set("Retry-After", strconv.Itoa(seconds))
+	writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+		"error": map[string]any{
+			"message": fmt.Sprintf("代理密钥尝试次数过多，请在 %d 秒后重试", seconds),
+			"type":    "rate_limit_error",
+			"code":    "auth_throttled",
+		},
+	})
+}
+
 func (s *Server) publicProxyBase(cfg model.Config) string {
 	if cfg.PublicBaseURL != "" {
 		return strings.TrimRight(cfg.PublicBaseURL, "/") + "/v1"
 	}
 	return "http://127.0.0.1:" + strconv.Itoa(cfg.Port) + "/v1"
+}
+
+// A model without saved routing preferences still reports its lists as empty
+// arrays: JSON null would make every consumer branch on two shapes.
+func modelConfigView(config model.PerModelConfig) model.PerModelConfig {
+	if config.Upstreams == nil {
+		config.Upstreams = []string{}
+	}
+	if config.Exclude == nil {
+		config.Exclude = []string{}
+	}
+	return config
 }
 
 const maxRequestBytes = 50 << 20
@@ -920,9 +1054,58 @@ func headerSafe(value string) string {
 	return result
 }
 
+var inlineScriptRE = regexp.MustCompile(`(?is)<script(\s[^>]*)?>(.*?)</script>`)
+
+// contentSecurityPolicy locks the console to its own origin. The two inline
+// boot scripts in index.html (pre-paint theme, saved DOM snapshot) are allowed
+// by SHA-256 of their exact text, computed from the embedded file at startup:
+// editing the HTML updates the policy instead of silently breaking the page.
+// An external <script src> is covered by 'self' and is not hashed.
+func contentSecurityPolicy(index []byte) string {
+	hashes := make([]string, 0, 2)
+	for _, match := range inlineScriptRE.FindAllSubmatch(index, -1) {
+		if strings.Contains(strings.ToLower(string(match[1])), "src=") {
+			continue
+		}
+		sum := sha256.Sum256(match[2])
+		hashes = append(hashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+	}
+	script := "'self'"
+	if len(hashes) > 0 {
+		script += " " + strings.Join(hashes, " ")
+	}
+	return strings.Join([]string{
+		"default-src 'self'",
+		"script-src " + script,
+		// Tailwind and React both set style attributes, so the style policy
+		// cannot be tightened to hashes without rewriting the components.
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data: blob:",
+		"font-src 'self' data:",
+		"connect-src 'self'",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	}, "; ")
+}
+
 func isChatPath(path string) bool {
 	switch path {
 	case "/chat/completions", "/v1/chat/completions", "/api/v1/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+// The model list is served under three prefixes for client compatibility. The
+// bare alias is named here instead of relying on a path prefix: /models does
+// not start with /api/ or /v1/, so a prefix rule would leave it reachable
+// without the proxy key while /v1/models stayed protected.
+func isModelsPath(path string) bool {
+	switch path {
+	case "/models", "/v1/models", "/api/v1/models":
 		return true
 	default:
 		return false

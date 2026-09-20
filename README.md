@@ -123,7 +123,7 @@ env_key = "CLINE_PROXY_KEY"
 | `PORT` | 监听端口，默认 `3123` |
 | `BIND_HOST` | 监听地址，本地默认 `127.0.0.1`，容器内应设为 `0.0.0.0` |
 | `TRUSTED_PROXIES` | 逗号分隔的 IP / CIDR 列表。只有来自这些地址的反向代理请求才会采用 `X-Forwarded-For` / `X-Real-IP` 声明的客户端地址（且客户端必须是回环地址才视为本机）。仅在没有代理密钥时生效 |
-| `TRUST_LOCAL_PORT_FORWARD` | 设为 `true` / `1` 时，声明非回环来源只可能来自绑定在宿主机回环上的端口映射（如 `-p 127.0.0.1:3123:3123`）。Compose 默认打开；把端口改成对外暴露时必须删除并设置 `PROXY_KEY` |
+| `TRUST_LOCAL_PORT_FORWARD` | 设为 `true` / `1` 时，声明非回环来源只可能来自绑定在宿主机回环上的端口映射（如 `-p 127.0.0.1:3123:3123`）。Compose 默认打开；把端口改成对外暴露时必须删除并设置 `PROXY_KEY`。这层声明是唯一的判断依据，剩下的 Host 头校验由客户端控制，所以端口一旦对外暴露，伪造 `Host: 127.0.0.1` 的请求就会拿到完整管理权限（可读取账号密钥）。未设置代理密钥且打开该开关时，启动日志会打印对应警告 |
 | `DATA_DIR` | 配置和元数据目录，容器内为 `/data` |
 | `STRICT_TOOL_HISTORY` | 设为 `true` 时，工具历史不完整（客户端回放了没有对应调用的工具结果）直接报错；默认 `false`，这类结果会作为用户内容继续转发 |
 | `WEB_SEARCH_UPSTREAM` | 把 `web_search` 声明映射成上游网关执行的搜索工具：`exa`（推荐）/ `tako` / `perplexity` / `browserbase_fetch`；留空或 `off` 表示不映射（默认） |
@@ -150,9 +150,12 @@ Docker Compose 已经设置了 `DATA_DIR` 和 `BIND_HOST`。镜像里的 `PORT=3
 ## 安全
 
 - `config.json`、`metadata.json` 和 `data/` 里可能有明文密钥，不要提交到 Git。
-- 未设置代理密钥时，控制台与本机 API 只接受真实来源为回环地址的连接；`Host` 只是额外的 DNS 重绑定校验，不能作为网络边界。`TRUSTED_PROXIES`、`TRUST_LOCAL_PORT_FORWARD` 是运维对网络边界的显式声明，不要在没有这层边界时打开。
+- 未设置代理密钥时，控制台与本机 API 只接受真实来源为回环地址的连接；`Host` 只是额外的 DNS 重绑定校验，不能作为网络边界。`TRUSTED_PROXIES`、`TRUST_LOCAL_PORT_FORWARD` 是运维对网络边界的显式声明，不要在没有这层边界时打开：打开后判定只剩 `Host` 头，而它是客户端可控的。
 - 使用域名、非回环 IP 或对其他机器开放前，务必设置代理密钥（`proxyKey` / `PROXY_KEY`）。该密钥也具有管理权限。
 - 控制台接口默认不返回已保存的密钥（只有 `keyPreview`），需要时才通过 `GET /api/accounts?reveal=1` 显式读取，且响应带 `Cache-Control: no-store`。
+- 控制台页面带 `Content-Security-Policy`（只允许自身资源，加上 `index.html` 里两段内联启动脚本的 SHA-256 白名单，启动时按文件内容计算）、`X-Frame-Options: DENY` 和 `Referrer-Policy: no-referrer`，避免页面被嵌套或注入脚本后读走密钥。
+- 控制台输入的代理密钥默认只写入 `sessionStorage`（关掉标签页即失效），需要在登录框勾选「在这台设备上记住密钥」才会写入 `localStorage`。
+- 代理密钥校验有失败限速：同一来源连续失败 5 次后开始冷却，首次 30 秒、重复触发成倍延长、上限 15 分钟，冷却期间该来源的请求直接返回 429（即使密钥正确）；成功认证会清零计数。计数只在内存中，重启进程即清除。注意 Docker 端口映射会把所有客户端显示成同一个网桥地址，因此这些客户端共享同一个冷却计数。
 - 浏览器需同源访问控制台和接口；HTTPS 反向代理部署时设置 `PUBLIC_BASE_URL`。
 - 控制台里的探测、测试、校验会向真实上游发小额请求。
 

@@ -21,11 +21,10 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
 
-const openRouterAPI = "https://openrouter.ai/api/v1"
-
-// Official model catalog sources. Variables so tests (and a future
-// self-hosted mirror) can point them at a local server.
+// External catalog sources. Variables so tests (and a future self-hosted
+// mirror) can point them at a local server.
 var (
+	openRouterAPI          = "https://openrouter.ai/api/v1"
 	officialClineModelsURL = "https://api.cline.bot/api/v1/ai/cline/recommended-models"
 	officialModelsDevURL   = "https://models.dev/api.json"
 	officialDocsURL        = "https://docs.cline.bot/getting-started/clinepass"

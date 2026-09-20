@@ -218,8 +218,8 @@ func NormalizeMetadata(meta *Metadata) {
 	if meta.Stats == nil {
 		meta.Stats = map[string]AccountStats{}
 	}
-	if len(meta.History) > 100 {
-		meta.History = meta.History[:100]
+	if len(meta.History) > HistoryLimit {
+		meta.History = meta.History[:HistoryLimit]
 	}
 	if meta.OfficialModelsFetch != nil && meta.OfficialModelsFetch.Added == nil {
 		meta.OfficialModelsFetch.Added = []string{}

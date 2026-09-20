@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/webassets"
 )
 
 // Production only permits loopback hosts before a proxy key is configured.
@@ -1254,5 +1256,111 @@ func TestStreamingResponsesPreservesUpstreamErrorDetails(t *testing.T) {
 	errorObject, _ := payload["error"].(map[string]any)
 	if errorObject["type"] != "rate_limit_error" || errorObject["code"] != "rate_limit_exceeded" {
 		t.Fatalf("streaming error details were not preserved: %#v", payload)
+	}
+}
+
+// The console holds the proxy key in browser storage, so a script injected
+// into the page could read it. The policy allows exactly the inline boot
+// scripts that ship with index.html and nothing else.
+func TestContentSecurityPolicyHashesInlineBootScripts(t *testing.T) {
+	index := []byte(`<!doctype html><html><head>` +
+		`<script>window.theme="dark"</script>` +
+		`<script type="module" src="/assets/app.js"></script>` +
+		`</head><body><script>window.boot=1</script></body></html>`)
+	policy := contentSecurityPolicy(index)
+
+	directive := ""
+	for _, part := range strings.Split(policy, "; ") {
+		if strings.HasPrefix(part, "script-src ") {
+			directive = part
+		}
+	}
+	if directive == "" {
+		t.Fatalf("policy has no script-src: %s", policy)
+	}
+	for _, inline := range []string{`window.theme="dark"`, "window.boot=1"} {
+		sum := sha256.Sum256([]byte(inline))
+		want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+		if !strings.Contains(directive, want) {
+			t.Fatalf("inline script %q is not allowed by %s", inline, directive)
+		}
+	}
+	// The external module is covered by 'self'; only the two inline scripts
+	// may be hashed.
+	if count := strings.Count(directive, "'sha256-"); count != 2 {
+		t.Fatalf("expected two hashed scripts, got %d in %s", count, directive)
+	}
+	for _, want := range []string{"default-src 'self'", "object-src 'none'", "frame-ancestors 'none'"} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy is missing %q: %s", want, policy)
+		}
+	}
+}
+
+func TestResponsesCarryFramingAndReferrerGuards(t *testing.T) {
+	_, server := newTestServer(t)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, localRequest(http.MethodGet, "/", nil))
+	for header, want := range map[string]string{
+		"X-Frame-Options":            "DENY",
+		"Referrer-Policy":            "no-referrer",
+		"Cross-Origin-Opener-Policy": "same-origin",
+	} {
+		if got := response.Header().Get(header); got != want {
+			t.Fatalf("%s = %q, want %q", header, got, want)
+		}
+	}
+	if response.Header().Get("Content-Security-Policy") == "" {
+		t.Fatal("console responses must carry a content security policy")
+	}
+}
+
+// The policy is derived from the shipped HTML, so a regexp that stops matching
+// a future index.html would silently drop the boot scripts from the policy and
+// blank the console. Check the real embedded file, not a fixture.
+func TestShippedConsolePolicyAllowsItsBootScripts(t *testing.T) {
+	index, err := fs.ReadFile(webassets.FS(), "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	policy := contentSecurityPolicy(index)
+	for _, inline := range []string{"cline-pass-switcher-theme", "cline-pass-switcher-root-snapshot-v1"} {
+		if !strings.Contains(string(index), inline) {
+			t.Fatalf("shipped index.html no longer contains %q; update this test", inline)
+		}
+	}
+	if count := strings.Count(policy, "'sha256-"); count < 2 {
+		t.Fatalf("shipped console should hash its inline boot scripts, got %d: %s", count, policy)
+	}
+}
+
+// A model with no saved routing preferences used to serialize upstreams and
+// exclude as null, which forced every consumer to handle two shapes.
+func TestModelsEndpointReportsEmptyListsInsteadOfNull(t *testing.T) {
+	_, server := newTestServer(t)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, localRequest(http.MethodGet, "/api/models", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /api/models: %d", response.Code)
+	}
+	var payload struct {
+		Subscription []struct {
+			ID     string `json:"id"`
+			Config struct {
+				Upstreams []string `json:"upstreams"`
+				Exclude   []string `json:"exclude"`
+			} `json:"config"`
+		} `json:"subscription"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Subscription) == 0 {
+		t.Fatal("expected the default subscription list")
+	}
+	for _, entry := range payload.Subscription {
+		if entry.Config.Upstreams == nil || entry.Config.Exclude == nil {
+			t.Fatalf("%s: lists must be empty arrays, got %s", entry.ID, response.Body.String())
+		}
 	}
 }

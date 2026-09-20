@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { History, RefreshCw, Trash2 } from "lucide-react"
+import { History, RefreshCw, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import {
   Table,
@@ -135,11 +136,21 @@ const chipClass = "h-5 px-1.5 py-0 text-2xs"
 
 export function HistoryPanel({
   history,
+  total,
+  hasMore,
+  query,
+  onQueryChange,
   onRefresh,
+  onLoadMore,
   onClear,
 }: {
   history: HistoryItem[]
+  total: number
+  hasMore: boolean
+  query: { q: string; onlyErrors: boolean }
+  onQueryChange: (next: { q: string; onlyErrors: boolean }) => void
   onRefresh: () => Promise<void>
+  onLoadMore: () => Promise<void>
   onClear: () => Promise<void>
 }) {
   const [autoRefresh, setAutoRefresh] = useState(
@@ -147,6 +158,19 @@ export function HistoryPanel({
   )
   const [refreshing, setRefreshing] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [search, setSearch] = useState(query.q)
+
+  // Typing filters as you go, but only after a pause: every keystroke would
+  // otherwise reload the log from the server.
+  useEffect(() => {
+    if (search === query.q) return
+    const timer = window.setTimeout(
+      () => onQueryChange({ q: search, onlyErrors: query.onlyErrors }),
+      300,
+    )
+    return () => window.clearTimeout(timer)
+  }, [search, query.q, query.onlyErrors, onQueryChange])
 
   const refresh = async () => {
     setRefreshing(true)
@@ -186,12 +210,23 @@ export function HistoryPanel({
     }
   }
 
+  const loadMore = async () => {
+    setLoadingMore(true)
+    try {
+      await onLoadMore()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>请求历史</CardTitle>
         <CardDescription>
-          保留最近 100 条代理请求。首字是第一个思考/正文/工具调用到达的时间；强度是实际转给上游的思考档位，映射过会显示「客户端→上游」。
+          保留最近 500 条代理请求，按页加载并可按模型、账号、渠道或错误筛选。首字是第一个思考/正文/工具调用到达的时间；强度是实际转给上游的思考档位，映射过会显示「客户端→上游」。
         </CardDescription>
         <CardAction className="flex flex-wrap items-center gap-3">
           <Label className="text-muted-foreground cursor-pointer gap-2 font-normal">
@@ -221,6 +256,30 @@ export function HistoryPanel({
         </CardAction>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="relative max-w-sm flex-1">
+            <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="筛选模型 / 账号 / 渠道 / 错误"
+              aria-label="筛选请求历史"
+              className="pl-8"
+            />
+          </div>
+          <Label className="text-muted-foreground cursor-pointer gap-2 font-normal">
+            <Switch
+              size="sm"
+              checked={query.onlyErrors}
+              onCheckedChange={(checked) => onQueryChange({ ...query, onlyErrors: checked })}
+              aria-label="只看失败"
+            />
+            只看失败
+          </Label>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            显示 {history.length} / {total} 条
+          </span>
+        </div>
         <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
           {/* Eleven columns: slightly tighter cell padding keeps failover rows
               (trace badges, wrapped errors) inside 1400px without scrolling. */}
@@ -327,6 +386,13 @@ export function HistoryPanel({
             </TableBody>
           </Table>
         </div>
+        {hasMore && (
+          <div className="mt-4 flex justify-center">
+            <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+              {loadingMore ? "加载中…" : `加载更多（还有 ${Math.max(total - history.length, 0)} 条）`}
+            </Button>
+          </div>
+        )}
       </CardContent>
       <ConfirmDialog
         open={clearing}

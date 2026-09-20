@@ -7,6 +7,10 @@ import (
 
 const DefaultUpstreamBase = "https://api.cline.bot/api/v1"
 
+// HistoryLimit is how many request records a data directory keeps. The console
+// pages through them; the oldest entry beyond this is dropped on write.
+const HistoryLimit = 500
+
 var DefaultKnownModels = []string{
 	"cline-pass/glm-5.3-flash",
 	"cline-pass/kimi-k3",

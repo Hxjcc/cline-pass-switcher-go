@@ -52,6 +52,12 @@ func (s *Store) commitLocked(entry journalEntry) error {
 	// Admin operations wait for the disk; unlike request history they cannot be
 	// rebuilt, so they must not be lost to a power failure.
 	durable := entry.Kind != "record"
+	// Materializing the JSON snapshots rewrites both files, so only the
+	// operations that change configuration or the whole metadata document do it
+	// immediately. A probed model row is safe in the journal: it is fsynced
+	// above and replayed on the next start, which is what makes bulk probing
+	// stop rewriting metadata.json once per model.
+	snapshotNow := durable && entry.Kind != "model"
 	if err = s.appendJournalLocked(append(raw, '\n'), durable); err != nil {
 		return err
 	}
@@ -68,7 +74,7 @@ func (s *Store) commitLocked(entry journalEntry) error {
 			}
 		}
 	}
-	if durable || s.pending >= checkpointInterval {
+	if snapshotNow || s.pending >= checkpointInterval {
 		if err := s.checkpointLocked(); err != nil {
 			// The change is already durable. Keep the journal for retry/recovery.
 			log.Printf("store checkpoint failed (committed journal retained): %v", err)
@@ -164,8 +170,8 @@ func (s *Store) applyEntry(entry journalEntry) {
 		}
 		s.meta.Models[e.Model] = current
 		s.meta.History = append([]model.HistoryEntry{e}, s.meta.History...)
-		if len(s.meta.History) > 100 {
-			s.meta.History = s.meta.History[:100]
+		if len(s.meta.History) > model.HistoryLimit {
+			s.meta.History = s.meta.History[:model.HistoryLimit]
 		}
 		// Counters follow the stable account identity; entries written by
 		// older versions only carry a name and keep working through the

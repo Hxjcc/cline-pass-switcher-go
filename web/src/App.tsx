@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   Boxes,
@@ -13,21 +13,17 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AccountsPanel } from "@/components/accounts-panel"
 import { BrandMark } from "@/components/brand-mark"
-import { CatalogPanel } from "@/components/catalog-panel"
-import { HistoryPanel } from "@/components/history-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
-import { ModelsPanel } from "@/components/models-panel"
-import { SecurityPanel } from "@/components/security-panel"
-import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
+import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import type {
   AccountTestResponse,
   AccountsResponse,
@@ -46,6 +42,71 @@ import type {
 const ADMIN_KEY_STORAGE = "cline-pass-switcher-admin-key"
 const SNAPSHOT_STORAGE = "cline-pass-switcher-snapshot"
 const TAB_STORAGE = "cline-pass-switcher-tab"
+const HISTORY_PAGE_SIZE = 50
+
+// Each tab is its own chunk: the console ships a table-heavy model panel, a
+// history table and a test bench, and nobody needs all three to sign in.
+const AccountsPanel = lazy(() =>
+  import("@/components/accounts-panel").then((module) => ({ default: module.AccountsPanel })),
+)
+const CatalogPanel = lazy(() =>
+  import("@/components/catalog-panel").then((module) => ({ default: module.CatalogPanel })),
+)
+const HistoryPanel = lazy(() =>
+  import("@/components/history-panel").then((module) => ({ default: module.HistoryPanel })),
+)
+const ModelsPanel = lazy(() =>
+  import("@/components/models-panel").then((module) => ({ default: module.ModelsPanel })),
+)
+const SecurityPanel = lazy(() =>
+  import("@/components/security-panel").then((module) => ({ default: module.SecurityPanel })),
+)
+const TestBench = lazy(() =>
+  import("@/components/test-bench").then((module) => ({ default: module.TestBench })),
+)
+
+function PanelFallback() {
+  return (
+    <div className="space-y-3">
+      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-64 w-full" />
+    </div>
+  )
+}
+
+// The proxy key is the only credential for the console and the API. It is kept
+// in sessionStorage by default (gone when the tab closes) and only written to
+// localStorage when the operator ticks "remember this device" at login.
+function readPersistentAdminKey(): string {
+  try {
+    return localStorage.getItem(ADMIN_KEY_STORAGE) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function readAdminKey(): string {
+  try {
+    return sessionStorage.getItem(ADMIN_KEY_STORAGE) ?? readPersistentAdminKey()
+  } catch {
+    return readPersistentAdminKey()
+  }
+}
+
+function storeAdminKey(key: string, remember: boolean) {
+  try {
+    if (key) sessionStorage.setItem(ADMIN_KEY_STORAGE, key)
+    else sessionStorage.removeItem(ADMIN_KEY_STORAGE)
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+  try {
+    if (key && remember) localStorage.setItem(ADMIN_KEY_STORAGE, key)
+    else localStorage.removeItem(ADMIN_KEY_STORAGE)
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
 
 const TABS = [
   { value: "overview", label: "模型与上游", icon: Boxes },
@@ -60,6 +121,8 @@ interface CachedSnapshot {
   models: ModelsResponse
   meta: MetaResponse
   history: HistoryResponse["history"]
+  historyTotal?: number
+  historyHasMore?: boolean
   accounts: AccountsResponse
   security: SecurityResponse
 }
@@ -70,9 +133,17 @@ async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
     api<ModelsResponse>("/api/models", { key }),
     api<AccountsResponse>("/api/accounts", { key }),
     api<SecurityResponse>("/api/security", { key }),
-    api<HistoryResponse>("/api/history", { key }),
+    api<HistoryResponse>(`/api/history?limit=${HISTORY_PAGE_SIZE}`, { key }),
   ])
-  return { meta, models, accounts, security, history: history.history }
+  return {
+    meta,
+    models,
+    accounts,
+    security,
+    history: history.history,
+    historyTotal: history.total,
+    historyHasMore: history.hasMore,
+  }
 }
 
 function readSnapshot(): CachedSnapshot | null {
@@ -97,7 +168,7 @@ function readSnapshot(): CachedSnapshot | null {
 
 function App() {
   const [initialSnapshot] = useState(readSnapshot)
-  const [authKey, setAuthKey] = useState(() => localStorage.getItem(ADMIN_KEY_STORAGE) ?? "")
+  const [authKey, setAuthKey] = useState(readAdminKey)
   const [meta, setMeta] = useState<MetaResponse | null>(initialSnapshot?.meta ?? null)
   const [models, setModels] = useState<ModelsResponse | null>(initialSnapshot?.models ?? null)
   const [accounts, setAccounts] = useState<AccountsResponse | null>(
@@ -109,9 +180,19 @@ function App() {
   const [history, setHistory] = useState<HistoryResponse["history"]>(
     initialSnapshot?.history ?? [],
   )
+  const [historyTotal, setHistoryTotal] = useState(
+    initialSnapshot?.historyTotal ?? initialSnapshot?.history.length ?? 0,
+  )
+  const [historyHasMore, setHistoryHasMore] = useState(initialSnapshot?.historyHasMore ?? false)
+  const [historyQuery, setHistoryQuery] = useState<{ q: string; onlyErrors: boolean }>({
+    q: "",
+    onlyErrors: false,
+  })
   const [loginOpen, setLoginOpen] = useState(false)
   const [tab, setTab] = useState(() => sessionStorage.getItem(TAB_STORAGE) || "overview")
   const [refreshing, setRefreshing] = useState(false)
+  const [batchProbe, setBatchProbe] = useState<{ done: number; total: number } | null>(null)
+  const batchProbeAbort = useRef<AbortController | null>(null)
 
   const handleError = useCallback((error: unknown) => {
     if (error instanceof UnauthorizedError) {
@@ -127,11 +208,60 @@ function App() {
     return response
   }
 
-  const loadHistory = async (key = authKey) => {
-    const response = await api<HistoryResponse>("/api/history", { key })
-    setHistory(response.history)
-    return response.history
-  }
+  // The log is paged: the panel asks for the next slice with the filter it is
+  // currently showing, and appended pages keep the newest-first order.
+  const loadHistory = useCallback(
+    async (
+      options: { offset?: number; limit?: number; q?: string; onlyErrors?: boolean } = {},
+    ) => {
+      const offset = options.offset ?? 0
+      const limit = Math.min(Math.max(options.limit ?? HISTORY_PAGE_SIZE, 1), 200)
+      const params = new URLSearchParams({
+        limit: String(limit),
+        offset: String(offset),
+      })
+      if (options.q?.trim()) params.set("q", options.q.trim())
+      if (options.onlyErrors) params.set("result", "error")
+      const response = await api<HistoryResponse>(`/api/history?${params.toString()}`, {
+        key: authKey,
+      })
+      setHistory((current) => (offset > 0 ? [...current, ...response.history] : response.history))
+      setHistoryTotal(response.total)
+      setHistoryHasMore(response.hasMore)
+      return response
+    },
+    [authKey],
+  )
+
+  const applyHistoryQuery = useCallback(
+    (next: { q: string; onlyErrors: boolean }) => {
+      setHistoryQuery(next)
+      void loadHistory({ q: next.q, onlyErrors: next.onlyErrors }).catch(handleError)
+    },
+    [loadHistory, handleError],
+  )
+
+  const refreshHistory = useCallback(
+    () =>
+      loadHistory({
+        // Refreshing keeps the window the operator has scrolled to instead of
+        // collapsing a loaded second page back to the first one.
+        limit: Math.max(HISTORY_PAGE_SIZE, Math.min(history.length, 200)),
+        q: historyQuery.q,
+        onlyErrors: historyQuery.onlyErrors,
+      }),
+    [loadHistory, history.length, historyQuery],
+  )
+
+  const loadMoreHistory = useCallback(
+    () =>
+      loadHistory({
+        offset: history.length,
+        q: historyQuery.q,
+        onlyErrors: historyQuery.onlyErrors,
+      }),
+    [loadHistory, history.length, historyQuery],
+  )
 
   const applySnapshot = useCallback((snapshot: CachedSnapshot) => {
     setMeta(snapshot.meta)
@@ -139,6 +269,8 @@ function App() {
     setAccounts(snapshot.accounts)
     setSecurity(snapshot.security)
     setHistory(snapshot.history)
+    setHistoryTotal(snapshot.historyTotal ?? snapshot.history.length)
+    setHistoryHasMore(snapshot.historyHasMore ?? false)
   }, [])
 
   const loadAll = async (key = authKey) => {
@@ -183,9 +315,9 @@ function App() {
     sessionStorage.setItem(TAB_STORAGE, tab)
   }, [tab])
 
-  const login = async (key: string) => {
+  const login = async (key: string, remember = false) => {
     await api<ModelsResponse>("/api/models", { key })
-    localStorage.setItem(ADMIN_KEY_STORAGE, key)
+    storeAdminKey(key, remember)
     setAuthKey(key)
   }
 
@@ -239,11 +371,8 @@ function App() {
       body: value,
     })
     const nextKey = response.proxyKey || ""
-    if (nextKey) {
-      localStorage.setItem(ADMIN_KEY_STORAGE, nextKey)
-    } else {
-      localStorage.removeItem(ADMIN_KEY_STORAGE)
-    }
+    // Changing the key keeps whatever lifetime the operator already chose.
+    storeAdminKey(nextKey, readPersistentAdminKey() !== "")
     setAuthKey(nextKey)
     setSecurity(response)
     if (response.proxyBase) {
@@ -261,16 +390,47 @@ function App() {
     return response
   }
 
+  // Probing every model is one real upstream request each, so the batch runs a
+  // few at a time, reports progress, and can be stopped without leaving the
+  // panel stuck on "probing".
   const probeAll = async () => {
     const list = models?.subscription ?? []
-    for (const model of list) {
-      await api<ProbeResponse>("/api/probe", {
-        key: authKey,
-        body: { model: model.id },
-      })
+    if (!list.length || batchProbeAbort.current) {
+      return { ok: 0, failed: 0, aborted: false }
     }
-    await loadModels()
+    const controller = new AbortController()
+    batchProbeAbort.current = controller
+    let result: ProbeBatchResult = { ok: 0, failed: 0, aborted: false }
+    try {
+      result = await runProbeBatch(
+        list.map((model) => model.id),
+        async (modelID, signal) => {
+          await api<ProbeResponse>("/api/probe", {
+            key: authKey,
+            body: { model: modelID },
+            signal,
+          })
+        },
+        {
+          signal: controller.signal,
+          onProgress: (done, total) => setBatchProbe({ done, total }),
+        },
+      )
+    } finally {
+      batchProbeAbort.current = null
+      setBatchProbe(null)
+    }
+    if (!result.aborted) {
+      try {
+        await loadModels()
+      } catch (error) {
+        handleError(error)
+      }
+    }
+    return result
   }
+
+  const cancelProbeAll = () => batchProbeAbort.current?.abort()
 
   const validate = async (modelID: string) => {
     const response = await api<ValidationResponse>("/api/validate-upstreams", {
@@ -338,6 +498,8 @@ function App() {
   const clearHistory = async () => {
     await api("/api/history/clear", { key: authKey, body: {} })
     setHistory([])
+    setHistoryTotal(0)
+    setHistoryHasMore(false)
   }
 
   const statistics = useMemo(() => {
@@ -455,62 +617,91 @@ function App() {
               />
             </div>
             {models && (
-              <ModelsPanel
-                data={models}
-                onRefresh={async () => {
-                  await loadModels()
-                }}
-                onProbe={probe}
-                onProbeAll={probeAll}
-                onValidate={async (modelID) => {
-                  await validate(modelID)
-                }}
-                onTest={testModel}
-                onUpdateConfig={updateModelConfig}
-                onFetchOfficial={fetchOfficial}
-                onRemove={removeModel}
-              />
+              <Suspense fallback={<PanelFallback />}>
+                <ModelsPanel
+                  data={models}
+                  onRefresh={async () => {
+                    await loadModels()
+                  }}
+                  onProbe={probe}
+                  onProbeAll={probeAll}
+                  probeAllProgress={batchProbe}
+                  onCancelProbeAll={cancelProbeAll}
+                  onValidate={async (modelID) => {
+                    await validate(modelID)
+                  }}
+                  onTest={testModel}
+                  onUpdateConfig={updateModelConfig}
+                  onFetchOfficial={fetchOfficial}
+                  onRemove={removeModel}
+                />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="accounts">
             {accounts && (
-              <AccountsPanel
-                data={accounts}
-                onSave={saveAccounts}
-                onTest={testAccount}
-                onReveal={revealAccounts}
-                onQuota={loadQuota}
-              />
+              <Suspense fallback={<PanelFallback />}>
+                <AccountsPanel
+                  data={accounts}
+                  onSave={saveAccounts}
+                  onTest={testAccount}
+                  onReveal={revealAccounts}
+                  onQuota={loadQuota}
+                />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="security">
             {security && (
-              <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+              <Suspense fallback={<PanelFallback />}>
+                <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="test">
-            {models && <TestBench models={models.subscription} onTest={testModel} />}
+            {models && (
+              <Suspense fallback={<PanelFallback />}>
+                <TestBench models={models.subscription} onTest={testModel} />
+              </Suspense>
+            )}
           </TabsContent>
 
           <TabsContent value="history">
-            <HistoryPanel
-              history={history}
-              onRefresh={async () => {
-                try {
-                  await loadHistory()
-                } catch (error) {
-                  handleError(error)
-                }
-              }}
-              onClear={clearHistory}
-            />
+            <Suspense fallback={<PanelFallback />}>
+              <HistoryPanel
+                history={history}
+                total={historyTotal}
+                hasMore={historyHasMore}
+                query={historyQuery}
+                onQueryChange={applyHistoryQuery}
+                onRefresh={async () => {
+                  try {
+                    await refreshHistory()
+                  } catch (error) {
+                    handleError(error)
+                  }
+                }}
+                onLoadMore={async () => {
+                  try {
+                    await loadMoreHistory()
+                  } catch (error) {
+                    handleError(error)
+                  }
+                }}
+                onClear={clearHistory}
+              />
+            </Suspense>
           </TabsContent>
 
           <TabsContent value="catalog">
-            {models && <CatalogPanel data={models} onProbe={probe} />}
+            {models && (
+              <Suspense fallback={<PanelFallback />}>
+                <CatalogPanel data={models} onProbe={probe} />
+              </Suspense>
+            )}
           </TabsContent>
         </Tabs>
       </main>

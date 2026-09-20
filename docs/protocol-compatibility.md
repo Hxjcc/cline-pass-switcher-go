@@ -82,7 +82,7 @@ CLI 文件/工具链路、CLI 自行压缩和 HTTP `/responses/compact` 是三�
 
 后续独立 HTTP 验收请求了严格 JSON Schema。compact 成功且回放仍包含正确标识、颜色和待办，但真实上游返回 Markdown JSON 代码块，使用 `image_color` 替代要求的 `color`，并多出 `status` 字段。该次严格结构化输出验收未通过，不能据此声称该模型/渠道提供严格 schema 保证。当时代理只将 `text.format` 映射到 Chat 的 `response_format`。后续已增加下面的本地校验，使同类违规输出明确失败；历史验收记录保留原结果。
 
-脱敏后的机器可读结果见 [acceptance-2026-09-18.json](acceptance-2026-09-18.json)。验收结束已停止隔离代理进程并删除包含账号密钥的临时配置副本，原始项目配置未修改。
+脱敏后的机器可读结果保存在本地 `docs/acceptance-2026-09-18.json`；`docs/acceptance-*.json` 按 `.gitignore` 不入库，该文件只存在于运行过验收的机器上。验收结束已停止隔离代理进程并删除包含账号密钥的临时配置副本，原始项目配置未修改。
 
 ## 严格 JSON Schema 结果校验
 

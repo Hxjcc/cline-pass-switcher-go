@@ -184,6 +184,10 @@ export interface HistoryItem {
 
 export interface HistoryResponse {
   history: HistoryItem[]
+  total: number
+  offset: number
+  limit: number
+  hasMore: boolean
 }
 
 export interface AccountTestResponse {

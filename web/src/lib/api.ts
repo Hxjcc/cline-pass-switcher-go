@@ -11,6 +11,8 @@ export async function api<T>(
     key?: string
     method?: "GET" | "POST"
     body?: unknown
+    /** Cancels the request, for example when a batch run is stopped. */
+    signal?: AbortSignal
   } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {}
@@ -20,11 +22,15 @@ export async function api<T>(
   if (options.key) {
     headers["X-Admin-Key"] = options.key
   }
-  const response = await fetch(path, {
+  const init: RequestInit = {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  })
+  }
+  if (options.signal) {
+    init.signal = options.signal
+  }
+  const response = await fetch(path, init)
   if (response.status === 401) {
     throw new UnauthorizedError()
   }

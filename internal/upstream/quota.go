@@ -84,13 +84,16 @@ func (s *Service) ProbeQuota(ctx context.Context, accountID string, refresh bool
 	return result
 }
 
-// ProbeQuotas probes the given account ids, or every enabled account when the
-// list is empty. Results keep the account order.
+// ProbeQuotas probes the given account ids, or every account that has a
+// credential when the list is empty. Enablement is a routing concern: the
+// console draws a meter for disabled rows too, and these endpoints are
+// read-only, so a switched-off account still reports its remaining quota.
+// Results keep the account order.
 func (s *Service) ProbeQuotas(ctx context.Context, accountIDs []string, refresh bool) []AccountQuota {
 	accounts := make([]model.Account, 0, 4)
 	if len(accountIDs) == 0 {
 		for _, account := range s.store.Accounts() {
-			if account.Key != "" && account.Enabled {
+			if account.Key != "" {
 				accounts = append(accounts, account)
 			}
 		}

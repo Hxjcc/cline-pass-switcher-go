@@ -49,6 +49,11 @@ func TestFailedCommitsDoNotChangeMemoryOrSnapshots(t *testing.T) {
 	metaDisk, _ := os.ReadFile(s.metaPath)
 	original := s.journalPath
 	s.journalPath = t.TempDir()
+	// Commits reuse one open append handle, so the swapped-in path only takes
+	// effect once that handle is gone.
+	if err := s.closeJournalLocked(); err != nil {
+		t.Fatal(err)
+	}
 	for _, update := range []func() error{
 		func() error {
 			return s.UpdateConfig(func(c *model.Config) {
@@ -204,8 +209,84 @@ func TestCheckpointCompactsJournalWithoutLosingHistory(t *testing.T) {
 	}
 	defer reopened.Close()
 	meta := reopened.Metadata()
-	if meta.Stats["test"].Requests != checkpointInterval+7 || len(meta.History) != 100 || meta.History[0].TS != checkpointInterval+6 {
+	if meta.Stats["test"].Requests != checkpointInterval+7 || len(meta.History) != checkpointInterval+7 || meta.History[0].TS != checkpointInterval+6 {
 		t.Fatal("checkpoint or replay lost request history")
+	}
+}
+
+// The log is a ring: once the limit is reached the oldest record falls off, and
+// the trim has to survive a checkpoint plus a crash replay (the journal keeps
+// appending while the snapshot is what the console reads).
+func TestHistoryIsTrimmedAtTheConfiguredLimit(t *testing.T) {
+	s, dir := testStore(t)
+	total := model.HistoryLimit + 10
+	for i := 0; i < total; i++ {
+		if err := s.Record(model.HistoryEntry{Model: "test", Account: "test", TS: int64(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(label string, history []model.HistoryEntry) {
+		t.Helper()
+		if len(history) != model.HistoryLimit {
+			t.Fatalf("%s: kept %d records, want %d", label, len(history), model.HistoryLimit)
+		}
+		if history[0].TS != int64(total-1) {
+			t.Fatalf("%s: newest record is %d", label, history[0].TS)
+		}
+		if history[len(history)-1].TS != int64(total-model.HistoryLimit) {
+			t.Fatalf("%s: oldest kept record is %d", label, history[len(history)-1].TS)
+		}
+	}
+	check("live", s.Metadata().History)
+	s.simulateCrash(t)
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	check("replayed", reopened.Metadata().History)
+}
+
+// Probing a model is a frequent admin write; rewriting the whole metadata
+// snapshot for each one made bulk probing quadratic. The journal is the commit
+// point, so the row must survive a crash without the snapshot being touched.
+func TestModelUpdatesStayInTheJournalWithoutRewritingSnapshots(t *testing.T) {
+	s, dir := testStore(t)
+	if _, err := s.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.LastProvider = "z-ai"
+		meta.ProbedAt = 42
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(s.metaPath); err == nil && bytes.Contains(raw, []byte("z-ai")) {
+		t.Fatal("a model update should not rewrite the metadata snapshot")
+	}
+
+	s.simulateCrash(t)
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	meta := reopened.ModelMeta("cline-pass/test")
+	if meta.LastProvider != "z-ai" || meta.ProbedAt != 42 {
+		t.Fatalf("model metadata was lost with the snapshot: %#v", meta)
+	}
+}
+
+// Configuration cannot be rebuilt from anywhere, so it still has to reach both
+// the journal and the snapshot before the call returns.
+func TestConfigUpdatesStillWriteTheirSnapshotImmediately(t *testing.T) {
+	s, _ := testStore(t)
+	if err := s.UpdateConfig(func(cfg *model.Config) { cfg.ProxyKey = "snapshot-key" }); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(s.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("snapshot-key")) {
+		t.Fatal("configuration must be materialized before the call returns")
 	}
 }
 

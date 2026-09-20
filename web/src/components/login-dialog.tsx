@@ -2,6 +2,7 @@ import { useState } from "react"
 import { KeyRound, LogIn, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -21,15 +22,17 @@ export function LoginDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onLogin: (key: string) => Promise<void>
+  onLogin: (key: string, remember: boolean) => Promise<void>
 }) {
   const [key, setKey] = useState("")
+  const [remember, setRemember] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [previousOpen, setPreviousOpen] = useState(open)
   if (previousOpen !== open) {
     setPreviousOpen(open)
     setKey("")
+    setRemember(false)
     setError("")
   }
 
@@ -38,7 +41,7 @@ export function LoginDialog({
     setLoading(true)
     setError("")
     try {
-      await onLogin(key.trim())
+      await onLogin(key.trim(), remember)
       onOpenChange(false)
     } catch (loginError) {
       setError(errorMessage(loginError))
@@ -70,6 +73,19 @@ export function LoginDialog({
               if (event.key === "Enter") void submit()
             }}
           />
+          <Label className="mt-2 font-normal" htmlFor="login-remember">
+            <Checkbox
+              id="login-remember"
+              checked={remember}
+              onCheckedChange={(checked) => setRemember(checked === true)}
+            />
+            在这台设备上记住密钥
+          </Label>
+          <p className="text-muted-foreground text-xs">
+            {remember
+              ? "密钥会写入浏览器 localStorage，关闭浏览器后仍然保留。"
+              : "密钥只保存在本次会话（sessionStorage），关闭标签页即失效。"}
+          </p>
           {error && <p className="text-destructive text-sm">{error}</p>}
         </div>
         <DialogFooter>

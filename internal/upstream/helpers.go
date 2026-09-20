@@ -393,7 +393,9 @@ func classifyUpstreamError(message string) string {
 var (
 	availableProvidersRE = regexp.MustCompile(`(?i)Available providers are:\s*([^.]+)`)
 	slugTokenRE          = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	tier0RE              = regexp.MustCompile(`([\w-]+) won tier 0 over ([^."]+)`)
+	// Provider names may carry dots ("Z.AI"), so the winner token cannot be
+	// limited to word characters and dashes.
+	tier0RE = regexp.MustCompile(`([\w.-]+) won tier 0 over ([^."]+)`)
 )
 
 func parseAvailableProviders(message string) []string {
@@ -536,15 +538,6 @@ func normalizeSlug(value string) string {
 		}
 	}
 	return builder.String()
-}
-
-func joinErrors(values ...error) error {
-	for _, value := range values {
-		if value != nil {
-			return value
-		}
-	}
-	return nil
 }
 
 var errNoAccount = errors.New("尚未配置可用的 Cline Pass 账号")
