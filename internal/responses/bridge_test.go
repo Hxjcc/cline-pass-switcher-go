@@ -1647,6 +1647,48 @@ func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
 	}
 }
 
+func TestWebSearchPolicyIsInjectedOnlyWhenDeclared(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash", "input": "hi",
+		"instructions": "base instructions",
+		"tools":        []any{map[string]any{"type": "web_search"}},
+	}
+	chat, _, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	first := jsonx.Map(messages[0])
+	content := jsonx.String(first["content"])
+	if jsonx.String(first["role"]) != "system" ||
+		!strings.Contains(content, "base instructions") ||
+		!strings.Contains(content, "Web search policy") ||
+		!strings.Contains(content, "at most one web search call") ||
+		!strings.Contains(content, "at most 3 results") {
+		t.Fatalf("web search policy was not injected: %#v", first)
+	}
+
+	plain := map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash", "input": "hi",
+		"instructions": "base instructions",
+	}
+	chat, _, err = ToChatWithOptions(plain, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content = jsonx.String(jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"]); strings.Contains(content, "Web search policy") {
+		t.Fatalf("policy leaked into a request without web_search: %#v", content)
+	}
+
+	chat, _, err = ToChatWithOptions(body, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content = jsonx.String(jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"]); strings.Contains(content, "Web search policy") {
+		t.Fatalf("policy leaked while the provider tool was disabled: %#v", content)
+	}
+}
+
 func TestProviderToolCallNeverReachesTheClient(t *testing.T) {
 	_, context, err := ToChatWithOptions(map[string]any{
 		"model": "cline-pass/glm-5.3-flash", "input": "search", "stream": true,

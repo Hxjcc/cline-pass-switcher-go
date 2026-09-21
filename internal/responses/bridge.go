@@ -539,6 +539,18 @@ func (context *Context) isProviderTool(name string) bool {
 	return found
 }
 
+func (context *Context) webSearchPolicy() string {
+	if context == nil || context.webSearchTool == "" || !context.isProviderTool(context.webSearchTool) {
+		return ""
+	}
+	return "Web search policy:\n" +
+		"- Use at most one web search call per turn.\n" +
+		"- Request at most 3 results.\n" +
+		"- Do not issue parallel web searches.\n" +
+		"- Do not output raw XML or DSML tool-call markup.\n" +
+		"- After receiving search results, answer directly; only search again if the results are clearly insufficient."
+}
+
 func (context *Context) collectDeclaredInputTools(value any, depth int) {
 	if depth > 16 {
 		return
@@ -1422,15 +1434,21 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 
 	messages := make([]any, 0, 16)
 	prefixMessages := make([]any, 0, 2)
+	webSearchPolicy := context.webSearchPolicy()
 	if instructions := body["instructions"]; instructions != nil {
 		text := jsonx.String(instructions)
 		if text == "" {
 			raw, _ := json.Marshal(instructions)
 			text = string(raw)
 		}
+		if webSearchPolicy != "" {
+			text = strings.TrimSpace(text + "\n\n" + webSearchPolicy)
+		}
 		if text != "" {
 			prefixMessages = append(prefixMessages, map[string]any{"role": "system", "content": text})
 		}
+	} else if webSearchPolicy != "" {
+		prefixMessages = append(prefixMessages, map[string]any{"role": "system", "content": webSearchPolicy})
 	}
 	input := jsonx.Slice(body["input"])
 	if input == nil {
