@@ -84,6 +84,11 @@ func ApplyEnvironment(cfg *Config) {
 	if shell := firstNonEmptyEnv("SHELL_COMPAT", "EXEC_SHELL_COMPAT"); shell != "" {
 		cfg.ShellCompat = shell
 	}
+	if raw := strings.TrimSpace(firstNonEmptyEnv("SHELL_COMPAT_ENFORCE", "EXEC_SHELL_COMPAT_ENFORCE")); raw != "" {
+		if enforce, err := strconv.ParseBool(raw); err == nil {
+			cfg.ShellCompatEnforce = enforce
+		}
+	}
 }
 
 func firstNonEmptyEnv(names ...string) string {

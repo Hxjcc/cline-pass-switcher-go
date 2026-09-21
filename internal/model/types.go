@@ -97,12 +97,16 @@ type Config struct {
 	// parameter (exec_command and friends) to this value and marks it
 	// required, for example "powershell" on a Windows client. Empty or "off"
 	// leaves the client's schemas untouched.
-	ShellCompat   string    `json:"shellCompat,omitempty"`
-	UpstreamBase  string    `json:"upstreamBase"`
-	Accounts      []Account `json:"accounts"`
-	AccountMode   string    `json:"accountMode"`
-	ActiveAccount int       `json:"activeAccount"`
-	KnownModels   []string  `json:"knownModels"`
+	ShellCompat string `json:"shellCompat,omitempty"`
+	// ShellCompatEnforce also rewrites the model's actual tool-call arguments
+	// for shell-capable tools. It is off by default and only makes sense when
+	// ShellCompat is set.
+	ShellCompatEnforce bool      `json:"shellCompatEnforce,omitempty"`
+	UpstreamBase       string    `json:"upstreamBase"`
+	Accounts           []Account `json:"accounts"`
+	AccountMode        string    `json:"accountMode"`
+	ActiveAccount      int       `json:"activeAccount"`
+	KnownModels        []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.

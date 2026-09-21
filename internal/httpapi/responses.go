@@ -32,13 +32,14 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:   responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory: s.store.StrictToolHistory(),
-		WebSearchUpstream: s.store.WebSearchUpstream(),
-		WebFetchUpstream:  s.store.WebFetchUpstream(),
-		ShellCompat:       s.store.ShellCompat(),
+		ReplayReasoning:    responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:   s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:       responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:  s.store.StrictToolHistory(),
+		WebSearchUpstream:  s.store.WebSearchUpstream(),
+		WebFetchUpstream:   s.store.WebFetchUpstream(),
+		ShellCompat:        s.store.ShellCompat(),
+		ShellCompatEnforce: s.store.ShellCompatEnforce(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)

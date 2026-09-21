@@ -72,3 +72,44 @@ func TestShellCompatReachesUpstreamToolSchema(t *testing.T) {
 		t.Fatalf("the echo must keep the client's schema: %#v", echoedShell)
 	}
 }
+
+func TestShellCompatEnforceRewritesUpstreamToolCall(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"Get-ChildItem\",\"shell\":\"bash\"}"}}]},"finish_reason":"tool_calls"}]}`)
+	}))
+	defer up.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = up.URL
+		config.Accounts = []model.Account{{Name: "main", Key: "key", Enabled: true}}
+		config.ShellCompat = "powershell"
+		config.ShellCompatEnforce = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"model":"cline-pass/test","input":"跑个命令","tools":[{"type":"function","name":"exec_command","description":"run","parameters":{"type":"object","properties":{"cmd":{"type":"string"},"shell":{"type":"string","enum":["bash","cmd","powershell"]}},"required":["cmd"]}}]}`
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("request failed: %d %s", response.Code, response.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	output := jsonx.Slice(payload["output"])
+	if len(output) != 1 || jsonx.String(jsonx.Map(output[0])["type"]) != "function_call" {
+		t.Fatalf("unexpected output: %#v", output)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(jsonx.String(jsonx.Map(output[0])["arguments"])), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments["shell"] != "powershell" || arguments["cmd"] != "Get-ChildItem" {
+		t.Fatalf("tool call was not rewritten: %#v", arguments)
+	}
+}

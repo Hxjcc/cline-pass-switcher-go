@@ -157,16 +157,21 @@ func TestShellCompatEnvironmentOverride(t *testing.T) {
 	for _, name := range []string{
 		"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT", "STRICT_TOOL_HISTORY",
 		"WEB_SEARCH_UPSTREAM", "WEB_FETCH_UPSTREAM", "SHELL_COMPAT", "EXEC_SHELL_COMPAT",
+		"SHELL_COMPAT_ENFORCE", "EXEC_SHELL_COMPAT_ENFORCE",
 	} {
 		t.Setenv(name, "")
 	}
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	t.Setenv("SHELL_COMPAT", "  powershell  ")
+	t.Setenv("SHELL_COMPAT_ENFORCE", "true")
 	config, err := LoadConfig(missing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.ShellCompat != "powershell" {
 		t.Fatalf("SHELL_COMPAT was ignored: %q", config.ShellCompat)
+	}
+	if !config.ShellCompatEnforce {
+		t.Fatal("SHELL_COMPAT_ENFORCE was ignored")
 	}
 }

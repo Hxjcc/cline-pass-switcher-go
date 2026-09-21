@@ -33,6 +33,7 @@ type toolBinding struct {
 	Kind      string
 	Name      string
 	Namespace string
+	HasShell  bool
 }
 
 // Context keeps the parts of a Responses request needed to translate the
@@ -61,14 +62,15 @@ type Context struct {
 	// shellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value and marks the parameter required. Empty keeps
 	// the client's own schema untouched.
-	shellCompat     string
-	providerTools   map[string]struct{}
-	bindings        map[string]toolBinding
-	originalToChat  map[string]string
-	chatTools       []any
-	toolNames       map[string]struct{}
-	compactionUsers []any
-	outputSchema    *jsonschema.Schema
+	shellCompat        string
+	shellCompatEnforce bool
+	providerTools      map[string]struct{}
+	bindings           map[string]toolBinding
+	originalToChat     map[string]string
+	chatTools          []any
+	toolNames          map[string]struct{}
+	compactionUsers    []any
+	outputSchema       *jsonschema.Schema
 }
 
 func boolValue(value any, fallback bool) bool {
@@ -274,10 +276,12 @@ func (context *Context) addResponseTool(value any, namespace string) {
 		return
 	}
 
-	context.bindings[chatName] = toolBinding{Kind: "function", Name: name, Namespace: namespace}
 	parameters := tool["parameters"]
 	if parameters == nil {
 		parameters = tool["input_schema"]
+	}
+	context.bindings[chatName] = toolBinding{
+		Kind: "function", Name: name, Namespace: namespace, HasShell: schemaHasShellProperty(parameters),
 	}
 	parameters = context.lockToolShell(parameters)
 	context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, tool["strict"]))
@@ -330,6 +334,57 @@ func (context *Context) lockToolShell(parameters any) any {
 	}
 	nextSchema["required"] = required
 	return nextSchema
+}
+
+func schemaHasShellProperty(parameters any) bool {
+	schema := jsonx.Map(parameters)
+	if schema == nil {
+		return false
+	}
+	properties := jsonx.Map(schema["properties"])
+	if properties == nil {
+		return false
+	}
+	_, found := properties["shell"]
+	return found
+}
+
+func (context *Context) toolHasShell(name string) bool {
+	if context == nil {
+		return false
+	}
+	binding, found := context.bindings[name]
+	return found && binding.HasShell
+}
+
+func (context *Context) enforcesShell(name string) bool {
+	return context != nil && context.shellCompat != "" && context.shellCompatEnforce && context.toolHasShell(name)
+}
+
+// rewriteToolShell replaces only the shell property in a complete JSON
+// argument object. Other properties are kept as raw JSON so their values are
+// not re-encoded.
+func (context *Context) rewriteToolShell(name, arguments string) (string, bool) {
+	if !context.enforcesShell(name) {
+		return arguments, false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &object); err != nil {
+		return arguments, false
+	}
+	if object == nil {
+		object = map[string]json.RawMessage{}
+	}
+	shell, err := json.Marshal(context.shellCompat)
+	if err != nil {
+		return arguments, false
+	}
+	object["shell"] = shell
+	rewritten, err := json.Marshal(object)
+	if err != nil {
+		return arguments, false
+	}
+	return string(rewritten), true
 }
 
 // isWebSearchToolType reports whether the client declared OpenAI's hosted web
@@ -956,6 +1011,9 @@ type Options struct {
 	// required, so Windows clients stop falling back to cmd.exe when a model
 	// omits the parameter. Empty or "off" leaves schemas untouched.
 	ShellCompat string
+	// ShellCompatEnforce also rewrites complete tool-call arguments for
+	// shell-capable tools. It only takes effect when ShellCompat is set.
+	ShellCompatEnforce bool
 }
 
 // ShouldReplayReasoning reports whether reasoning_content can be replayed in
@@ -1330,6 +1388,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
 		shellCompat:        normaliseShellCompat(options.ShellCompat),
+		shellCompatEnforce: options.ShellCompatEnforce,
 		providerTools:      map[string]struct{}{},
 		bindings:           map[string]toolBinding{},
 		originalToChat:     map[string]string{},

@@ -573,6 +573,7 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
+	bufferShell := state.context != nil && state.context.enforcesShell(current.ChatName)
 	events := []Event{}
 	if !current.Added && current.ChatName != "" {
 		base := state.context.responseOutputItemFromTool(map[string]any{
@@ -587,12 +588,12 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 		events = append(events, event("response.output_item.added", map[string]any{
 			"output_index": current.OutputIndex, "item": base,
 		}))
-		if streamsFunctionArguments(current.Kind) && current.Arguments.Len() > 0 {
+		if !bufferShell && streamsFunctionArguments(current.Kind) && current.Arguments.Len() > 0 {
 			events = append(events, event("response.function_call_arguments.delta", map[string]any{
 				"item_id": current.ItemID, "output_index": current.OutputIndex, "delta": current.Arguments.String(),
 			}))
 		}
-	} else if current.Added && streamsFunctionArguments(current.Kind) && argumentDelta != "" {
+	} else if !bufferShell && current.Added && streamsFunctionArguments(current.Kind) && argumentDelta != "" {
 		events = append(events, event("response.function_call_arguments.delta", map[string]any{
 			"item_id": current.ItemID, "output_index": current.OutputIndex, "delta": argumentDelta,
 		}))
@@ -617,10 +618,16 @@ func (state *StreamState) closeTools() []Event {
 			state.droppedTools++
 			continue
 		}
+		bufferShell := state.context != nil && state.context.enforcesShell(current.ChatName)
 		arguments, valid := canonicalToolArguments(current.Arguments.String())
 		if !valid {
 			state.droppedTools++
 			continue
+		}
+		if bufferShell {
+			if rewritten, ok := state.context.rewriteToolShell(current.ChatName, arguments); ok {
+				arguments = rewritten
+			}
 		}
 		base := state.context.responseOutputItemFromTool(map[string]any{
 			"id":       current.CallID,
@@ -638,6 +645,12 @@ func (state *StreamState) closeTools() []Event {
 				}),
 			)
 		case "function_call", "tool_search_call":
+			if bufferShell {
+				events = append(events, event("response.function_call_arguments.delta", map[string]any{
+					"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex,
+					"delta": toolArgumentsJSON(base["arguments"]),
+				}))
+			}
 			events = append(events, event("response.function_call_arguments.done", map[string]any{
 				"item_id": jsonx.String(base["id"]), "output_index": current.OutputIndex,
 				"arguments": toolArgumentsJSON(base["arguments"]),

@@ -99,6 +99,12 @@ func (s *Store) ShellCompat() string {
 	return s.config.ShellCompat
 }
 
+func (s *Store) ShellCompatEnforce() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.ShellCompatEnforce
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
