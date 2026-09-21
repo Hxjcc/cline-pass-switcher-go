@@ -544,10 +544,10 @@ func (context *Context) webSearchPolicy() string {
 		return ""
 	}
 	return "Web search policy:\n" +
-		"- Use at most one web search call per turn.\n" +
+		"- Prefer at most one web search call per turn.\n" +
 		"- Request at most 3 results.\n" +
 		"- Do not issue parallel web searches.\n" +
-		"- Do not output raw XML or DSML tool-call markup.\n" +
+		"- When invoking tools, do not output raw XML or DSML tool-call markup.\n" +
 		"- After receiving search results, answer directly; only search again if the results are clearly insufficient."
 }
 

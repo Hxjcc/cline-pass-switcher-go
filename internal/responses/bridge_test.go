@@ -1664,7 +1664,8 @@ func TestWebSearchPolicyIsInjectedOnlyWhenDeclared(t *testing.T) {
 		!strings.Contains(content, "base instructions") ||
 		!strings.Contains(content, "Web search policy") ||
 		!strings.Contains(content, "at most one web search call") ||
-		!strings.Contains(content, "at most 3 results") {
+		!strings.Contains(content, "at most 3 results") ||
+		!strings.Contains(content, "When invoking tools") {
 		t.Fatalf("web search policy was not injected: %#v", first)
 	}
 
