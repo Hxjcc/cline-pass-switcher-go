@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat-square&logo=go" alt="Go Version" />
+  <img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go" alt="Go Version" />
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker" alt="Docker Ready" />
-  <img src="https://img.shields.io/badge/Node.js-22+-(Build%20Only)-339933?style=flat-square&logo=node.js" alt="Node Version" />
+  <img src="https://img.shields.io/badge/Node.js-22%2B%20(Build%20Only)-339933?style=flat-square&logo=node.js" alt="Node Version" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
