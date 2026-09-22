@@ -183,7 +183,8 @@ export CLINE_PROXY_KEY="your-proxy-key" # 若未开启代理密钥，可填任�
 |---|---|---|
 | **Chat Completions** | `POST /v1/chat/completions` (或 `/chat/completions`) | 兼容标准 OpenAI 客户端 |
 | **Responses** | `POST /v1/responses` (或 `/responses`) | Codex / ChatGPT 协议 |
-| **Responses Compact** | `POST /v1/responses/compact` | Codex 上下文压缩端点 |
+| **Responses Compact** | `POST /v1/responses/compact` | 独立压缩端点（脚本 / 自定义客户端） |
+| **Responses 远端压缩 v2** | `POST /v1/responses` + `{"type":"compaction_trigger"}` 输入项 | Codex 的远端压缩协议，返回恰好一个 `compaction` item |
 | **Models 列表** | `GET /v1/models` (或 `/models`) | 获取已订阅/全量模型清单 |
 | **健康检查** | `GET /healthz` | 服务健康探针 |
 
@@ -353,6 +354,17 @@ server {
 <details>
 <summary><strong>Q: 为什么请求历史里的 Token 数和客户端统计的不同？</strong></summary>
 网关在执行内置搜索或多轮工具调用时，上游账单会将各个内部轮次的 Prompt 累加统计（控制台历史展示的是上游真实收费明细）；但为了防止 Codex 误以为上下文暴增而提前触发本地截断压缩，网关发回给客户端的 <code>usage</code> 经过了轮次归一化折算。
+</details>
+
+<details>
+<summary><strong>Q: Codex 的 <code>/compact</code> 为什么走的是本地摘要？怎么让它走远端压缩？</strong></summary>
+Codex 客户端只为 OpenAI 官方与 Azure-OpenAI 形状的 provider 开启远端压缩（内部判定 <code>RemoteCompactionSupport::V2</code>），其它自定义 provider 一律回退成"本地摘要"——客户端自己发一次普通 Responses 请求让模型总结。代理已经支持远端压缩 v2 协议：<code>POST /v1/responses</code> 携带 <code>{"type":"compaction_trigger"}</code> 输入项时，会返回恰好一个 <code>compaction</code> item，并用 <code>response.output_item.done</code> + <code>response.completed</code> 的正常生命周期下发。<br>
+想启用，把 provider 的 <code>name</code> 改成含 <code>azure</code> 的字符串即可（<code>base_url</code> 不用动）：
+<pre><code>[model_providers.custom]
+name = "azure-cline"
+base_url = "http://127.0.0.1:3123/v1"
+</code></pre>
+之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。
 </details>
 
 ---

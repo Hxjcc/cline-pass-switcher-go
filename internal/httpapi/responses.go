@@ -30,6 +30,13 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		})
 		return
 	}
+	// Remote compaction v2 arrives as an ordinary /responses request that
+	// carries a compaction_trigger item. It is answered by the compaction
+	// pipeline rather than a normal generation turn.
+	if responsesbridge.RequestTriggersCompaction(body) {
+		s.handleResponsesCompactionTrigger(writer, request, body)
+		return
+	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
 		ReplayReasoning:    responsesbridge.ShouldReplayReasoning(requestedModel),
@@ -252,6 +259,113 @@ func writeCompactFailure(writer http.ResponseWriter, modelID string, details map
 	state := responsesbridge.NewStreamState(&responsesbridge.Context{Model: modelID})
 	events := state.HandleChunk(map[string]any{"error": details})
 	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), events)
+}
+
+// handleResponsesCompactionTrigger serves remote compaction v2: Codex sends an
+// ordinary /responses request carrying a {type:"compaction_trigger"} input item
+// and expects exactly one compaction output item plus a response.completed
+// event. The work is the same summarization the standalone /responses/compact
+// endpoint performs, so the history entry is recorded as kind "compact".
+func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, request *http.Request, body map[string]any) {
+	requestedModel, _ := body["model"].(string)
+	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
+		ReplayReasoning:    responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:   s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:       responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:  s.store.StrictToolHistory(),
+		WebSearchUpstream:  s.store.WebSearchUpstream(),
+		WebFetchUpstream:   s.store.WebFetchUpstream(),
+		ShellCompat:        s.store.ShellCompat(),
+		ShellCompatEnforce: s.store.ShellCompatEnforce(),
+	})
+	if err != nil {
+		writeResponsesRequestError(writer, err)
+		return
+	}
+	modelID := bridgeContext.Model
+	modelConfig := s.store.ModelConfig(modelID)
+	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
+	if positiveInt(chatBody["max_tokens"]) < 2048 {
+		chatBody["max_tokens"] = 2048
+	}
+	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]
+
+	stream, _ := body["stream"].(bool)
+	started := time.Now()
+	result := s.runNonStreamChain(request.Context(), modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	if result.Status != http.StatusOK || result.Out == nil {
+		message := chainErrorMessage(result)
+		if message == "" {
+			message = "upstream returned no response"
+		}
+		s.record(model.HistoryEntry{
+			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
+			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			RequestedEffort: bridgeContext.RequestedReasoningEffort,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
+			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		})
+		if stream {
+			details := map[string]any{"message": message, "type": "upstream_error"}
+			if upstreamError, ok := result.Out["error"].(map[string]any); ok {
+				details = upstreamError
+			}
+			writeCompactFailure(writer, modelID, details)
+			return
+		}
+		status := result.Status
+		if status < 400 {
+			status = http.StatusBadGateway
+		}
+		if result.Out != nil {
+			writeJSON(writer, status, result.Out)
+			return
+		}
+		writeJSON(writer, status, map[string]any{
+			"error": map[string]any{"message": message, "type": "upstream_error"},
+		})
+		return
+	}
+
+	compaction, err := responsesbridge.CompactionTriggerResponse(result.Out, bridgeContext)
+	if err != nil {
+		message := err.Error()
+		s.record(model.HistoryEntry{
+			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
+			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			RequestedEffort: bridgeContext.RequestedReasoningEffort,
+			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
+			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		})
+		if stream {
+			writeCompactFailure(writer, modelID, conversionErrorBody(err))
+			return
+		}
+		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": conversionErrorBody(err)})
+		return
+	}
+
+	entry := model.HistoryEntry{
+		TS: time.Now().UnixMilli(), Model: modelID,
+		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
+		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
+		Account: result.Account.Name, AccountID: result.Account.ID,
+		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+	}
+	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
+	applyChatStats(&entry, result.Out, entry.MS)
+	s.record(entry)
+	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
+	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
+	if !stream {
+		writeJSON(writer, http.StatusOK, compaction)
+		return
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), responsesbridge.CompactionTriggerEvents(compaction, bridgeContext))
 }
 
 func positiveInt(value any) int {

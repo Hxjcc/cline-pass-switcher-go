@@ -1305,27 +1305,9 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	if response["status"] != "completed" {
-		reason := jsonx.String(jsonx.Map(response["incomplete_details"])["reason"])
-		return nil, &ChatFailure{Code: "compaction_incomplete", Type: "upstream_error",
-			Message: "upstream compaction summary is incomplete: " + reason, Response: response}
-	}
-	choice := jsonx.Map(jsonx.Slice(chat["choices"])[0])
-	message := jsonx.Map(choice["message"])
-	if jsonx.String(choice["finish_reason"]) != "stop" || len(jsonx.Slice(message["tool_calls"])) > 0 {
-		return nil, errors.New("upstream compaction did not finish with a summary")
-	}
-	if jsonx.String(message["refusal"]) != "" {
-		return nil, errors.New("upstream refused the compaction request")
-	}
-	for _, raw := range jsonx.Slice(message["content"]) {
-		if jsonx.Map(raw)["type"] == "refusal" {
-			return nil, errors.New("upstream refused the compaction request")
-		}
-	}
-	summary := strings.TrimSpace(responseOutputText(response))
-	if summary == "" {
-		return nil, errors.New("upstream returned an empty compaction summary")
+	summary, err := compactionSummary(chat, response)
+	if err != nil {
+		return nil, err
 	}
 	output := append([]any(nil), context.compactionUsers...)
 	output = append(output, map[string]any{
@@ -1337,6 +1319,92 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 		"id": response["id"], "object": "response.compaction", "created_at": response["created_at"],
 		"output": output, "usage": response["usage"],
 	}, nil
+}
+
+// RequestTriggersCompaction reports whether the client asked for remote
+// compaction v2. Codex appends a {type:"compaction_trigger"} input item to an
+// otherwise ordinary Responses request and expects a single compaction item
+// back over the normal streaming lifecycle.
+func RequestTriggersCompaction(body map[string]any) bool {
+	for _, raw := range jsonx.Slice(body["input"]) {
+		item := jsonx.Map(raw)
+		if item != nil && jsonx.String(item["type"]) == "compaction_trigger" {
+			return true
+		}
+	}
+	return false
+}
+
+// CompactionTriggerResponse builds the remote compaction v2 reply: one normal
+// Responses object whose output holds exactly one compaction item. Codex counts
+// response.output_item.done events, rejects anything but a single compaction
+// item, and waits for response.completed.
+func CompactionTriggerResponse(chat map[string]any, context *Context) (map[string]any, error) {
+	response, err := FromChat(chat, context)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := compactionSummary(chat, response)
+	if err != nil {
+		return nil, err
+	}
+	item := map[string]any{
+		"id":                newID("cmp"),
+		"type":              "compaction",
+		"encrypted_content": CompactionEnvelope(summary),
+	}
+	return context.responseBase(
+		jsonx.String(response["id"]), intValue(response["created_at"]), context.Model, "completed",
+		[]any{item}, response["usage"], nil, "",
+	), nil
+}
+
+// CompactionTriggerEvents opens the standard Responses lifecycle around the
+// remote compaction v2 reply.
+func CompactionTriggerEvents(response map[string]any, context *Context) []Event {
+	inProgress := context.responseBase(
+		jsonx.String(response["id"]), intValue(response["created_at"]), context.Model, "in_progress",
+		[]any{}, nil, nil, "",
+	)
+	events := []Event{
+		event("response.created", map[string]any{"response": inProgress}),
+		event("response.in_progress", map[string]any{"response": inProgress}),
+	}
+	for index, item := range jsonx.Slice(response["output"]) {
+		events = append(events,
+			event("response.output_item.added", map[string]any{"output_index": index, "item": item}),
+			event("response.output_item.done", map[string]any{"output_index": index, "item": item}),
+		)
+	}
+	return append(events, event("response.completed", map[string]any{"response": response}))
+}
+
+// compactionSummary validates a completed summarization turn and returns the
+// readable summary both compaction shapes are built from.
+func compactionSummary(chat, response map[string]any) (string, error) {
+	if response["status"] != "completed" {
+		reason := jsonx.String(jsonx.Map(response["incomplete_details"])["reason"])
+		return "", &ChatFailure{Code: "compaction_incomplete", Type: "upstream_error",
+			Message: "upstream compaction summary is incomplete: " + reason, Response: response}
+	}
+	choice := jsonx.Map(jsonx.Slice(chat["choices"])[0])
+	message := jsonx.Map(choice["message"])
+	if jsonx.String(choice["finish_reason"]) != "stop" || len(jsonx.Slice(message["tool_calls"])) > 0 {
+		return "", errors.New("upstream compaction did not finish with a summary")
+	}
+	if jsonx.String(message["refusal"]) != "" {
+		return "", errors.New("upstream refused the compaction request")
+	}
+	for _, raw := range jsonx.Slice(message["content"]) {
+		if jsonx.Map(raw)["type"] == "refusal" {
+			return "", errors.New("upstream refused the compaction request")
+		}
+	}
+	summary := strings.TrimSpace(responseOutputText(response))
+	if summary == "" {
+		return "", errors.New("upstream returned an empty compaction summary")
+	}
+	return summary, nil
 }
 
 func reasoningTextFromItem(item map[string]any) string {
@@ -1703,6 +1771,10 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		case "additional_tools":
 			// Responses Lite carries dynamic tool declarations here; they are
 			// not Chat messages and must not be replayed as user text.
+		case "compaction_trigger":
+			// Remote compaction v2 marker: the request itself is handled by the
+			// compaction path, and the marker must never reach the model as a
+			// message.
 		default:
 			if item["role"] != nil || jsonx.String(item["type"]) == "message" || item["type"] == nil {
 				queueOrAppend(messageFromResponseItem(item))

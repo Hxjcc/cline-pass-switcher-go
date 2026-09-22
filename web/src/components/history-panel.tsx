@@ -306,7 +306,14 @@ export function HistoryPanel({
                     {formatTime(item.ts)}
                   </TableCell>
                   <TableCell className={cell}>
-                    <div className="font-mono text-xs">{item.model}</div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-xs">{item.model}</span>
+                      {item.kind === "compact" && (
+                        <Badge variant="secondary" className={chipClass}>
+                          压缩
+                        </Badge>
+                      )}
+                    </div>
                     {item.error && (
                       // Upstream errors can be ~1k chars of JSON; unwrapped they
                       // stretch this column and push the rest of the table out

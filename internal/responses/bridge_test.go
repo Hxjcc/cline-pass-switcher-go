@@ -1445,6 +1445,71 @@ func TestToChatForwardsPromptCacheKeyAndPadsEmptyToolOutput(t *testing.T) {
 	}
 }
 
+func TestCompactionTriggerIsAcceptedAndNeverBecomesAMessage(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/test",
+		"input": []any{
+			map[string]any{
+				"type": "message", "role": "user",
+				"content": []any{map[string]any{"type": "input_text", "text": "hello"}},
+			},
+			map[string]any{"type": "compaction_trigger"},
+		},
+	}
+	if !RequestTriggersCompaction(body) {
+		t.Fatal("compaction trigger was not detected")
+	}
+	chat, _, err := ToChatWithOptions(body, Options{})
+	if err != nil {
+		t.Fatalf("remote compaction v2 request must be accepted: %v", err)
+	}
+	raw, err := json.Marshal(chat["messages"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "compaction_trigger") {
+		t.Fatalf("compaction marker leaked into the chat messages: %s", raw)
+	}
+	if !strings.Contains(string(raw), "hello") {
+		t.Fatalf("user history must still be forwarded: %s", raw)
+	}
+}
+
+func TestCompactionTriggerResponseHoldsOneCompactionItem(t *testing.T) {
+	chat := map[string]any{
+		"id": "chatcmpl-1", "created": 123,
+		"choices": []any{map[string]any{
+			"index": 0, "finish_reason": "stop",
+			"message": map[string]any{"role": "assistant", "content": "condensed history"},
+		}},
+		"usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+	}
+	_, context, err := ToChat(map[string]any{"model": "cline-pass/test", "input": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := CompactionTriggerResponse(chat, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := jsonx.Slice(response["output"])
+	if response["object"] != "response" || response["status"] != "completed" || len(output) != 1 {
+		t.Fatalf("remote compaction v2 must return one normal response with a single item: %#v", response)
+	}
+	item := jsonx.Map(output[0])
+	if item["type"] != "compaction" || !strings.HasPrefix(jsonx.String(item["encrypted_content"]), "ocx1:") {
+		t.Fatalf("unexpected compaction item: %#v", item)
+	}
+	types := []string{}
+	for _, value := range CompactionTriggerEvents(response, context) {
+		types = append(types, value.Type)
+	}
+	want := "response.created,response.in_progress,response.output_item.added,response.output_item.done,response.completed"
+	if strings.Join(types, ",") != want {
+		t.Fatalf("unexpected remote compaction lifecycle: %v", types)
+	}
+}
+
 func TestCompactionEventsOpenTheLifecycle(t *testing.T) {
 	compaction := map[string]any{
 		"id": "resp_c", "object": "response.compaction",
