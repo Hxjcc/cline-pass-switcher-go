@@ -38,6 +38,10 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	// The caller escalates to the model's top level once if that still happens.
 	if effort := compactionReasoningEffort(options.ReasoningEfforts); effort != "" {
 		chat["reasoning_effort"] = effort
+		// The history and response headers should show the level compaction
+		// actually ran at, while RequestedReasoningEffort keeps the session's
+		// original choice.
+		context.MappedReasoningEffort = effort
 		if reasoningEffortOff(effort) {
 			delete(chat, "reasoning")
 		} else {

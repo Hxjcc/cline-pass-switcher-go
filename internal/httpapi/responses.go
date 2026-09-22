@@ -285,6 +285,9 @@ func (s *Server) runCompactionChain(
 	retryBody := model.Clone(chatBody)
 	responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
 	bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
+	if effort := effortFromChatBody(retryBody); effort != "" {
+		bridgeContext.MappedReasoningEffort = effort
+	}
 	escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
 	escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
 	compaction, err = convertCompaction(escalated, bridgeContext, convert)
