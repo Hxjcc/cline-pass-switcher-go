@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -375,4 +376,67 @@ func extractCompactionEnvelope(t *testing.T, stream string) string {
 	}
 	t.Fatalf("no compaction item in stream: %s", stream)
 	return ""
+}
+
+// A summary that ends cleanly but drops anchored sections still compacts - the
+// context does shrink - yet the omission is worth seeing, so it lands in the
+// history as an advisory note instead of triggering another pass.
+func TestResponsesCompactionRecordsMissingSummarySections(t *testing.T) {
+	recorder, upstreamServer := newCompactionRecorderServer(t)
+	server, st := configureCompactionServer(t, upstreamServer.URL)
+
+	body := `{"model":"cline-pass/test","input":[
+	  {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+	  {"type":"compaction_trigger"}]}`
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("compaction trigger failed: %d %s", response.Code, response.Body.String())
+	}
+
+	// The fixture summary ("condensed history") carries none of the four
+	// anchored sections.
+	history := st.Metadata().History
+	if len(history) != 1 || history[0].Error != nil {
+		t.Fatalf("compaction should be one successful entry: %#v", history)
+	}
+	want := []string{"Objective", "Work State", "Next Move", "Relevant Files"}
+	if !slices.Equal(history[0].MissingSummarySections, want) {
+		t.Fatalf("missing sections not recorded: %#v", history[0].MissingSummarySections)
+	}
+	if calls := len(recorder.all()); calls != 1 {
+		t.Fatalf("a thin summary must not trigger another pass, got %d calls", calls)
+	}
+}
+
+// A summary carrying all four anchored sections is accepted without a note.
+func TestResponsesCompactionAcceptsCompleteSummary(t *testing.T) {
+	const completeChatBody = `{"id":"chatcmpl-cmp","created":1,"model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"## Objective\nship the parser fix\n\n## Work State\ndone\n\n## Next Move\nrun the tests\n\n## Relevant Files\ninternal/parse.go"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, completeChatBody)
+	}))
+	defer upstreamServer.Close()
+	server, st := configureCompactionServer(t, upstreamServer.URL)
+
+	body := `{"model":"cline-pass/test","input":[
+	  {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+	  {"type":"compaction_trigger"}]}`
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("compaction trigger failed: %d %s", response.Code, response.Body.String())
+	}
+
+	history := st.Metadata().History
+	if len(history) != 1 || history[0].Error != nil {
+		t.Fatalf("compaction should be one successful entry: %#v", history)
+	}
+	if len(history[0].MissingSummarySections) != 0 {
+		t.Fatalf("complete summary must not be flagged: %#v", history[0].MissingSummarySections)
+	}
 }

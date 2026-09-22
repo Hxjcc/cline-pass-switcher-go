@@ -37,6 +37,60 @@ const (
 	maxCompactionRecentTotalRunes = 32000
 )
 
+// compactionSections are the anchored headings compaction summaries must
+// carry. A summary that ends normally but drops one of them still compacts
+// fine, yet the next turn loses the "what next" or "which files" anchor, so
+// callers record the omission in the history instead of retrying.
+var compactionSections = []string{"Objective", "Work State", "Next Move", "Relevant Files"}
+
+// compactionSectionAliases widens each heading with the spellings models
+// actually emit. The check is advisory, so a generous alias list only ever
+// costs a missed note - never a wasted retry.
+var compactionSectionAliases = map[string][]string{
+	"Objective":      {"objective", "goal", "目标"},
+	"Work State":     {"workstate", "state", "当前状态", "工作状态"},
+	"Next Move":      {"nextmove", "nextstep", "下一步"},
+	"Relevant Files": {"relevantfiles", "files", "paths", "相关文件", "涉及文件"},
+}
+
+// MissingCompactionSections reports the anchored sections a summary omitted,
+// in template order. Matching is deliberately loose - case, markup and
+// separators are ignored - because the result feeds an advisory history note
+// rather than a retry: a false positive would nag about a fine summary.
+func MissingCompactionSections(summary string) []string {
+	haystack := normalizeSectionText(summary)
+	missing := make([]string, 0, len(compactionSections))
+	for _, section := range compactionSections {
+		if !sectionMentioned(haystack, section) {
+			missing = append(missing, section)
+		}
+	}
+	return missing
+}
+
+func sectionMentioned(haystack, section string) bool {
+	for _, alias := range compactionSectionAliases[section] {
+		if strings.Contains(haystack, normalizeSectionText(alias)) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeSectionText folds the decorations a model may wrap a heading in.
+func normalizeSectionText(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, char := range strings.ToLower(value) {
+		switch char {
+		case ' ', '\t', '\n', '\r', '-', '_', '*', '#', ':', '.', '`', '\'', '"', '/', '\\':
+			continue
+		}
+		builder.WriteRune(char)
+	}
+	return builder.String()
+}
+
 // CompactionRecentMessage is one verbatim turn kept inside a compaction item.
 type CompactionRecentMessage struct {
 	Role string `json:"role"`

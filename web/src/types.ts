@@ -181,6 +181,8 @@ export interface HistoryItem {
   account?: string
   attempts?: string[]
   trace?: TraceAttempt[]
+  /** Anchored summary sections a completed compaction left out (advisory). */
+  missingSummarySections?: string[]
 }
 
 export interface HistoryResponse {

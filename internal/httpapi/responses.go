@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 )
@@ -234,6 +235,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
 		Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		MissingSummarySections: compactionMissingSections(compaction),
 	}
 	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&compactEntry, result.Out, compactEntry.MS)
@@ -365,6 +367,24 @@ func compactionStarved(result chainResult, err error) bool {
 		strings.Contains(message, "incomplete")
 }
 
+// compactionMissingSections lists the anchored summary sections a successful
+// compaction left out. The compaction is served as-is; the omission only goes
+// to the history so a thin summary shows up instead of staying silent.
+func compactionMissingSections(compaction map[string]any) []string {
+	for _, raw := range jsonx.Slice(compaction["output"]) {
+		item := jsonx.Map(raw)
+		if jsonx.String(item["type"]) != "compaction" {
+			continue
+		}
+		payload, ok := responsesbridge.DecodeCompactionEnvelope(jsonx.String(item["encrypted_content"]))
+		if !ok {
+			return nil
+		}
+		return responsesbridge.MissingCompactionSections(payload.Summary)
+	}
+	return nil
+}
+
 func writeCompactFailure(writer http.ResponseWriter, modelID string, details map[string]any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
@@ -466,6 +486,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
 		Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		MissingSummarySections: compactionMissingSections(compaction),
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)

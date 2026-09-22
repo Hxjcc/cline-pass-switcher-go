@@ -212,6 +212,10 @@ type HistoryEntry struct {
 	AccountID string   `json:"accountId,omitempty"`
 	Attempts  []string `json:"attempts,omitempty"`
 	Trace     []Trace  `json:"trace,omitempty"`
+	// MissingSummarySections names the anchored summary sections a completed
+	// compaction left out. The compaction still succeeded, so this is an
+	// advisory note for the console rather than an error.
+	MissingSummarySections []string `json:"missingSummarySections,omitempty"`
 }
 
 type AccountStats struct {

@@ -370,6 +370,7 @@ base_url = "http://127.0.0.1:3123/v1"
 之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。<br>
 压缩按其结构分两部分：<b>四段式摘要</b>（Objective / Work State / Next Move / Relevant Files）覆盖较早的对话，<b>最近几轮原文</b>（默认约 16000 token，见 <code>COMPACTION_RECENT_TOKENS</code>）逐字保留在同一个信封里，回放顺序是「摘要 → 最近原文 → 本轮新输入」。<br>
 如果摘要生成彻底失败（连升档重试都失败），压缩会<b>降级</b>而不是报错：仍然返回一个合法的 compaction item，里面写明失败原因、保留已产出的部分摘要，并附上最近的用户请求，让会话能够继续。
+<br>有一种情况不会被重试、但会在历史里标出来：摘要<b>正常结束却没写全四段</b>（例如只写了 Objective + Work State）。压缩照常生效，但那条历史记录的模型列会多一个琥珀色徽章 <code>摘要缺 …</code>，写明缺了哪几段——这是提示摘要变薄了，不是错误。
 </details>
 
 ---

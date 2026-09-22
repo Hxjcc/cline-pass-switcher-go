@@ -133,6 +133,10 @@ function CostCell({ usage }: { usage?: UsageStats }) {
 // middle alignment puts a single-line row on one visual midline.
 const cell = "align-middle"
 const chipClass = "h-5 px-1.5 py-0 text-2xs"
+// A compaction that succeeded with a thin summary is not an error, but it is
+// worth spotting: the badge stays visible instead of hiding in a tooltip.
+const warnChipClass =
+  "h-5 border-amber-200 bg-amber-50 px-1.5 py-0 text-2xs text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300"
 
 export function HistoryPanel({
   history,
@@ -313,6 +317,15 @@ export function HistoryPanel({
                           压缩
                         </Badge>
                       )}
+                      {item.missingSummarySections?.length ? (
+                        <Badge
+                          variant="outline"
+                          className={warnChipClass}
+                          title={`摘要缺少段落：${item.missingSummarySections.join("、")}`}
+                        >
+                          摘要缺 {item.missingSummarySections.join("、")}
+                        </Badge>
+                      ) : null}
                     </div>
                     {item.error && (
                       // Upstream errors can be ~1k chars of JSON; unwrapped they
