@@ -280,6 +280,8 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 | `SHELL_COMPAT_ENFORCE`| `shellCompatEnforce`| `false` | 是否强制把模型输出中的实际 `shell` 参数改写为 `SHELL_COMPAT`。 |
 | `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 是否开启严格工具历史校验。开启后，未配对的孤儿工具结果将直接报错拒绝。 |
 | `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `8000` | 压缩时原样保留的"最近对话"预算（估算 token）。摘要只覆盖更早的部分，最近几轮的原文会随 compaction item 一起回放，避免路径/命令/报错被摘要改写。设为 `0` 关闭该行为。 |
+| `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | 压缩轮次使用的推理档位（必须是模型声明的档位之一，或 `auto`＝取最接近 high 的档）。默认 `max`：低档容易把输出预算全花在隐藏思考上、被网关判成 `empty response content`，反而多花一轮重试。想省钱可设为 `high`。 |
+| `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `8192` | 压缩轮次的输出预算下限（上限 32768）。推理模型的思考也占这部分预算，实测 9 万 token 的历史压缩用了约 5.5k 输出 token。 |
 | `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（仅在未设置 `PROXY_KEY` 时生效）。 |
 | `TRUST_LOCAL_PORT_FORWARD`| `trustLocalPortForward` | Compose: `1` | 信任本地端口映射（容器内将宿主机回环端口视作本机安全请求）。暴露公网时必须清除此项并配置 `PROXY_KEY`。 |
 

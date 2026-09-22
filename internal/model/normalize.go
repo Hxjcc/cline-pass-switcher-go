@@ -94,6 +94,14 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.CompactionRecentTokens = tokens
 		}
 	}
+	if effort := strings.TrimSpace(os.Getenv("COMPACTION_REASONING_EFFORT")); effort != "" {
+		cfg.CompactionReasoningEffort = effort
+	}
+	if rawFloor := strings.TrimSpace(os.Getenv("COMPACTION_MIN_OUTPUT_TOKENS")); rawFloor != "" {
+		if tokens, err := strconv.Atoi(rawFloor); err == nil && tokens > 0 {
+			cfg.CompactionMinOutputTokens = tokens
+		}
+	}
 }
 
 func NormalizeConfig(cfg *Config) {
@@ -112,6 +120,21 @@ func NormalizeConfig(cfg *Config) {
 	}
 	if cfg.CompactionRecentTokens > 64000 {
 		cfg.CompactionRecentTokens = 64000
+	}
+	cfg.CompactionReasoningEffort = strings.ToLower(strings.TrimSpace(cfg.CompactionReasoningEffort))
+	if cfg.CompactionReasoningEffort == "" {
+		cfg.CompactionReasoningEffort = DefaultCompactionReasoningEffort
+	}
+	switch cfg.CompactionReasoningEffort {
+	case "auto", "max", "xhigh", "high", "medium", "low", "minimal", "none":
+	default:
+		cfg.CompactionReasoningEffort = DefaultCompactionReasoningEffort
+	}
+	if cfg.CompactionMinOutputTokens < 1024 {
+		cfg.CompactionMinOutputTokens = DefaultCompactionMinOutputTokens
+	}
+	if cfg.CompactionMinOutputTokens > 32768 {
+		cfg.CompactionMinOutputTokens = 32768
 	}
 
 	// The top-level apiKey is a legacy field. It is folded into the account

@@ -77,11 +77,11 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	prepared = append(prepared, history...)
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
-	// Compaction is mechanical summarization, so it runs at "high" rather than
-	// the session's maximum: a max-effort pass tends to spend the output budget
-	// on hidden thinking and the gateway then answers "empty response content".
-	// The caller escalates to the model's top level once if that still happens.
-	if effort := compactionReasoningEffort(options.ReasoningEfforts); effort != "" {
+	// Compaction inherits the session's maximum reasoning by default: a capped
+	// level tends to spend the whole output budget on hidden thinking and the
+	// gateway then answers "empty response content", which costs a wasted pass
+	// plus an escalated retry. The caller still escalates once if it happens.
+	if effort := compactionReasoningEffort(options.ReasoningEfforts, options.CompactionReasoningEffort); effort != "" {
 		chat["reasoning_effort"] = effort
 		// The history and response headers should show the level compaction
 		// actually ran at, while RequestedReasoningEffort keeps the session's
@@ -165,11 +165,20 @@ func estimateCompactionTokens(text string) int {
 	return cjk + other/4 + 1
 }
 
-// compactionReasoningEffort picks "high" when the model advertises it, falling
-// back to the closest available level. Summaries need faithfulness rather than
-// maximum deliberation, and the caller escalates on starvation.
-func compactionReasoningEffort(efforts []string) string {
-	for _, preferred := range []string{"high", "medium", "low", "minimal", "max", "xhigh"} {
+// compactionReasoningEffort resolves the level compaction runs at. The
+// configured preference wins when the model advertises it; "auto" (or an
+// unknown level) falls back to the closest to high, and only a model without a
+// real thinking level ends up at "none".
+func compactionReasoningEffort(efforts []string, configured string) string {
+	configured = strings.ToLower(strings.TrimSpace(configured))
+	if configured != "" && configured != "auto" {
+		for _, effort := range efforts {
+			if strings.EqualFold(strings.TrimSpace(effort), configured) {
+				return configured
+			}
+		}
+	}
+	for _, preferred := range []string{"max", "xhigh", "high", "medium", "low", "minimal"} {
 		for _, effort := range efforts {
 			if strings.EqualFold(strings.TrimSpace(effort), preferred) {
 				return preferred
@@ -245,7 +254,7 @@ func highestReasoningEffort(efforts []string) string {
 			}
 		}
 	}
-	return compactionReasoningEffort(efforts)
+	return compactionReasoningEffort(efforts, "auto")
 }
 
 // Keep original user turns, including images, outside the summary. Construct

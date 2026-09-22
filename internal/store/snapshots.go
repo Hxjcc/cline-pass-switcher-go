@@ -113,6 +113,21 @@ func (s *Store) CompactionRecentTokens() int {
 	return s.config.CompactionRecentTokens
 }
 
+// CompactionReasoningEffort is the reasoning level compaction runs at ("auto"
+// picks the level closest to high).
+func (s *Store) CompactionReasoningEffort() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.CompactionReasoningEffort
+}
+
+// CompactionMinOutputTokens is the output floor for compaction turns.
+func (s *Store) CompactionMinOutputTokens() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.CompactionMinOutputTokens
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -41,15 +41,16 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory:      s.store.StrictToolHistory(),
-		WebSearchUpstream:      s.store.WebSearchUpstream(),
-		WebFetchUpstream:       s.store.WebFetchUpstream(),
-		ShellCompat:            s.store.ShellCompat(),
-		ShellCompatEnforce:     s.store.ShellCompatEnforce(),
-		RecentCompactionTokens: s.store.CompactionRecentTokens(),
+		ReplayReasoning:           responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:          s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:              responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:         s.store.StrictToolHistory(),
+		WebSearchUpstream:         s.store.WebSearchUpstream(),
+		WebFetchUpstream:          s.store.WebFetchUpstream(),
+		ShellCompat:               s.store.ShellCompat(),
+		ShellCompatEnforce:        s.store.ShellCompatEnforce(),
+		RecentCompactionTokens:    s.store.CompactionRecentTokens(),
+		CompactionReasoningEffort: s.store.CompactionReasoningEffort(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -150,13 +151,14 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory:      s.store.StrictToolHistory(),
-		WebSearchUpstream:      s.store.WebSearchUpstream(),
-		WebFetchUpstream:       s.store.WebFetchUpstream(),
-		RecentCompactionTokens: s.store.CompactionRecentTokens(),
+		ReplayReasoning:           responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:          s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:              responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:         s.store.StrictToolHistory(),
+		WebSearchUpstream:         s.store.WebSearchUpstream(),
+		WebFetchUpstream:          s.store.WebFetchUpstream(),
+		RecentCompactionTokens:    s.store.CompactionRecentTokens(),
+		CompactionReasoningEffort: s.store.CompactionReasoningEffort(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -167,7 +169,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	// Compaction needs the complete summary before it can be wrapped into one
 	// opaque output item, so the upstream call is always buffered.
-	ensureCompactionBudget(chatBody)
+	s.ensureCompactionBudget(chatBody)
 	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]
 
 	stream, _ := body["stream"].(bool)
@@ -251,14 +253,19 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), responsesbridge.CompactionEvents(compaction, bridgeContext))
 }
 
-// compactionMinOutputTokens is the output floor for compaction turns.
+// compactionMinOutputTokens is the built-in output floor for compaction turns;
+// the configured floor can only raise it.
 // Reasoning models can otherwise spend the entire budget on hidden thinking
 // and the upstream answers "empty response content"; see ensureCompactionBudget.
 const compactionMinOutputTokens = 4096
 
-func ensureCompactionBudget(chatBody map[string]any) {
-	if positiveInt(chatBody["max_tokens"]) < compactionMinOutputTokens {
-		chatBody["max_tokens"] = compactionMinOutputTokens
+func (s *Server) ensureCompactionBudget(chatBody map[string]any) {
+	floor := s.store.CompactionMinOutputTokens()
+	if floor < compactionMinOutputTokens {
+		floor = compactionMinOutputTokens
+	}
+	if positiveInt(chatBody["max_tokens"]) < floor {
+		chatBody["max_tokens"] = floor
 	}
 }
 
@@ -376,15 +383,16 @@ func writeCompactFailure(writer http.ResponseWriter, modelID string, details map
 func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, request *http.Request, body map[string]any) {
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory:      s.store.StrictToolHistory(),
-		WebSearchUpstream:      s.store.WebSearchUpstream(),
-		WebFetchUpstream:       s.store.WebFetchUpstream(),
-		ShellCompat:            s.store.ShellCompat(),
-		ShellCompatEnforce:     s.store.ShellCompatEnforce(),
-		RecentCompactionTokens: s.store.CompactionRecentTokens(),
+		ReplayReasoning:           responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:          s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:              responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:         s.store.StrictToolHistory(),
+		WebSearchUpstream:         s.store.WebSearchUpstream(),
+		WebFetchUpstream:          s.store.WebFetchUpstream(),
+		ShellCompat:               s.store.ShellCompat(),
+		ShellCompatEnforce:        s.store.ShellCompatEnforce(),
+		RecentCompactionTokens:    s.store.CompactionRecentTokens(),
+		CompactionReasoningEffort: s.store.CompactionReasoningEffort(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -393,7 +401,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
-	ensureCompactionBudget(chatBody)
+	s.ensureCompactionBudget(chatBody)
 	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]
 
 	stream, _ := body["stream"].(bool)

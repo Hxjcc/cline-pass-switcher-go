@@ -1028,6 +1028,9 @@ type Options struct {
 	// RecentCompactionTokens is the verbatim tail (estimated tokens) kept inside
 	// compaction items. Zero disables it: the item then carries the summary only.
 	RecentCompactionTokens int
+	// CompactionReasoningEffort is the level compaction turns run at, or "auto"
+	// to pick the one closest to high.
+	CompactionReasoningEffort string
 	// ShellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value (for example "powershell") and marks it
 	// required, so Windows clients stop falling back to cmd.exe when a model

@@ -106,12 +106,19 @@ type Config struct {
 	// item (estimated tokens). The generated summary then only covers the
 	// older part of the conversation, so recent paths, commands and errors
 	// survive the compaction exactly. Zero disables the verbatim tail.
-	CompactionRecentTokens int       `json:"compactionRecentTokens,omitempty"`
-	UpstreamBase           string    `json:"upstreamBase"`
-	Accounts               []Account `json:"accounts"`
-	AccountMode            string    `json:"accountMode"`
-	ActiveAccount          int       `json:"activeAccount"`
-	KnownModels            []string  `json:"knownModels"`
+	CompactionRecentTokens int `json:"compactionRecentTokens,omitempty"`
+	// CompactionReasoningEffort is the reasoning level compaction turns run at
+	// (one of the model's advertised levels, or "auto" to pick the closest to
+	// high). Reasoning models that starve on a smaller level answer "empty
+	// response content", which costs a wasted pass plus a retry.
+	CompactionReasoningEffort string `json:"compactionReasoningEffort,omitempty"`
+	// CompactionMinOutputTokens is the output floor for compaction turns.
+	CompactionMinOutputTokens int       `json:"compactionMinOutputTokens,omitempty"`
+	UpstreamBase              string    `json:"upstreamBase"`
+	Accounts                  []Account `json:"accounts"`
+	AccountMode               string    `json:"accountMode"`
+	ActiveAccount             int       `json:"activeAccount"`
+	KnownModels               []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
@@ -236,17 +243,19 @@ type Metadata struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Port:                   3123,
-		ProxyKey:               "",
-		PublicBaseURL:          "",
-		ExposeCatalog:          false,
-		CompactionRecentTokens: DefaultCompactionRecentTokens,
-		UpstreamBase:           DefaultUpstreamBase,
-		Accounts:               []Account{},
-		AccountMode:            "single",
-		ActiveAccount:          0,
-		KnownModels:            append([]string(nil), DefaultKnownModels...),
-		PerModel:               map[string]PerModelConfig{},
+		Port:                      3123,
+		ProxyKey:                  "",
+		PublicBaseURL:             "",
+		ExposeCatalog:             false,
+		CompactionRecentTokens:    DefaultCompactionRecentTokens,
+		CompactionReasoningEffort: DefaultCompactionReasoningEffort,
+		CompactionMinOutputTokens: DefaultCompactionMinOutputTokens,
+		UpstreamBase:              DefaultUpstreamBase,
+		Accounts:                  []Account{},
+		AccountMode:               "single",
+		ActiveAccount:             0,
+		KnownModels:               append([]string(nil), DefaultKnownModels...),
+		PerModel:                  map[string]PerModelConfig{},
 	}
 }
 
@@ -254,6 +263,17 @@ func DefaultConfig() Config {
 // inside a compaction item: enough for exact paths, commands and error text
 // without eating the context the compaction just freed.
 const DefaultCompactionRecentTokens = 8000
+
+// DefaultCompactionReasoningEffort runs compaction at the model's strongest
+// level by default: reasoning models that are capped lower tend to spend the
+// whole output budget thinking and answer "empty response content", which
+// wastes a pass and a retry. "auto" selects the level closest to high.
+const DefaultCompactionReasoningEffort = "max"
+
+// DefaultCompactionMinOutputTokens gives a compaction summary enough room to
+// finish after the model's hidden thinking (a 92k-token history ran to ~5.5k
+// output tokens in practice).
+const DefaultCompactionMinOutputTokens = 8192
 
 func EmptyMetadata() Metadata {
 	return Metadata{

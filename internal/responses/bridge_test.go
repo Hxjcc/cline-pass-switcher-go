@@ -1643,7 +1643,7 @@ func TestDegradedCompactionKeepsShapeAndRecentRequests(t *testing.T) {
 	}
 }
 
-func TestToCompactionChatUsesHighReasoningEffort(t *testing.T) {
+func TestToCompactionChatResolvesTheReasoningEffort(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/test",
 		"input": []any{map[string]any{
@@ -1653,22 +1653,32 @@ func TestToCompactionChatUsesHighReasoningEffort(t *testing.T) {
 		"reasoning": map[string]any{"effort": "max"},
 	}
 	for _, tc := range []struct {
-		efforts []string
-		want    string
+		efforts    []string
+		configured string
+		want       string
 	}{
-		{efforts: []string{"low", "high", "max"}, want: "high"},
-		{efforts: []string{"none", "high", "max"}, want: "high"},
+		// The default runs compaction at the strongest advertised level.
+		{efforts: []string{"low", "high", "max"}, want: "max"},
+		{efforts: []string{"low", "high"}, want: "high"},
 		{efforts: []string{"none", "max"}, want: "max"},
-		{efforts: []string{"low"}, want: "low"},
 		{efforts: []string{"none"}, want: "none"},
+		// An explicit configuration wins when the model advertises it.
+		{efforts: []string{"low", "high", "max"}, configured: "high", want: "high"},
+		{efforts: []string{"none", "high", "max"}, configured: "low", want: "max"},
+		{efforts: []string{"none", "max"}, configured: "auto", want: "max"},
+		// No advertised levels: keep whatever the client asked for.
 		{efforts: nil, want: "max"},
 	} {
-		chat, _, err := ToCompactionChatWithOptions(body, Options{ReasoningEfforts: tc.efforts})
+		chat, _, err := ToCompactionChatWithOptions(body, Options{
+			ReasoningEfforts:          tc.efforts,
+			CompactionReasoningEffort: tc.configured,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if chat["reasoning_effort"] != tc.want {
-			t.Fatalf("efforts %v: compaction should run at %q, got %#v", tc.efforts, tc.want, chat["reasoning_effort"])
+			t.Fatalf("efforts %v configured %q: compaction should run at %q, got %#v",
+				tc.efforts, tc.configured, tc.want, chat["reasoning_effort"])
 		}
 		if tc.want == "none" {
 			if chat["reasoning"] != nil {

@@ -116,12 +116,12 @@ func TestResponsesCompactionTriggerStreamsSingleCompactionItem(t *testing.T) {
 	if !strings.Contains(string(raw), "compaction task") {
 		t.Fatalf("upstream request was not a compaction summary request: %s", raw)
 	}
-	// A max-effort session is capped to high for the compaction turn.
-	if payloads[0]["reasoning_effort"] != "high" {
-		t.Fatalf("compaction must cap the reasoning effort at high, got %#v", payloads[0]["reasoning_effort"])
+	// Compaction runs at the model's strongest level by default.
+	if payloads[0]["reasoning_effort"] != "max" {
+		t.Fatalf("compaction should use the strongest reasoning level, got %#v", payloads[0]["reasoning_effort"])
 	}
-	if tokens, ok := payloads[0]["max_tokens"].(float64); !ok || tokens < compactionMinOutputTokens {
-		t.Fatalf("compaction must ask for at least %d output tokens, got %#v", compactionMinOutputTokens, payloads[0]["max_tokens"])
+	if tokens, ok := payloads[0]["max_tokens"].(float64); !ok || tokens < model.DefaultCompactionMinOutputTokens {
+		t.Fatalf("compaction must ask for at least %d output tokens, got %#v", model.DefaultCompactionMinOutputTokens, payloads[0]["max_tokens"])
 	}
 
 	history := st.Metadata().History
@@ -190,11 +190,11 @@ func TestResponsesCompactionTriggerEscalatesWhenSummaryStarves(t *testing.T) {
 	if len(payloads) != 2 {
 		t.Fatalf("expected the starved attempt plus one retry, got %d calls", len(payloads))
 	}
-	if payloads[0]["reasoning_effort"] != "high" {
-		t.Fatalf("first pass should run at high, got %#v", payloads[0]["reasoning_effort"])
+	if payloads[0]["reasoning_effort"] != "max" {
+		t.Fatalf("first pass should already run at max, got %#v", payloads[0]["reasoning_effort"])
 	}
 	if payloads[1]["reasoning_effort"] != "max" {
-		t.Fatalf("retry should escalate to max, got %#v", payloads[1]["reasoning_effort"])
+		t.Fatalf("retry keeps the strongest level, got %#v", payloads[1]["reasoning_effort"])
 	}
 	first, _ := payloads[0]["max_tokens"].(float64)
 	retry, _ := payloads[1]["max_tokens"].(float64)
