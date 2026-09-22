@@ -58,6 +58,12 @@ func configureCompactionServer(t *testing.T, baseURL string) (*Server, *store.St
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.Reasoning = true
+		meta.ReasoningEfforts = []string{"low", "high", "max"}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return server, st
 }
 
@@ -68,7 +74,7 @@ func TestResponsesCompactionTriggerStreamsSingleCompactionItem(t *testing.T) {
 	recorder, upstreamServer := newCompactionRecorderServer(t)
 	server, st := configureCompactionServer(t, upstreamServer.URL)
 
-	body := `{"model":"cline-pass/test","stream":true,"input":[
+	body := `{"model":"cline-pass/test","stream":true,"reasoning":{"effort":"max"},"input":[
 	  {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
 	  {"type":"compaction_trigger"}]}`
 	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -108,6 +114,13 @@ func TestResponsesCompactionTriggerStreamsSingleCompactionItem(t *testing.T) {
 	raw, _ := json.Marshal(payloads[0]["messages"])
 	if !strings.Contains(string(raw), "compaction task") {
 		t.Fatalf("upstream request was not a compaction summary request: %s", raw)
+	}
+	// A max-effort session must not burn the compaction budget on thinking.
+	if payloads[0]["reasoning_effort"] != "low" {
+		t.Fatalf("compaction must cap the reasoning effort, got %#v", payloads[0]["reasoning_effort"])
+	}
+	if tokens, ok := payloads[0]["max_tokens"].(float64); !ok || tokens < compactionMinOutputTokens {
+		t.Fatalf("compaction must ask for at least %d output tokens, got %#v", compactionMinOutputTokens, payloads[0]["max_tokens"])
 	}
 
 	history := st.Metadata().History

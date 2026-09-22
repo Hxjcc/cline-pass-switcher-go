@@ -1075,7 +1075,7 @@ func TestResponsesCompactUsesMinimumOutputBudget(t *testing.T) {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if tokens, ok := payload["max_tokens"].(float64); !ok || tokens < 2048 {
+		if tokens, ok := payload["max_tokens"].(float64); !ok || tokens < compactionMinOutputTokens {
 			invalidBudget.Store(true)
 		}
 		writer.Header().Set("Content-Type", "application/json")

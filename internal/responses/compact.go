@@ -1,6 +1,10 @@
 package responses
 
-import "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+import (
+	"strings"
+
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+)
 
 // The Chat backend has no native compaction endpoint. Explicitly ask for a
 // handoff summary, and disable ordinary task execution for this generation.
@@ -27,6 +31,18 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	prepared = append(prepared, messages[leading:]...)
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
+	// Compaction is mechanical summarization. If the session runs at a high
+	// reasoning effort the model can spend the whole output budget on hidden
+	// thinking and the gateway answers "empty response content"; ask for the
+	// cheapest level the model advertises so the budget goes to the summary.
+	if effort := minimalReasoningEffort(options.ReasoningEfforts); effort != "" {
+		chat["reasoning_effort"] = effort
+		if reasoningEffortOff(effort) {
+			delete(chat, "reasoning")
+		} else {
+			chat["reasoning"] = map[string]any{"effort": effort}
+		}
+	}
 	for _, key := range []string{"stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls", "response_format"} {
 		delete(chat, key)
 	}
@@ -36,6 +52,33 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	context.outputSchema = nil
 	context.ParallelToolCalls = false
 	return chat, context, nil
+}
+
+// minimalReasoningEffort picks the cheapest advertised level so a compaction
+// turn cannot burn its token budget on hidden reasoning.
+func minimalReasoningEffort(efforts []string) string {
+	for _, preferred := range []string{"none", "minimal", "low"} {
+		for _, effort := range efforts {
+			if strings.EqualFold(strings.TrimSpace(effort), preferred) {
+				return preferred
+			}
+		}
+	}
+	for _, effort := range efforts {
+		if value := strings.TrimSpace(effort); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func reasoningEffortOff(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "off", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // Keep original user turns, including images, outside the summary. Construct

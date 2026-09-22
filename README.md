@@ -359,9 +359,9 @@ server {
 <details>
 <summary><strong>Q: Codex 的 <code>/compact</code> 为什么走的是本地摘要？怎么让它走远端压缩？</strong></summary>
 Codex 客户端只为 OpenAI 官方与 Azure-OpenAI 形状的 provider 开启远端压缩（内部判定 <code>RemoteCompactionSupport::V2</code>），其它自定义 provider 一律回退成"本地摘要"——客户端自己发一次普通 Responses 请求让模型总结。代理已经支持远端压缩 v2 协议：<code>POST /v1/responses</code> 携带 <code>{"type":"compaction_trigger"}</code> 输入项时，会返回恰好一个 <code>compaction</code> item，并用 <code>response.output_item.done</code> + <code>response.completed</code> 的正常生命周期下发。<br>
-想启用，把 provider 的 <code>name</code> 改成含 <code>azure</code> 的字符串即可（<code>base_url</code> 不用动）：
+想启用，把 provider 的 <code>name</code> 改成 <code>azure</code>（客户端是精确匹配、大小写不敏感；<code>OpenAI</code> 同样能命中，但 <code>azure</code> 只影响这一处能力判定，副作用最小）：
 <pre><code>[model_providers.custom]
-name = "azure-cline"
+name = "azure"
 base_url = "http://127.0.0.1:3123/v1"
 </code></pre>
 之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。

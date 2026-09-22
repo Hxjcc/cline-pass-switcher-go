@@ -163,12 +163,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	// Compaction needs the complete summary before it can be wrapped into one
 	// opaque output item, so the upstream call is always buffered.
-	// Reasoning models can spend the entire output budget on hidden thinking
-	// and return an empty summary. Give compaction a generous floor unless the
-	// caller explicitly requested more.
-	if positiveInt(chatBody["max_tokens"]) < 2048 {
-		chatBody["max_tokens"] = 2048
-	}
+	ensureCompactionBudget(chatBody)
 	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]
 
 	stream, _ := body["stream"].(bool)
@@ -251,6 +246,17 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), responsesbridge.CompactionEvents(compaction, bridgeContext))
 }
 
+// compactionMinOutputTokens is the output floor for compaction turns.
+// Reasoning models can otherwise spend the entire budget on hidden thinking
+// and the upstream answers "empty response content"; see ensureCompactionBudget.
+const compactionMinOutputTokens = 4096
+
+func ensureCompactionBudget(chatBody map[string]any) {
+	if positiveInt(chatBody["max_tokens"]) < compactionMinOutputTokens {
+		chatBody["max_tokens"] = compactionMinOutputTokens
+	}
+}
+
 func writeCompactFailure(writer http.ResponseWriter, modelID string, details map[string]any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
@@ -285,9 +291,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
-	if positiveInt(chatBody["max_tokens"]) < 2048 {
-		chatBody["max_tokens"] = 2048
-	}
+	ensureCompactionBudget(chatBody)
 	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]
 
 	stream, _ := body["stream"].(bool)
