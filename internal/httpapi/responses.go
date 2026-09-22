@@ -268,7 +268,7 @@ type compactionConvert func(chat map[string]any, context *responsesbridge.Contex
 // compactionDegrade builds the fallback payload used when no summary can be
 // produced at all: the client still gets a compaction item and can continue,
 // at the cost of the older context.
-type compactionDegrade func(context *responsesbridge.Context, reason string) map[string]any
+type compactionDegrade func(context *responsesbridge.Context, reason, partial string) map[string]any
 
 // runCompactionChain runs the summarization chain and, when the model starved
 // on hidden reasoning instead of writing the summary, retries once with the
@@ -310,7 +310,7 @@ func (s *Server) runCompactionChain(
 	if degrade == nil || ctx.Err() != nil {
 		return result, nil, err
 	}
-	degraded := degrade(bridgeContext, compactionFailureReason(result, err))
+	degraded := degrade(bridgeContext, compactionFailureReason(result, err), responsesbridge.PartialCompactionSummary(result.Out))
 	result.Status = http.StatusOK
 	result.Out = map[string]any{}
 	result.NetErr = ""

@@ -188,12 +188,17 @@ func TestSuccessfulResponsesFallbackClearsPreviousError(t *testing.T) {
 	}
 }
 
-func TestCompactionRejectsTruncationAndRecordsFailure(t *testing.T) {
+// A truncated summary is never presented as a complete handoff, but it no
+// longer strands the client either: the compaction turn degrades, keeps the
+// partial text and states why.
+func TestCompactionDegradesTruncatedSummary(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			var calls atomic.Int32
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
 				w.Header().Set("Content-Type", "application/json")
-				io.WriteString(w, `{"choices":[{"message":{"content":"partial summary"},"finish_reason":"length"}]}`)
+				io.WriteString(w, `{"id":"chatcmpl-trunc","created":1,"choices":[{"index":0,"message":{"role":"assistant","content":"partial summary"},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
 			}))
 			defer up.Close()
 			st, server := newTestServer(t)
@@ -205,19 +210,33 @@ func TestCompactionRejectsTruncationAndRecordsFailure(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			server.ServeHTTP(w, localRequest("POST", "/v1/responses/compact", strings.NewReader(fmt.Sprintf(`{"model":"test","input":"hi","stream":%v}`, stream))))
+			if w.Code != http.StatusOK {
+				t.Fatalf("degraded compact should succeed: %d %s", w.Code, w.Body.String())
+			}
+			envelope := ""
 			if stream {
-				if !strings.Contains(w.Body.String(), "response.created") || !strings.Contains(w.Body.String(), "response.failed") || !strings.Contains(w.Body.String(), "compaction_incomplete") || strings.Contains(w.Body.String(), "response.completed") {
-					t.Fatalf("truncated compact did not fail: %s", w.Body.String())
-				}
+				envelope = extractCompactionEnvelope(t, w.Body.String())
 			} else {
 				var payload map[string]any
-				json.Unmarshal(w.Body.Bytes(), &payload)
-				if w.Code != 502 || payload["error"] == nil {
-					t.Fatalf("truncated compact succeeded: %d %s", w.Code, w.Body.String())
+				if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+					t.Fatal(err)
+				}
+				output, _ := payload["output"].([]any)
+				item, _ := output[len(output)-1].(map[string]any)
+				envelope, _ = item["encrypted_content"].(string)
+			}
+			summary := decodeCompactionEnvelope(t, envelope)
+			for _, expected := range []string{"compaction degraded", "max_output_tokens", "partial summary"} {
+				if !strings.Contains(summary, expected) {
+					t.Fatalf("degraded summary is missing %q:\n%s", expected, summary)
 				}
 			}
-			if history := st.Metadata().History; len(history) != 1 || history[0].Error == nil {
-				t.Fatalf("compact failure not recorded: %#v", history)
+			// The truncation escalated once, then degraded: one entry, both passes traced.
+			if calls.Load() != 2 {
+				t.Fatalf("expected one escalated retry before degrading, got %d calls", calls.Load())
+			}
+			if history := st.Metadata().History; len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) != 2 {
+				t.Fatalf("degraded compaction not recorded correctly: %#v", history)
 			}
 		})
 	}

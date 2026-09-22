@@ -1532,7 +1532,7 @@ func TestDegradedCompactionKeepsShapeAndRecentRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := DegradedCompactionTriggerResponse(context, "upstream 503: gateway unavailable")
+	response := DegradedCompactionTriggerResponse(context, "upstream 503: gateway unavailable", "partial handoff text")
 	output := jsonx.Slice(response["output"])
 	if response["object"] != "response" || len(output) != 1 {
 		t.Fatalf("degraded v2 reply must stay one normal response with one item: %#v", response)
@@ -1544,6 +1544,7 @@ func TestDegradedCompactionKeepsShapeAndRecentRequests(t *testing.T) {
 	for _, expected := range []string{
 		"compaction degraded",
 		"gateway unavailable",
+		"partial handoff text",
 		"## Objective",
 		"## Work State",
 		"## Next Move",

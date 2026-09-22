@@ -159,9 +159,9 @@ func highestReasoningEffort(efforts []string) string {
 // DegradedCompactionResponse is the standalone-endpoint fallback used when no
 // summary could be produced: the client still receives a valid compaction
 // object, so the session keeps moving, at the cost of the older context.
-func DegradedCompactionResponse(context *Context, reason string) map[string]any {
+func DegradedCompactionResponse(context *Context, reason, partial string) map[string]any {
 	output := append([]any(nil), context.compactionUsers...)
-	output = append(output, degradedCompactionItem(context, reason))
+	output = append(output, degradedCompactionItem(context, reason, partial))
 	return map[string]any{
 		"id": newID("resp"), "object": "response.compaction", "created_at": time.Now().Unix(),
 		"output": output, "usage": nil,
@@ -170,25 +170,37 @@ func DegradedCompactionResponse(context *Context, reason string) map[string]any 
 
 // DegradedCompactionTriggerResponse is the remote-compaction v2 fallback: one
 // normal response whose single output item is the degraded compaction item.
-func DegradedCompactionTriggerResponse(context *Context, reason string) map[string]any {
+func DegradedCompactionTriggerResponse(context *Context, reason, partial string) map[string]any {
 	return context.responseBase(
 		newID("resp"), time.Now().Unix(), context.Model, "completed",
-		[]any{degradedCompactionItem(context, reason)}, nil, nil, "",
+		[]any{degradedCompactionItem(context, reason, partial)}, nil, nil, "",
 	)
 }
 
-func degradedCompactionItem(context *Context, reason string) map[string]any {
+func degradedCompactionItem(context *Context, reason, partial string) map[string]any {
 	return map[string]any{
 		"id":                newID("cmp"),
 		"type":              "compaction",
-		"encrypted_content": CompactionEnvelope(degradedCompactionSummary(context, reason)),
+		"encrypted_content": CompactionEnvelope(degradedCompactionSummary(context, reason, partial)),
 	}
+}
+
+// PartialCompactionSummary returns whatever visible text a failed summary
+// attempt produced, so a degraded item can keep the usable part.
+func PartialCompactionSummary(chat map[string]any) string {
+	choices := jsonx.Slice(chat["choices"])
+	if len(choices) == 0 {
+		// Error bodies (500/503, rate limits) carry no completion to salvage.
+		return ""
+	}
+	choice := jsonx.Map(choices[0])
+	return strings.TrimSpace(collectPartText(jsonx.Map(choice["message"])["content"]))
 }
 
 // degradedCompactionSummary keeps the compaction shape (the four headings) so
 // the next model still gets a usable handoff, and preserves the most recent
 // user requests verbatim because everything older is gone.
-func degradedCompactionSummary(context *Context, reason string) string {
+func degradedCompactionSummary(context *Context, reason, partial string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "summary generation failed"
@@ -218,6 +230,11 @@ func degradedCompactionSummary(context *Context, reason string) string {
 		builder.WriteString("Unknown: the earlier conversation is no longer available.\n")
 	}
 	builder.WriteString("\n## Work State\nUnavailable: summarization failed, so completed work and tool results from earlier turns were dropped.\n")
+	if partial = strings.TrimSpace(partial); partial != "" {
+		builder.WriteString("\nPartial summary produced before the failure (may be cut off):\n")
+		builder.WriteString(partial)
+		builder.WriteString("\n")
+	}
 	builder.WriteString("\n## Next Move\nRe-read the recent user requests below and continue from the last one; ask the user to restate the goal if it is unclear.\n")
 	builder.WriteString("\n## Relevant Files\nUnknown: recover paths from the recent requests below.\n")
 	if len(recent) > 0 {
