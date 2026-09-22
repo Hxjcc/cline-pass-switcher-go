@@ -363,7 +363,9 @@ func (s *Server) runSharedResponses(
 	modelID string,
 	modelConfig model.PerModelConfig,
 ) {
-	job.ctx = s.withSessionStick(job.ctx, modelID, chatBody)
+	// Keep job.ctx as the cancellable parent. Another client can read it while
+	// this run starts, so the stick values live on a child context instead.
+	ctx := s.withSessionStick(job.ctx, modelID, chatBody)
 	attempts := s.requestAttempts(modelID, modelConfig, chatBody)
 	job.targets = attemptTargets(attempts)
 	job.effort = bridgeContext.MappedReasoningEffort
@@ -388,7 +390,7 @@ func (s *Server) runSharedResponses(
 				break
 			}
 			started := time.Now()
-			result := s.upstream.StartStreamAttempt(job.ctx, modelID, chatBody, attempt)
+			result := s.upstream.StartStreamAttempt(ctx, modelID, chatBody, attempt)
 			if isBufferedCompletion(result) {
 				events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
 				if err == nil {
@@ -414,7 +416,7 @@ func (s *Server) runSharedResponses(
 					fatal = true
 					break
 				}
-				if job.ctx.Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
+				if ctx.Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
 					break
 				}
 				continue
@@ -442,7 +444,7 @@ func (s *Server) runSharedResponses(
 			job.markReady()
 			if readErr == nil && !adapter.Completed() {
 				readErr = consumeStream(
-					job.ctx,
+					ctx,
 					result.Body,
 					0,
 					adapter.Completed,
@@ -452,7 +454,7 @@ func (s *Server) runSharedResponses(
 			}
 			_ = result.Body.Close()
 			// Check cancellation before Finish marks the adapter terminal.
-			job.aborted = job.ctx.Err() != nil && !adapter.Completed()
+			job.aborted = ctx.Err() != nil && !adapter.Completed()
 			finish := adapter.Finish(readErr)
 			if err := job.publishEvents(finish); err != nil && readErr == nil {
 				readErr = err
@@ -464,7 +466,7 @@ func (s *Server) runSharedResponses(
 			}
 			job.provider, job.canonical = parseStreamRouting(string(rawTail))
 			job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
-			if readErr != nil && job.ctx.Err() == nil {
+			if readErr != nil && ctx.Err() == nil {
 				job.readError = readErr.Error()
 			}
 			return
@@ -472,7 +474,7 @@ func (s *Server) runSharedResponses(
 		if stopped {
 			break
 		}
-		if fatal || job.ctx.Err() != nil {
+		if fatal || ctx.Err() != nil {
 			break
 		}
 		if s.stopFailover(job.last.Status, modelID) {
