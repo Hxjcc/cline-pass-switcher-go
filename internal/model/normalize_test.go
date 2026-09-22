@@ -156,8 +156,7 @@ func TestWebFetchUpstreamEnvironmentOverride(t *testing.T) {
 func TestShellCompatEnvironmentOverride(t *testing.T) {
 	for _, name := range []string{
 		"CLINE_PASS_KEY", "PROXY_KEY", "PUBLIC_BASE_URL", "PORT", "STRICT_TOOL_HISTORY",
-		"WEB_SEARCH_UPSTREAM", "WEB_FETCH_UPSTREAM", "SHELL_COMPAT", "EXEC_SHELL_COMPAT",
-		"SHELL_COMPAT_ENFORCE", "EXEC_SHELL_COMPAT_ENFORCE",
+		"WEB_SEARCH_UPSTREAM", "WEB_FETCH_UPSTREAM", "SHELL_COMPAT", "SHELL_COMPAT_ENFORCE",
 	} {
 		t.Setenv(name, "")
 	}

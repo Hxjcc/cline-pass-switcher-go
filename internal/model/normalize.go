@@ -81,23 +81,14 @@ func ApplyEnvironment(cfg *Config) {
 	if upstream := strings.TrimSpace(os.Getenv("WEB_FETCH_UPSTREAM")); upstream != "" {
 		cfg.WebFetchUpstream = upstream
 	}
-	if shell := firstNonEmptyEnv("SHELL_COMPAT", "EXEC_SHELL_COMPAT"); shell != "" {
+	if shell := strings.TrimSpace(os.Getenv("SHELL_COMPAT")); shell != "" {
 		cfg.ShellCompat = shell
 	}
-	if raw := strings.TrimSpace(firstNonEmptyEnv("SHELL_COMPAT_ENFORCE", "EXEC_SHELL_COMPAT_ENFORCE")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv("SHELL_COMPAT_ENFORCE")); raw != "" {
 		if enforce, err := strconv.ParseBool(raw); err == nil {
 			cfg.ShellCompatEnforce = enforce
 		}
 	}
-}
-
-func firstNonEmptyEnv(names ...string) string {
-	for _, name := range names {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func NormalizeConfig(cfg *Config) {
