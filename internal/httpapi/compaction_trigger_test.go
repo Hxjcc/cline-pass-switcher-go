@@ -115,9 +115,9 @@ func TestResponsesCompactionTriggerStreamsSingleCompactionItem(t *testing.T) {
 	if !strings.Contains(string(raw), "compaction task") {
 		t.Fatalf("upstream request was not a compaction summary request: %s", raw)
 	}
-	// A max-effort session must not burn the compaction budget on thinking.
-	if payloads[0]["reasoning_effort"] != "low" {
-		t.Fatalf("compaction must cap the reasoning effort, got %#v", payloads[0]["reasoning_effort"])
+	// A max-effort session is capped to high for the compaction turn.
+	if payloads[0]["reasoning_effort"] != "high" {
+		t.Fatalf("compaction must cap the reasoning effort at high, got %#v", payloads[0]["reasoning_effort"])
 	}
 	if tokens, ok := payloads[0]["max_tokens"].(float64); !ok || tokens < compactionMinOutputTokens {
 		t.Fatalf("compaction must ask for at least %d output tokens, got %#v", compactionMinOutputTokens, payloads[0]["max_tokens"])
@@ -152,6 +152,57 @@ func TestResponsesCompactionTriggerBufferedReturnsNormalResponse(t *testing.T) {
 	item, _ := output[0].(map[string]any)
 	if item["type"] != "compaction" || !strings.HasPrefix(item["encrypted_content"].(string), "ocx1:") {
 		t.Fatalf("unexpected compaction item: %#v", item)
+	}
+}
+
+// A summary that starved on hidden reasoning is retried once at the model's top
+// effort with a doubled budget, and the retry is what the client receives.
+func TestResponsesCompactionTriggerEscalatesWhenSummaryStarves(t *testing.T) {
+	recorder := &upstreamRecorder{}
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		recorder.add(payload)
+		writer.Header().Set("Content-Type", "application/json")
+		if len(recorder.all()) == 1 {
+			writer.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(writer, `{"error":"empty response content","success":false}`)
+			return
+		}
+		_, _ = io.WriteString(writer, compactionChatBody)
+	}))
+	defer upstreamServer.Close()
+
+	server, st := configureCompactionServer(t, upstreamServer.URL)
+	body := `{"model":"cline-pass/test","stream":true,"reasoning":{"effort":"max"},"input":[
+	  {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+	  {"type":"compaction_trigger"}]}`
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "event: response.completed") {
+		t.Fatalf("escalated compaction should succeed: %d %s", response.Code, response.Body.String())
+	}
+	payloads := recorder.all()
+	if len(payloads) != 2 {
+		t.Fatalf("expected the starved attempt plus one retry, got %d calls", len(payloads))
+	}
+	if payloads[0]["reasoning_effort"] != "high" {
+		t.Fatalf("first pass should run at high, got %#v", payloads[0]["reasoning_effort"])
+	}
+	if payloads[1]["reasoning_effort"] != "max" {
+		t.Fatalf("retry should escalate to max, got %#v", payloads[1]["reasoning_effort"])
+	}
+	first, _ := payloads[0]["max_tokens"].(float64)
+	retry, _ := payloads[1]["max_tokens"].(float64)
+	if retry <= first {
+		t.Fatalf("retry should get a bigger budget: %v -> %v", first, retry)
+	}
+	history := st.Metadata().History
+	if len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) < 2 {
+		t.Fatalf("both passes belong to one successful history entry: %#v", history)
 	}
 }
 

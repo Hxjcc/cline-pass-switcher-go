@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
@@ -31,11 +32,11 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	prepared = append(prepared, messages[leading:]...)
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
-	// Compaction is mechanical summarization. If the session runs at a high
-	// reasoning effort the model can spend the whole output budget on hidden
-	// thinking and the gateway answers "empty response content"; ask for the
-	// cheapest level the model advertises so the budget goes to the summary.
-	if effort := minimalReasoningEffort(options.ReasoningEfforts); effort != "" {
+	// Compaction is mechanical summarization, so it runs at "high" rather than
+	// the session's maximum: a max-effort pass tends to spend the output budget
+	// on hidden thinking and the gateway then answers "empty response content".
+	// The caller escalates to the model's top level once if that still happens.
+	if effort := compactionReasoningEffort(options.ReasoningEfforts); effort != "" {
 		chat["reasoning_effort"] = effort
 		if reasoningEffortOff(effort) {
 			delete(chat, "reasoning")
@@ -54,14 +55,22 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	return chat, context, nil
 }
 
-// minimalReasoningEffort picks the cheapest advertised level so a compaction
-// turn cannot burn its token budget on hidden reasoning.
-func minimalReasoningEffort(efforts []string) string {
-	for _, preferred := range []string{"none", "minimal", "low"} {
+// compactionReasoningEffort picks "high" when the model advertises it, falling
+// back to the closest available level. Summaries need faithfulness rather than
+// maximum deliberation, and the caller escalates on starvation.
+func compactionReasoningEffort(efforts []string) string {
+	for _, preferred := range []string{"high", "medium", "low", "minimal", "max", "xhigh"} {
 		for _, effort := range efforts {
 			if strings.EqualFold(strings.TrimSpace(effort), preferred) {
 				return preferred
 			}
+		}
+	}
+	// No graded level advertised: prefer any real thinking level over "none"
+	// (a none/max toggle resolves to max), and fall back to disabling thinking.
+	for _, effort := range efforts {
+		if value := strings.TrimSpace(effort); value != "" && !reasoningEffortOff(value) {
+			return value
 		}
 	}
 	for _, effort := range efforts {
@@ -79,6 +88,54 @@ func reasoningEffortOff(effort string) bool {
 	default:
 		return false
 	}
+}
+
+// EscalateCompactionBudget rewrites a compaction chat request for the retry
+// pass: the model's highest advertised reasoning level plus a doubled output
+// budget, so a summary that starved on hidden thinking gets room to land.
+func EscalateCompactionBudget(body map[string]any, efforts []string) {
+	if body == nil {
+		return
+	}
+	if effort := highestReasoningEffort(efforts); effort != "" {
+		body["reasoning_effort"] = effort
+		if reasoningEffortOff(effort) {
+			delete(body, "reasoning")
+		} else {
+			body["reasoning"] = map[string]any{"effort": effort}
+		}
+	}
+	tokens := 0
+	switch typed := body["max_tokens"].(type) {
+	case float64:
+		tokens = int(typed)
+	case int:
+		tokens = typed
+	case int64:
+		tokens = int(typed)
+	case json.Number:
+		value, _ := typed.Int64()
+		tokens = int(value)
+	}
+	if tokens < 8192 {
+		tokens = 8192
+	}
+	tokens *= 2
+	if tokens > 32768 {
+		tokens = 32768
+	}
+	body["max_tokens"] = tokens
+}
+
+func highestReasoningEffort(efforts []string) string {
+	for _, preferred := range []string{"max", "xhigh", "high", "medium", "low"} {
+		for _, effort := range efforts {
+			if strings.EqualFold(strings.TrimSpace(effort), preferred) {
+				return preferred
+			}
+		}
+	}
+	return compactionReasoningEffort(efforts)
 }
 
 // Keep original user turns, including images, outside the summary. Construct

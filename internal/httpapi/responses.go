@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
@@ -168,7 +170,9 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 
 	stream, _ := body["stream"].(bool)
 	started := time.Now()
-	result := s.runNonStreamChain(request.Context(), modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	result, compaction, err := s.runCompactionChain(
+		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionResponse,
+	)
 	if result.Status != http.StatusOK || result.Out == nil {
 		message := chainErrorMessage(result)
 		if message == "" {
@@ -203,7 +207,6 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		return
 	}
 
-	compaction, err := responsesbridge.CompactionResponse(result.Out, bridgeContext)
 	if err != nil {
 		message := err.Error()
 		s.record(model.HistoryEntry{
@@ -257,6 +260,64 @@ func ensureCompactionBudget(chatBody map[string]any) {
 	}
 }
 
+// compactionConvert adapts a completed Chat response to the compaction shape
+// the caller needs: the standalone endpoint's response.compaction object or the
+// remote compaction v2 reply.
+type compactionConvert func(chat map[string]any, context *responsesbridge.Context) (map[string]any, error)
+
+// runCompactionChain runs the summarization chain and, when the model starved
+// on hidden reasoning instead of writing the summary, retries once with the
+// model's top reasoning level and a doubled output budget. Both passes stay in
+// the trace so the history shows what actually happened.
+func (s *Server) runCompactionChain(
+	ctx context.Context,
+	modelID string,
+	chatBody map[string]any,
+	modelConfig model.PerModelConfig,
+	bridgeContext *responsesbridge.Context,
+	convert compactionConvert,
+) (chainResult, map[string]any, error) {
+	result := s.runNonStreamChain(ctx, modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	compaction, err := convertCompaction(result, bridgeContext, convert)
+	if !compactionStarved(result, err) {
+		return result, compaction, err
+	}
+	retryBody := model.Clone(chatBody)
+	responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
+	bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
+	escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
+	escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
+	compaction, err = convertCompaction(escalated, bridgeContext, convert)
+	return escalated, compaction, err
+}
+
+func convertCompaction(result chainResult, bridgeContext *responsesbridge.Context, convert compactionConvert) (map[string]any, error) {
+	if result.Status != http.StatusOK || result.Out == nil {
+		message := chainErrorMessage(result)
+		if message == "" {
+			message = "upstream returned no response"
+		}
+		return nil, errors.New(message)
+	}
+	return convert(result.Out, bridgeContext)
+}
+
+// compactionStarved reports the failures a more expensive second pass can fix:
+// the gateway rejected an empty summary, or the summary came back incomplete.
+func compactionStarved(result chainResult, err error) bool {
+	if result.Status >= 400 {
+		return strings.Contains(strings.ToLower(chainErrorMessage(result)), "empty response content")
+	}
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "empty compaction summary") ||
+		strings.Contains(message, "compaction_incomplete") ||
+		strings.Contains(message, "did not finish") ||
+		strings.Contains(message, "incomplete")
+}
+
 func writeCompactFailure(writer http.ResponseWriter, modelID string, details map[string]any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
@@ -296,7 +357,9 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 
 	stream, _ := body["stream"].(bool)
 	started := time.Now()
-	result := s.runNonStreamChain(request.Context(), modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	result, compaction, err := s.runCompactionChain(
+		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionTriggerResponse,
+	)
 	if result.Status != http.StatusOK || result.Out == nil {
 		message := chainErrorMessage(result)
 		if message == "" {
@@ -331,7 +394,6 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		return
 	}
 
-	compaction, err := responsesbridge.CompactionTriggerResponse(result.Out, bridgeContext)
 	if err != nil {
 		message := err.Error()
 		s.record(model.HistoryEntry{

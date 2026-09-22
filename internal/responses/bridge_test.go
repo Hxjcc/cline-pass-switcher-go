@@ -1510,7 +1510,7 @@ func TestCompactionTriggerResponseHoldsOneCompactionItem(t *testing.T) {
 	}
 }
 
-func TestToCompactionChatLowersReasoningEffort(t *testing.T) {
+func TestToCompactionChatUsesHighReasoningEffort(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/test",
 		"input": []any{map[string]any{
@@ -1519,25 +1519,33 @@ func TestToCompactionChatLowersReasoningEffort(t *testing.T) {
 		}},
 		"reasoning": map[string]any{"effort": "max"},
 	}
-	chat, _, err := ToCompactionChatWithOptions(body, Options{ReasoningEfforts: []string{"low", "high", "max"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if chat["reasoning_effort"] != "low" {
-		t.Fatalf("compaction must run at the cheapest reasoning level, got %#v", chat["reasoning_effort"])
-	}
-	if effort := jsonx.String(jsonx.Map(chat["reasoning"])["effort"]); effort != "low" {
-		t.Fatalf("reasoning map must follow the capped effort: %#v", chat["reasoning"])
-	}
-
-	// A model that can turn thinking off entirely should: the summary is the
-	// only thing that has to fit into the output budget.
-	chat, _, err = ToCompactionChatWithOptions(body, Options{ReasoningEfforts: []string{"none", "high"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if chat["reasoning_effort"] != "none" || chat["reasoning"] != nil {
-		t.Fatalf("a no-reasoning model must not be asked to think: %#v", chat)
+	for _, tc := range []struct {
+		efforts []string
+		want    string
+	}{
+		{efforts: []string{"low", "high", "max"}, want: "high"},
+		{efforts: []string{"none", "high", "max"}, want: "high"},
+		{efforts: []string{"none", "max"}, want: "max"},
+		{efforts: []string{"low"}, want: "low"},
+		{efforts: []string{"none"}, want: "none"},
+		{efforts: nil, want: "max"},
+	} {
+		chat, _, err := ToCompactionChatWithOptions(body, Options{ReasoningEfforts: tc.efforts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chat["reasoning_effort"] != tc.want {
+			t.Fatalf("efforts %v: compaction should run at %q, got %#v", tc.efforts, tc.want, chat["reasoning_effort"])
+		}
+		if tc.want == "none" {
+			if chat["reasoning"] != nil {
+				t.Fatalf("a no-reasoning model must not carry a reasoning map: %#v", chat)
+			}
+			continue
+		}
+		if effort := jsonx.String(jsonx.Map(chat["reasoning"])["effort"]); effort != tc.want {
+			t.Fatalf("reasoning map must follow the capped effort: %#v", chat["reasoning"])
+		}
 	}
 }
 
