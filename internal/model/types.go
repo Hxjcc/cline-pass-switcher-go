@@ -259,10 +259,12 @@ func DefaultConfig() Config {
 	}
 }
 
-// DefaultCompactionRecentTokens keeps roughly the last turn or two verbatim
-// inside a compaction item: enough for exact paths, commands and error text
-// without eating the context the compaction just freed.
-const DefaultCompactionRecentTokens = 8000
+// DefaultCompactionRecentTokens keeps the last few turns verbatim inside a
+// compaction item: enough for exact paths, commands and error text (a coding
+// turn can easily spend 1-2k tokens of dialogue) without eating the context the
+// compaction just freed. It is ~1.6% of a 1M window and only user/assistant
+// text is charged against it.
+const DefaultCompactionRecentTokens = 16000
 
 // DefaultCompactionReasoningEffort runs compaction at the model's strongest
 // level by default: reasoning models that are capped lower tend to spend the
