@@ -168,3 +168,88 @@ func TestStreamUsageAddsLegsPerToolAcrossChunks(t *testing.T) {
 		t.Fatalf("separate tool counts should add up to the same leg count, got %#v", usage)
 	}
 }
+
+// Two searches answered inside one loop iteration are two legs, not three.
+// The loop index is what the gateway actually ran, so it wins over the tool
+// count.
+func TestResponsesUsagePrefersGatewayLegIndex(t *testing.T) {
+	chat := map[string]any{
+		"id": "chatcmpl-parallel",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "tokyo and osaka",
+				"provider_metadata": map[string]any{
+					"gateway": map[string]any{
+						"gatewayToolCalls": map[string]any{"exa_search": float64(2)},
+						"routing": map[string]any{
+							"modelAttempts": []any{map[string]any{
+								"providerAttempts": []any{
+									map[string]any{"toolLoopLegIndex": float64(0)},
+									map[string]any{"toolLoopLegIndex": float64(1)},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":         17_565,
+			"completion_tokens":     655,
+			"prompt_tokens_details": map[string]any{"cached_tokens": 7_168},
+		},
+	}
+	response, err := FromChat(chat, &Context{Model: "cline-pass/deepseek-v4.1-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := jsonx.Map(response["usage"])
+	if usage["input_tokens"] != int64(8_782) {
+		t.Fatalf("the loop index should decide the leg count, got %#v", usage)
+	}
+	if jsonx.Map(usage["input_tokens_details"])["cached_tokens"] != int64(3_584) {
+		t.Fatalf("cached tokens should follow the same leg count, got %#v", usage)
+	}
+}
+
+// A lone "leg 0" only describes the first call, so it must not hide the tool
+// counter when a search really did add a leg.
+func TestResponsesUsageKeepsToolCountWhenLegIndexIsLone(t *testing.T) {
+	chat := map[string]any{
+		"id": "chatcmpl-lone-leg",
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "ok",
+				"provider_metadata": map[string]any{
+					"gateway": map[string]any{
+						"gatewayToolCalls": map[string]any{"exa_search": float64(1)},
+						"routing": map[string]any{
+							"modelAttempts": []any{map[string]any{
+								"providerAttempts": []any{
+									map[string]any{"toolLoopLegIndex": float64(0)},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":         900,
+			"completion_tokens":     8,
+			"prompt_tokens_details": map[string]any{"cached_tokens": 600},
+		},
+	}
+	response, err := FromChat(chat, &Context{Model: "cline-pass/deepseek-v4.1-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := jsonx.Map(response["usage"])
+	if usage["input_tokens"] != int64(450) {
+		t.Fatalf("a lone leg index must not override the tool counter, got %#v", usage)
+	}
+}

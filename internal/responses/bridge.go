@@ -2016,6 +2016,42 @@ func toolCallsInMetadata(metadata map[string]any) (map[string]int, int) {
 	return nil, 0
 }
 
+// gatewayLegIndex reads routing.modelAttempts[*].providerAttempts[*].toolLoopLegIndex,
+// the loop iteration each provider call belonged to. The gateway runs one model
+// call per leg, so the highest index pins the leg count exactly instead of
+// inferring it from how many tools ran. Missing indexes report -1.
+func gatewayLegIndex(root map[string]any) int {
+	best := -1
+	visit := func(metadata map[string]any) {
+		gateway := jsonx.Map(metadata["gateway"])
+		routing := jsonx.Map(gateway["routing"])
+		if routing == nil {
+			routing = jsonx.Map(metadata["routing"])
+		}
+		for _, rawModel := range jsonx.Slice(routing["modelAttempts"]) {
+			attempts := jsonx.Slice(jsonx.Map(rawModel)["providerAttempts"])
+			for _, rawAttempt := range attempts {
+				attempt := jsonx.Map(rawAttempt)
+				index, found := attempt["toolLoopLegIndex"]
+				if !found {
+					continue
+				}
+				if value := int(intValue(index)); value > best {
+					best = value
+				}
+			}
+		}
+	}
+	visit(jsonx.Map(root["provider_metadata"]))
+	for _, raw := range jsonx.Slice(root["choices"]) {
+		choice := jsonx.Map(raw)
+		visit(jsonx.Map(choice["provider_metadata"]))
+		visit(jsonx.Map(jsonx.Map(choice["delta"])["provider_metadata"]))
+		visit(jsonx.Map(jsonx.Map(choice["message"])["provider_metadata"]))
+	}
+	return best
+}
+
 func intValue(value any) int64 {
 	switch typed := value.(type) {
 	case int:

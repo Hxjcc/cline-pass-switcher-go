@@ -164,16 +164,18 @@ type StreamState struct {
 	rawUsage          any
 	gatewayToolCalls  map[string]int
 	gatewayLooseCalls int
+	gatewayLegIndex   int
 }
 
 func NewStreamState(context *Context) *StreamState {
 	return &StreamState{
-		context:       context,
-		responseID:    newID("resp"),
-		model:         context.Model,
-		createdAt:     time.Now().Unix(),
-		tools:         map[int]*toolState{},
-		lastToolIndex: -1,
+		context:         context,
+		responseID:      newID("resp"),
+		model:           context.Model,
+		createdAt:       time.Now().Unix(),
+		tools:           map[int]*toolState{},
+		lastToolIndex:   -1,
+		gatewayLegIndex: -1,
 	}
 }
 
@@ -738,6 +740,9 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 		}
 		state.gatewayLooseCalls = max(state.gatewayLooseCalls, loose)
 	}
+	if index := gatewayLegIndex(chunk); index > state.gatewayLegIndex {
+		state.gatewayLegIndex = index
+	}
 	if chunk["usage"] != nil {
 		state.rawUsage = chunk["usage"]
 	}
@@ -902,12 +907,20 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 	}
 }
 
+// usageLegs is how many model calls the gateway ran for this response: the
+// final answer plus one per internal tool leg. toolLoopLegIndex is the exact
+// answer, and it also covers legs that ran without a tool of their own, so it
+// wins as soon as it shows a loop really happened. Otherwise the tool counters
+// are the only estimate.
 func (state *StreamState) usageLegs() int {
-	legs := 1 + state.gatewayLooseCalls
+	counted := 1 + state.gatewayLooseCalls
 	for _, count := range state.gatewayToolCalls {
-		legs += count
+		counted += count
 	}
-	return legs
+	if indexed := state.gatewayLegIndex + 1; indexed >= 2 {
+		return indexed
+	}
+	return counted
 }
 
 func (state *StreamState) finish(events []Event, status, incompleteReason string) []Event {
