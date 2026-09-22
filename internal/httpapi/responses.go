@@ -60,7 +60,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		})
 		return
 	}
-	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
+	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)

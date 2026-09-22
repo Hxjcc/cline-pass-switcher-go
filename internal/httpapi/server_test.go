@@ -703,6 +703,10 @@ func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 func TestStreamingResponsesFailsOverToHealthyAccountOn401(t *testing.T) {
 	var badKeyHits, goodKeyHits atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") {
+			http.NotFound(writer, request)
+			return
+		}
 		if request.Header.Get("Authorization") == "Bearer bad-key" {
 			badKeyHits.Add(1)
 			writer.Header().Set("Content-Type", "application/json")

@@ -254,6 +254,23 @@ test("shows the quota readout with progress bars and refreshes on demand", async
   await waitFor(() => expect(onQuota).toHaveBeenCalledWith(true))
 })
 
+test("says a full quota window is skipped while another account is usable", async () => {
+  const full: QuotaResponse = {
+    accounts: [
+      {
+        ...quota.accounts[0],
+        limits: [
+          { type: "five_hour", percentUsed: 100, resetsAt: "2026-09-19T17:07:47Z" },
+          { type: "weekly", percentUsed: 35, resetsAt: "2026-09-21T16:56:20Z" },
+          { type: "monthly", percentUsed: 17, resetsAt: "2026-10-14T16:56:20Z" },
+        ],
+      },
+    ],
+  }
+  renderPanel({ quota: full })
+  await waitFor(() => expect(screen.getByText("已满，有其他可用账号时会跳过")).toBeTruthy())
+})
+
 test("reports a failed quota probe without hiding the account", async () => {
   const failed: QuotaResponse = {
     accounts: [

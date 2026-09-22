@@ -295,9 +295,9 @@ func TestCatalogKeepsTheStoredListWhenUpstreamFails(t *testing.T) {
 	}
 }
 
-// Quota probing is display-only and never consumes inference quota. The console
-// draws a meter for every row, disabled ones included, so the probe has to
-// cover every account that still has a credential.
+// Quota probing never consumes inference quota. The console draws a meter for
+// every row, disabled ones included, so the probe has to cover every account
+// that still has a credential. Selection reads the same snapshot.
 func TestProbeQuotasCoversEveryKeyedAccount(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

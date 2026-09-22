@@ -331,8 +331,8 @@ function App() {
   // is kept in the panel and never written to the cached snapshot.
   const revealAccounts = () => api<AccountsResponse>("/api/accounts?reveal=1", { key: authKey })
 
-  // Plan utilization is read-only and never reaches the routing logic; the
-  // panel decides when to ask for it.
+  // The panel asks for plan utilization. The server also reads it while
+  // choosing an account, and skips one whose window is already at 100%.
   const loadQuota = useCallback((refresh = false) =>
     api<QuotaResponse>(refresh ? "/api/accounts/quota?refresh=1" : "/api/accounts/quota", {
       key: authKey,

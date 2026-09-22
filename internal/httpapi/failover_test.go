@@ -24,6 +24,10 @@ func newAccountPoolServer(t *testing.T) (bad, good *atomic.Int32, server *httpte
 	t.Helper()
 	bad, good = &atomic.Int32{}, &atomic.Int32{}
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") {
+			http.NotFound(writer, request)
+			return
+		}
 		if request.Header.Get("Authorization") == "Bearer bad-key" {
 			bad.Add(1)
 			writer.Header().Set("Content-Type", "application/json")
@@ -172,6 +176,10 @@ func TestAuthFailureRetriesAnotherAccountWithinOneChannel(t *testing.T) {
 func TestStreamFirstEventAuthErrorCoolsTheAccount(t *testing.T) {
 	bad, good := &atomic.Int32{}, &atomic.Int32{}
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") {
+			http.NotFound(writer, request)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if request.Header.Get("Authorization") == "Bearer bad-key" {
 			bad.Add(1)
@@ -503,5 +511,171 @@ func TestChatStreamMultiLineErrorEventIsRecorded(t *testing.T) {
 	history := st.Metadata().History
 	if len(history) != 1 || history[0].Error == nil || !strings.Contains(*history[0].Error, "upstream exploded") {
 		t.Fatalf("multi-line error event was not recorded: %#v", history)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
+// rateLimitUpstream answers chat completions with 429 and records whether a
+// provider pin was attached. Quota probes are not chat attempts.
+func rateLimitUpstream(t *testing.T, calls *atomic.Int32, pinned *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") || request.URL.Path != "/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		calls.Add(1)
+		var payload map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		pin := ""
+		if options, _ := payload["providerOptions"].(map[string]any); options != nil {
+			if gateway, _ := options["gateway"].(map[string]any); gateway != nil {
+				if only, _ := gateway["only"].([]any); len(only) == 1 {
+					pin, _ = only[0].(string)
+				}
+			}
+		}
+		*pinned = append(*pinned, pin)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(writer, `{"error":{"message":"rate limited","type":"rate_limit_error"}}`)
+	}))
+}
+
+func TestRateLimitOnAutoRouteSwitchesAccountButNotChannel(t *testing.T) {
+	var calls atomic.Int32
+	var pinned []string
+	upstreamServer := rateLimitUpstream(t, &calls, &pinned)
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.AccountMode = "single"
+		config.ActiveAccount = 0
+		config.Accounts = []model.Account{
+			{Name: "first", Key: "key-a", Enabled: true},
+			{Name: "second", Key: "key-b", Enabled: true},
+		}
+		config.KnownModels = []string{"cline-pass/test"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{
+			Upstreams: []string{"deepseek", "glm"},
+			PinMode:   "strict",
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.Pipeline = "planner"
+		meta.Pinnable = boolPtr(false)
+		meta.PinReason = "gateway_ignores_provider_preferences"
+		meta.Upstreams = []string{"deepseek", "glm"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate limit should surface: %d %s", response.Code, response.Body.String())
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("auto route should try the other account once, got %d calls", calls.Load())
+	}
+	for _, pin := range pinned {
+		if pin != "" {
+			t.Fatalf("auto route must not send a stale pin: %#v", pinned)
+		}
+	}
+	if response.Header().Get("X-Cline-Account") != "second" {
+		t.Fatalf("the second account should have taken the last attempt: %q", response.Header().Get("X-Cline-Account"))
+	}
+}
+
+func TestRateLimitOnPinnableModelTriesTheNextChannel(t *testing.T) {
+	var calls atomic.Int32
+	var pinned []string
+	upstreamServer := rateLimitUpstream(t, &calls, &pinned)
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.Accounts = []model.Account{{Name: "main", Key: "key-a", Enabled: true}}
+		config.KnownModels = []string{"cline-pass/test"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{
+			Upstreams: []string{"deepseek", "glm"},
+			PinMode:   "strict",
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.Pipeline = "planner"
+		meta.Pinnable = boolPtr(true)
+		meta.Upstreams = []string{"deepseek", "glm"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate limit should surface: %d %s", response.Code, response.Body.String())
+	}
+	if calls.Load() != 2 || len(pinned) != 2 || pinned[0] != "deepseek" || pinned[1] != "glm" {
+		t.Fatalf("pinnable model should walk the pinned channels once: calls=%d pins=%#v", calls.Load(), pinned)
+	}
+}
+
+func TestStickySessionReusesTheAccountAcrossTurns(t *testing.T) {
+	var auths []string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") || request.URL.Path != "/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		auths = append(auths, request.Header.Get("Authorization"))
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, chatCompletionBody)
+	}))
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.AccountMode = "roundrobin"
+		config.Accounts = []model.Account{
+			{Name: "a", Key: "key-a", Enabled: true},
+			{Name: "b", Key: "key-b", Enabled: true},
+		}
+		config.KnownModels = []string{"cline-pass/test"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(cacheKey string) {
+		t.Helper()
+		body := `{"model":"cline-pass/test","prompt_cache_key":"` + cacheKey + `","messages":[{"role":"user","content":"hi"}]}`
+		request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("chat failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+	send("session-42")
+	send("session-42")
+	send("session-other")
+	if len(auths) != 3 || auths[0] == "" || auths[0] != auths[1] || auths[2] == auths[0] {
+		t.Fatalf("the same conversation should keep its account, a new one should move on: %#v", auths)
 	}
 }

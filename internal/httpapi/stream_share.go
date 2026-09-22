@@ -363,7 +363,8 @@ func (s *Server) runSharedResponses(
 	modelID string,
 	modelConfig model.PerModelConfig,
 ) {
-	attempts := s.upstream.BuildAttempts(modelID, modelConfig)
+	job.ctx = s.withSessionStick(job.ctx, modelID, chatBody)
+	attempts := s.requestAttempts(modelID, modelConfig, chatBody)
 	job.targets = attemptTargets(attempts)
 	job.effort = bridgeContext.MappedReasoningEffort
 	job.keepalive = streamKeepaliveInterval(s.upstream.StreamIdleTimeout())
@@ -474,7 +475,7 @@ func (s *Server) runSharedResponses(
 		if fatal || job.ctx.Err() != nil {
 			break
 		}
-		if s.stopFailover(job.last.Status) {
+		if s.stopFailover(job.last.Status, modelID) {
 			break
 		}
 	}

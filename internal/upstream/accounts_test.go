@@ -36,6 +36,32 @@ func TestAccountHealthIsKeyedByIdentityNotName(t *testing.T) {
 	}
 }
 
+func TestRateLimitCooldownOutlastsAShortRetry(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpdateConfig(func(cfg *model.Config) {
+		cfg.Accounts = []model.Account{
+			{Name: "limited", Key: "key-a", Enabled: true},
+			{Name: "spare", Key: "key-b", Enabled: true},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(st)
+	limited := st.Config().Accounts[0]
+	service.noteAccountStatus(limited, http.StatusTooManyRequests)
+
+	if _, cooling := service.excludedAccounts(time.Now().Add(30 * time.Second))[limited.ID]; !cooling {
+		t.Fatal("a 429 should still be cooling after 30 seconds")
+	}
+	if _, cooling := service.excludedAccounts(time.Now().Add(accountLimitCooldown + time.Second))[limited.ID]; cooling {
+		t.Fatal("the rate-limit cooldown should expire")
+	}
+}
+
 func TestAccountAttemptLimitIsCapped(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

@@ -23,7 +23,8 @@ var (
 
 func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.Request, modelID string, body map[string]any, modelConfig model.PerModelConfig) {
 	defer clearStreamDeadline(writer)
-	attempts := s.upstream.BuildAttempts(modelID, modelConfig)
+	ctx := s.withSessionStick(request.Context(), modelID, body)
+	attempts := s.requestAttempts(modelID, modelConfig, body)
 	targets := attemptTargets(attempts)
 	var last chainResult
 	last.Status = http.StatusBadGateway
@@ -42,7 +43,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			// No overall deadline: reasoning responses legitimately stream for
 			// minutes. StartStreamAttempt applies a first-event budget and then
 			// an idle (silence) budget so long but healthy streams survive.
-			result := s.upstream.StartStreamAttempt(request.Context(), modelID, body, attempt)
+			result := s.upstream.StartStreamAttempt(ctx, modelID, body, attempt)
 			if isBufferedCompletion(result) {
 				last.Trace = append(last.Trace, model.Trace{
 					Upstream: attempt.Upstream,
@@ -75,7 +76,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 					fatal = true
 					break
 				}
-				if request.Context().Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
+				if ctx.Err() != nil || !s.accountRetryAllowed(result.Status, accountsUsed, budget) {
 					break
 				}
 				continue
@@ -119,7 +120,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			copyErr := writeChunk(result.FirstChunk)
 			if copyErr == nil {
 				copyErr = consumeStream(
-					request.Context(),
+					ctx,
 					result.Body,
 					streamKeepaliveInterval(s.upstream.StreamIdleTimeout()),
 					nil,
@@ -161,7 +162,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		if streamed {
 			return
 		}
-		if fatal || request.Context().Err() != nil || s.stopFailover(last.Status) {
+		if fatal || ctx.Err() != nil || s.stopFailover(last.Status, modelID) {
 			break
 		}
 	}

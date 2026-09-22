@@ -618,8 +618,21 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 	})
 }
 
+func (s *Server) withSessionStick(ctx context.Context, modelID string, body map[string]any) context.Context {
+	session := upstream.SessionKey(modelID, body)
+	accountID, _ := s.upstream.LookupStick(session)
+	return upstream.WithStick(ctx, session, accountID)
+}
+
+func (s *Server) requestAttempts(modelID string, cfg model.PerModelConfig, body map[string]any) []upstream.Attempt {
+	attempts := s.upstream.BuildAttempts(modelID, cfg)
+	_, slug := s.upstream.LookupStick(upstream.SessionKey(modelID, body))
+	return upstream.PreferAttempt(attempts, slug)
+}
+
 func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map[string]any, modelConfig model.PerModelConfig, timeout time.Duration) chainResult {
-	attempts := s.upstream.BuildAttempts(modelID, modelConfig)
+	ctx = s.withSessionStick(ctx, modelID, body)
+	attempts := s.requestAttempts(modelID, modelConfig, body)
 	result := chainResult{Status: http.StatusBadGateway, Started: time.Now()}
 	budget := newAttemptBudget(len(attempts), s.upstream.AccountAttemptLimit())
 	for _, attempt := range attempts {
@@ -670,7 +683,7 @@ func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map
 		if succeeded {
 			break
 		}
-		if fatal || ctx.Err() != nil || s.stopFailover(result.Status) {
+		if fatal || ctx.Err() != nil || s.stopFailover(result.Status, modelID) {
 			break
 		}
 	}
@@ -680,11 +693,17 @@ func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map
 // stopFailover reports whether walking the remaining upstream channels is
 // pointless. A 401/403 is about the account key, not the provider: it is only
 // worth another attempt when a different account can be picked for it.
-func (s *Server) stopFailover(status int) bool {
-	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+// A 429 on an auto route is the same request repeated, so the channel list
+// is not a way out; a pinnable model can still move to the next pinned provider.
+func (s *Server) stopFailover(status int, modelID string) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return !s.upstream.AccountFailoverAvailable()
+	case http.StatusTooManyRequests:
+		return s.upstream.AutoRoute(modelID)
+	default:
 		return false
 	}
-	return !s.upstream.AccountFailoverAvailable()
 }
 
 // maxChainAttempts bounds the total number of upstream calls one client
@@ -781,7 +800,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	}
 	s.record(entry)
 
-	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
+	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, body))
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
 	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.FinalProvider, "unknown"))

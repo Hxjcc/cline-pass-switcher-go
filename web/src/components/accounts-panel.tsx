@@ -242,7 +242,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
       <CardHeader className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
           <CardTitle>账号池</CardTitle>
-          <CardDescription>管理账号、切换调度方式，查看各周期套餐用量。</CardDescription>
+          <CardDescription>管理账号、切换调度方式，查看各周期套餐用量。某个周期达到 100% 时，有其他可用账号就会跳过。</CardDescription>
         </div>
         <CardAction className="grid w-full grid-cols-2 items-center gap-2 @min-[640px]/accounts:flex @min-[640px]/accounts:w-auto @min-[640px]/accounts:flex-wrap">
           <Tooltip>
@@ -510,6 +510,8 @@ function QuotaReadout({ quota, loading, refreshError }: { quota?: AccountQuota; 
               {refreshError || quota?.error || "探测失败"}
             </TooltipContent>
           </Tooltip>
+        ) : quota?.ok && quota.limits?.some((limit) => limit.percentUsed >= 100) ? (
+          <span className="text-destructive">已满，有其他可用账号时会跳过</span>
         ) : (
           <span>{loading ? "更新中…" : !quota ? "配额未查询" : ""}</span>
         )}

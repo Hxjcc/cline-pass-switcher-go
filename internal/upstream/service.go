@@ -44,10 +44,17 @@ type Service struct {
 
 	accounts accountHealth
 
-	// quotaCache holds successful plan probes for a short window so the
-	// console cannot hammer the undocumented upstream endpoints.
-	quotaMu    sync.Mutex
-	quotaCache map[string]AccountQuota
+	// Quota snapshots are shared by the console and account selection. A full
+	// window becomes a hold; a failed probe is remembered briefly so a down
+	// endpoint cannot sit on the request path.
+	quotaMu     sync.Mutex
+	quotaState  map[string]quotaState
+	quotaHold   map[string]quotaHold
+	quotaFlight map[string]*quotaFlight
+
+	// sticks remembers which account and pinned channel last served a conversation.
+	stickMu sync.Mutex
+	sticks  map[string]sessionStick
 }
 
 type ProbeResult struct {
@@ -690,7 +697,18 @@ func (s *Service) TestAccount(ctx context.Context, key, accountID string) Accoun
 	return AccountTestResult{OK: true, MS: time.Since(started).Milliseconds(), Model: modelID}
 }
 
+// AutoRoute reports a probed model whose gateway ignores provider pins.
+// GLM-style routes stay pinnable. An unprobed model is not auto: saved pins
+// are left as configured until a probe says otherwise.
+func (s *Service) AutoRoute(modelID string) bool {
+	meta := s.store.ModelMeta(modelID)
+	return meta.Pinnable != nil && !*meta.Pinnable
+}
+
 func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Attempt {
+	if s.AutoRoute(modelID) {
+		return []Attempt{{}}
+	}
 	excluded := make(map[string]struct{}, len(cfg.Exclude))
 	for _, upstreamSlug := range cfg.Exclude {
 		excluded[upstreamSlug] = struct{}{}
@@ -868,7 +886,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 }
 
 func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map[string]any, attempt Attempt) AttemptResult {
-	account := s.pickAccount()
+	account := s.pickAccount(ctx)
 	if account.Key == "" {
 		details := apierr.Details{Status: http.StatusServiceUnavailable, Type: "configuration_error", Code: "no_account", Message: errNoAccount.Error()}
 		return AttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account, Fatal: true}
@@ -891,6 +909,7 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 	root := jsonx.Map(raw)
 	if details, found := apierr.FromBody(root, status); found && !hasChoices(root) {
 		s.noteAccountStatus(account, details.Status)
+		s.observeStick(ctx, account, attempt.Upstream, details.Status)
 		return AttemptResult{
 			Status:  details.Status,
 			Out:     apierr.Body(details),
@@ -900,6 +919,7 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 		}
 	}
 	s.noteAccountStatus(account, http.StatusOK)
+	s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
 	output := responseBody(root)
 	return AttemptResult{
 		Status:  http.StatusOK,
@@ -972,7 +992,7 @@ func readSSEHead(reader io.Reader) ([]byte, string, error) {
 }
 
 func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body map[string]any, attempt Attempt) StreamAttemptResult {
-	account := s.pickAccount()
+	account := s.pickAccount(ctx)
 	if account.Key == "" {
 		details := apierr.Details{Status: http.StatusServiceUnavailable, Type: "configuration_error", Code: "no_account", Message: errNoAccount.Error()}
 		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account, Fatal: true}
@@ -1024,6 +1044,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		}
 		if response.StatusCode == http.StatusOK && hasChoices(parsed) {
 			s.noteAccountStatus(account, http.StatusOK)
+			s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
 			return StreamAttemptResult{
 				Status:  response.StatusCode,
 				Header:  response.Header.Clone(),
@@ -1040,6 +1061,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 			details = apierr.Details{Status: http.StatusBadGateway, Type: "upstream_error", Message: message}
 		}
 		s.noteAccountStatus(account, details.Status)
+		s.observeStick(ctx, account, attempt.Upstream, details.Status)
 		return StreamAttemptResult{
 			Status:  details.Status,
 			Header:  response.Header.Clone(),
@@ -1067,6 +1089,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		// The transport answered 200 before the error arrived, but the
 		// account-level verdict is the same one the non-SSE branch records.
 		s.noteAccountStatus(account, details.Status)
+		s.observeStick(ctx, account, attempt.Upstream, details.Status)
 		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account}
 	}
 	// The response is committed from here on; switch the guard to the silence
@@ -1074,6 +1097,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 	guard.Commit()
 	handedOff = true
 	s.noteAccountStatus(account, http.StatusOK)
+	s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
 	return StreamAttemptResult{
 		SSE:        true,
 		Status:     http.StatusOK,
