@@ -277,9 +277,12 @@ const DefaultCompactionRecentTokens = 16000
 const DefaultCompactionReasoningEffort = "max"
 
 // DefaultCompactionMinOutputTokens gives a compaction summary enough room to
-// finish after the model's hidden thinking (a 92k-token history ran to ~5.5k
-// output tokens in practice).
-const DefaultCompactionMinOutputTokens = 8192
+// finish after the model's hidden thinking. Hidden reasoning is charged to the
+// same budget, and summaries routinely run to 5-6k visible tokens, so 8192
+// still left the first pass truncating often enough to pay for a retry; the
+// floor is two steps of 8192 instead, which lets the escalation double once
+// more into the 32768 ceiling.
+const DefaultCompactionMinOutputTokens = 16384
 
 func EmptyMetadata() Metadata {
 	return Metadata{

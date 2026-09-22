@@ -35,6 +35,10 @@ const (
 	// maxCompactionRecentTotalRunes caps the whole verbatim tail so the
 	// envelope stays small enough to send back on every request.
 	maxCompactionRecentTotalRunes = 32000
+	// compactionEscalatedFloorTokens is what a retry starts from before the
+	// doubling below; the ceiling keeps one retry inside the model's window.
+	compactionEscalatedFloorTokens   = 16384
+	compactionEscalatedCeilingTokens = 32768
 )
 
 // compactionSections are the anchored headings compaction summaries must
@@ -290,12 +294,14 @@ func EscalateCompactionBudget(body map[string]any, efforts []string) {
 		value, _ := typed.Int64()
 		tokens = int(value)
 	}
-	if tokens < 8192 {
-		tokens = 8192
+	// The retry is the last pass before degradation, so it starts from the same
+	// two-step floor the first pass uses and doubles onto the ceiling.
+	if tokens < compactionEscalatedFloorTokens {
+		tokens = compactionEscalatedFloorTokens
 	}
 	tokens *= 2
-	if tokens > 32768 {
-		tokens = 32768
+	if tokens > compactionEscalatedCeilingTokens {
+		tokens = compactionEscalatedCeilingTokens
 	}
 	body["max_tokens"] = tokens
 }

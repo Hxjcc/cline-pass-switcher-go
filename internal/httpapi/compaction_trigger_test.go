@@ -202,6 +202,9 @@ func TestResponsesCompactionTriggerEscalatesWhenSummaryStarves(t *testing.T) {
 	if retry <= first {
 		t.Fatalf("retry should get a bigger budget: %v -> %v", first, retry)
 	}
+	if retry < 32768 {
+		t.Fatalf("the single retry is the last pass before degrading and should reach the ceiling: %v", retry)
+	}
 	history := st.Metadata().History
 	if len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) < 2 {
 		t.Fatalf("both passes belong to one successful history entry: %#v", history)
