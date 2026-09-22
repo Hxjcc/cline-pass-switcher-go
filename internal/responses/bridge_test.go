@@ -1510,6 +1510,57 @@ func TestCompactionTriggerResponseHoldsOneCompactionItem(t *testing.T) {
 	}
 }
 
+func TestCompactionInstructionsAnchorTheFourSections(t *testing.T) {
+	for _, heading := range []string{"## Objective", "## Work State", "## Next Move", "## Relevant Files"} {
+		if !strings.Contains(compactionInstructions, heading) {
+			t.Fatalf("compaction template lost %q:\n%s", heading, compactionInstructions)
+		}
+	}
+}
+
+func TestDegradedCompactionKeepsShapeAndRecentRequests(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "old request"}}},
+			map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "working on it"}}},
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "finish internal/parse.go\nand rerun the tests"}}},
+			map[string]any{"type": "compaction_trigger"},
+		},
+	}
+	_, context, err := ToCompactionChatWithOptions(body, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := DegradedCompactionTriggerResponse(context, "upstream 503: gateway unavailable")
+	output := jsonx.Slice(response["output"])
+	if response["object"] != "response" || len(output) != 1 {
+		t.Fatalf("degraded v2 reply must stay one normal response with one item: %#v", response)
+	}
+	summary, ok := compactionSummaryFromEnvelope(jsonx.String(jsonx.Map(output[0])["encrypted_content"]))
+	if !ok {
+		t.Fatal("degraded item must still use the ocx1 envelope")
+	}
+	for _, expected := range []string{
+		"compaction degraded",
+		"gateway unavailable",
+		"## Objective",
+		"## Work State",
+		"## Next Move",
+		"## Relevant Files",
+		"finish internal/parse.go and rerun the tests",
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("degraded summary is missing %q:\n%s", expected, summary)
+		}
+	}
+	// The degraded path must not keep the assistant turn: only user requests
+	// survive verbatim.
+	if strings.Contains(summary, "working on it") {
+		t.Fatalf("degraded summary should only preserve user requests:\n%s", summary)
+	}
+}
+
 func TestToCompactionChatUsesHighReasoningEffort(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/test",

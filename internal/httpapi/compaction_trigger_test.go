@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -204,6 +205,99 @@ func TestResponsesCompactionTriggerEscalatesWhenSummaryStarves(t *testing.T) {
 	if len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) < 2 {
 		t.Fatalf("both passes belong to one successful history entry: %#v", history)
 	}
+}
+
+// When even the escalated pass fails, the client still receives a valid
+// compaction item so the session can continue instead of stranding it above
+// its context limit.
+func TestResponsesCompactionTriggerDegradesWhenSummaryKeepsFailing(t *testing.T) {
+	recorder := &upstreamRecorder{}
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		recorder.add(payload)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(writer, `{"error":"empty response content","success":false}`)
+	}))
+	defer upstreamServer.Close()
+
+	server, st := configureCompactionServer(t, upstreamServer.URL)
+	body := `{"model":"cline-pass/test","stream":true,"reasoning":{"effort":"max"},"input":[
+	  {"type":"message","role":"user","content":[{"type":"input_text","text":"finish the parser fix in internal/parse.go"}]},
+	  {"type":"compaction_trigger"}]}`
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "event: response.completed") {
+		t.Fatalf("degraded compaction should still complete: %d %s", response.Code, response.Body.String())
+	}
+	summary := decodeCompactionEnvelope(t, extractCompactionEnvelope(t, response.Body.String()))
+	for _, expected := range []string{"compaction degraded", "## Objective", "## Work State", "## Next Move", "## Relevant Files", "parser fix"} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("degraded summary is missing %q:\n%s", expected, summary)
+		}
+	}
+	if calls := len(recorder.all()); calls != 2 {
+		t.Fatalf("starvation should escalate once before degrading, got %d calls", calls)
+	}
+	history := st.Metadata().History
+	if len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) != 2 {
+		t.Fatalf("degraded compaction should be one successful entry with both passes traced: %#v", history)
+	}
+}
+
+// A failure that another pass cannot fix (gateway 503) degrades immediately
+// instead of burning a second expensive call.
+func TestResponsesCompactionDegradesWithoutEscalatingOnGatewayFailure(t *testing.T) {
+	recorder := &upstreamRecorder{}
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		recorder.add(payload)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(writer, `{"error":{"message":"gateway unavailable","type":"server_error"}}`)
+	}))
+	defer upstreamServer.Close()
+
+	server, _ := configureCompactionServer(t, upstreamServer.URL)
+	body := `{"model":"cline-pass/test","input":[{"type":"compaction_trigger"}]}`
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("degraded compaction should succeed: %d %s", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	output, _ := payload["output"].([]any)
+	item, _ := output[0].(map[string]any)
+	summary := decodeCompactionEnvelope(t, item["encrypted_content"].(string))
+	if !strings.Contains(summary, "gateway unavailable") {
+		t.Fatalf("degraded summary should carry the failure reason: %s", summary)
+	}
+	if calls := len(recorder.all()); calls != 1 {
+		t.Fatalf("a gateway failure should not escalate, got %d calls", calls)
+	}
+}
+
+func decodeCompactionEnvelope(t *testing.T, envelope string) string {
+	t.Helper()
+	encoded, found := strings.CutPrefix(envelope, "ocx1:")
+	if !found {
+		t.Fatalf("not a compaction envelope: %q", envelope)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(decoded)
 }
 
 // The compaction item the proxy returns must be usable in the next request:

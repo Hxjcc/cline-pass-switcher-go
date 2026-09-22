@@ -171,7 +171,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	stream, _ := body["stream"].(bool)
 	started := time.Now()
 	result, compaction, err := s.runCompactionChain(
-		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionResponse,
+		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionResponse, responsesbridge.DegradedCompactionResponse,
 	)
 	if result.Status != http.StatusOK || result.Out == nil {
 		message := chainErrorMessage(result)
@@ -265,10 +265,17 @@ func ensureCompactionBudget(chatBody map[string]any) {
 // remote compaction v2 reply.
 type compactionConvert func(chat map[string]any, context *responsesbridge.Context) (map[string]any, error)
 
+// compactionDegrade builds the fallback payload used when no summary can be
+// produced at all: the client still gets a compaction item and can continue,
+// at the cost of the older context.
+type compactionDegrade func(context *responsesbridge.Context, reason string) map[string]any
+
 // runCompactionChain runs the summarization chain and, when the model starved
 // on hidden reasoning instead of writing the summary, retries once with the
 // model's top reasoning level and a doubled output budget. Both passes stay in
-// the trace so the history shows what actually happened.
+// the trace so the history shows what actually happened. When every pass fails
+// the caller receives a degraded compaction item instead of an error, so a
+// compaction turn never strands the client above its context limit.
 func (s *Server) runCompactionChain(
 	ctx context.Context,
 	modelID string,
@@ -276,22 +283,50 @@ func (s *Server) runCompactionChain(
 	modelConfig model.PerModelConfig,
 	bridgeContext *responsesbridge.Context,
 	convert compactionConvert,
+	degrade compactionDegrade,
 ) (chainResult, map[string]any, error) {
 	result := s.runNonStreamChain(ctx, modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
 	compaction, err := convertCompaction(result, bridgeContext, convert)
-	if !compactionStarved(result, err) {
-		return result, compaction, err
+	if err == nil {
+		return result, compaction, nil
 	}
-	retryBody := model.Clone(chatBody)
-	responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
-	bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
-	if effort := effortFromChatBody(retryBody); effort != "" {
-		bridgeContext.MappedReasoningEffort = effort
+	// Only reasoning starvation is worth a second, more expensive pass: other
+	// failures already walked the account and channel failover.
+	if compactionStarved(result, err) && ctx.Err() == nil {
+		retryBody := model.Clone(chatBody)
+		responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
+		bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
+		if effort := effortFromChatBody(retryBody); effort != "" {
+			bridgeContext.MappedReasoningEffort = effort
+		}
+		escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
+		escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
+		compaction, err = convertCompaction(escalated, bridgeContext, convert)
+		if err == nil {
+			return escalated, compaction, nil
+		}
+		result = escalated
 	}
-	escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
-	escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
-	compaction, err = convertCompaction(escalated, bridgeContext, convert)
-	return escalated, compaction, err
+	if degrade == nil || ctx.Err() != nil {
+		return result, nil, err
+	}
+	degraded := degrade(bridgeContext, compactionFailureReason(result, err))
+	result.Status = http.StatusOK
+	result.Out = map[string]any{}
+	result.NetErr = ""
+	return result, degraded, nil
+}
+
+// compactionFailureReason is the short explanation embedded in a degraded
+// compaction item.
+func compactionFailureReason(result chainResult, err error) string {
+	if message := chainErrorMessage(result); message != "" && message != "upstream error" {
+		return message
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "upstream returned no summary"
 }
 
 func convertCompaction(result chainResult, bridgeContext *responsesbridge.Context, convert compactionConvert) (map[string]any, error) {
@@ -361,7 +396,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	stream, _ := body["stream"].(bool)
 	started := time.Now()
 	result, compaction, err := s.runCompactionChain(
-		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionTriggerResponse,
+		request.Context(), modelID, chatBody, modelConfig, bridgeContext, responsesbridge.CompactionTriggerResponse, responsesbridge.DegradedCompactionTriggerResponse,
 	)
 	if result.Status != http.StatusOK || result.Out == nil {
 		message := chainErrorMessage(result)
