@@ -71,6 +71,10 @@ type Context struct {
 	toolNames          map[string]struct{}
 	compactionUsers    []any
 	outputSchema       *jsonschema.Schema
+	// InputTokenCap is the model's context window. Reported input tokens are
+	// clamped to it so a summed upstream usage cannot look larger than the
+	// window. Zero leaves the number uncapped.
+	InputTokenCap int64
 }
 
 func boolValue(value any, fallback bool) bool {
@@ -1922,21 +1926,94 @@ func textFromParts(content any) string {
 }
 
 func usageToResponses(value any) any {
+	return reportedUsage(value, 1, 0)
+}
+
+// reportedUsage is the usage object Codex uses to decide whether the context
+// window is full. Each gateway server tool (a search, for example) runs its own
+// internal leg and adds that leg's prompt tokens onto the final usage, so the
+// client-visible input is the reported sum divided by the number of legs.
+// Output tokens stay as reported: they are not what trips compaction. History
+// keeps the raw sum, because that is what the gateway bills.
+func reportedUsage(value any, legs int, inputCap int64) any {
 	usage := jsonx.Map(value)
 	if usage == nil {
 		return nil
 	}
-	input := intValue(usage["prompt_tokens"])
+	if legs < 1 {
+		legs = 1
+	}
+	input := intValue(usage["prompt_tokens"]) / int64(legs)
 	output := intValue(usage["completion_tokens"])
 	promptDetails := jsonx.Map(usage["prompt_tokens_details"])
 	completionDetails := jsonx.Map(usage["completion_tokens_details"])
+	cached := intValue(promptDetails["cached_tokens"]) / int64(legs)
+	if inputCap > 0 && input > inputCap {
+		input = inputCap
+	}
+	if cached > input {
+		cached = input
+	}
 	return map[string]any{
 		"input_tokens":          input,
-		"input_tokens_details":  map[string]any{"cached_tokens": intValue(promptDetails["cached_tokens"])},
+		"input_tokens_details":  map[string]any{"cached_tokens": cached},
 		"output_tokens":         output,
 		"output_tokens_details": map[string]any{"reasoning_tokens": intValue(completionDetails["reasoning_tokens"])},
-		"total_tokens":          intValueWithFallback(usage["total_tokens"], input+output),
+		"total_tokens":          input + output,
 	}
+}
+
+// gatewayToolCallCounts reads provider_metadata.gateway.gatewayToolCalls.
+// The gateway reports a count per server tool it ran inside its own loop, as
+// {"exa_search": 2}. Each of those calls is an extra model leg whose prompt
+// tokens are included in the same usage object, so the client-visible input has
+// to be divided by calls+1. Counts are cumulative, so per-tool maxima are what
+// merge across chunks. An array is counted by length and a bare number as
+// itself, so a payload change cannot silently zero the count.
+func gatewayToolCallCounts(root map[string]any) (map[string]int, int) {
+	byName := map[string]int{}
+	loose := 0
+	merge := func(metadata map[string]any) {
+		names, plain := toolCallsInMetadata(metadata)
+		for name, count := range names {
+			byName[name] = max(byName[name], count)
+		}
+		loose = max(loose, plain)
+	}
+	merge(jsonx.Map(root["provider_metadata"]))
+	for _, raw := range jsonx.Slice(root["choices"]) {
+		choice := jsonx.Map(raw)
+		merge(jsonx.Map(choice["provider_metadata"]))
+		merge(jsonx.Map(jsonx.Map(choice["delta"])["provider_metadata"]))
+		merge(jsonx.Map(jsonx.Map(choice["message"])["provider_metadata"]))
+	}
+	return byName, loose
+}
+
+// toolCallsInMetadata splits one metadata payload into per-tool counts and a
+// count the gateway reported without tool names.
+func toolCallsInMetadata(metadata map[string]any) (map[string]int, int) {
+	gateway := jsonx.Map(metadata["gateway"])
+	if gateway == nil {
+		return nil, 0
+	}
+	calls := gateway["gatewayToolCalls"]
+	if named := jsonx.Map(calls); named != nil {
+		counts := make(map[string]int, len(named))
+		for name, raw := range named {
+			if count := int(intValue(raw)); count > 0 {
+				counts[name] = count
+			}
+		}
+		return counts, 0
+	}
+	if slice := jsonx.Slice(calls); slice != nil {
+		return nil, len(slice)
+	}
+	if count := int(intValue(calls)); count > 0 {
+		return nil, count
+	}
+	return nil, 0
 }
 
 func intValue(value any) int64 {
@@ -2089,6 +2166,9 @@ func EventsFromChat(chat map[string]any, context *Context) ([]Event, error) {
 			"delta":         deltaFromChatMessage(jsonx.Map(choice["message"])),
 			"finish_reason": choice["finish_reason"],
 		}},
+	}
+	if message := jsonx.Map(choice["message"]); message["provider_metadata"] != nil {
+		chunk["provider_metadata"] = message["provider_metadata"]
 	}
 	state := NewStreamState(context)
 	events := state.HandleChunk(chunk)

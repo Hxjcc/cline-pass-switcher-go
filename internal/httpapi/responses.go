@@ -47,6 +47,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
+	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	stream, _ := body["stream"].(bool)
 	if stream {
 		s.handleStreamingResponses(writer, request, body, chatBody, bridgeContext, modelID, modelConfig)
@@ -152,6 +153,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
+	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	// Compaction needs the complete summary before it can be wrapped into one
 	// opaque output item, so the upstream call is always buffered.
 	// Reasoning models can spend the entire output budget on hidden thinking

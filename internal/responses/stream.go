@@ -158,6 +158,12 @@ type StreamState struct {
 	tools             map[int]*toolState
 	lastToolIndex     int
 	droppedTools      int
+	// rawUsage is the upstream usage object. The gateway tool counters are the
+	// legs it ran inside its own loop; the client-facing usage divides the
+	// summed prompt by those legs plus the final answer.
+	rawUsage          any
+	gatewayToolCalls  map[string]int
+	gatewayLooseCalls int
 }
 
 func NewStreamState(context *Context) *StreamState {
@@ -723,9 +729,19 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 			state.identityLocked = true
 		}
 	}
-	if chunk["usage"] != nil {
-		state.usage = usageToResponses(chunk["usage"])
+	if names, loose := gatewayToolCallCounts(chunk); len(names) > 0 || loose > 0 {
+		if state.gatewayToolCalls == nil {
+			state.gatewayToolCalls = map[string]int{}
+		}
+		for name, count := range names {
+			state.gatewayToolCalls[name] = max(state.gatewayToolCalls[name], count)
+		}
+		state.gatewayLooseCalls = max(state.gatewayLooseCalls, loose)
 	}
+	if chunk["usage"] != nil {
+		state.rawUsage = chunk["usage"]
+	}
+	state.usage = reportedUsage(state.rawUsage, state.usageLegs(), state.context.InputTokenCap)
 	choices := jsonx.Slice(chunk["choices"])
 	if len(choices) == 0 {
 		return nil
@@ -886,7 +902,16 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 	}
 }
 
+func (state *StreamState) usageLegs() int {
+	legs := 1 + state.gatewayLooseCalls
+	for _, count := range state.gatewayToolCalls {
+		legs += count
+	}
+	return legs
+}
+
 func (state *StreamState) finish(events []Event, status, incompleteReason string) []Event {
+	state.usage = reportedUsage(state.rawUsage, state.usageLegs(), state.context.InputTokenCap)
 	if status == "completed" {
 		if err := state.validateStructuredOutput(); err != nil {
 			return append(events, state.Fail(err.Error(), "upstream_schema_validation_failed")...)
