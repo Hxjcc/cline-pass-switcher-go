@@ -31,6 +31,12 @@ const (
 	// while looking for an account that still has quota. Chat attempts stay
 	// on the tighter cap above.
 	quotaRouteScanLimit = 8
+	// quotaSelectionBudget bounds the total time one selection may spend
+	// reading plan snapshots. Without it a hanging quota endpoint would cost
+	// one timeout per candidate account before the model call even starts. An
+	// exhausted budget only stops further probes: selection still returns an
+	// account, because a plan read may never block forwarding.
+	quotaSelectionBudget = 6 * time.Second
 )
 
 type accountHealth struct {
@@ -124,10 +130,19 @@ func (s *Service) usableAccounts() []model.Account {
 // resets. A single account, a failed probe, or a pool where every account is
 // full still returns an account so the request can proceed.
 func (s *Service) pickAccount(ctx context.Context) model.Account {
-	if account, ok := s.preferredAccount(ctx); ok {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	budget := s.quotaBudget
+	if budget <= 0 {
+		budget = quotaSelectionBudget
+	}
+	budgetCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if account, ok := s.preferredAccount(budgetCtx); ok {
 		return account
 	}
-	return s.pickOpenAccount(ctx)
+	return s.pickOpenAccount(budgetCtx)
 }
 
 // preferredAccount returns the conversation's sticky account when it can still

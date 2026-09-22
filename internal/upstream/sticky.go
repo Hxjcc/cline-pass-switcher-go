@@ -10,7 +10,13 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 )
 
-const sessionStickTTL = 30 * time.Minute
+const (
+	sessionStickTTL = 30 * time.Minute
+	// stickSweepInterval bounds how often expired conversations are dropped.
+	// Without a sweep an entry only disappears when that same session comes
+	// back, so threads the user abandoned stay in memory forever.
+	stickSweepInterval = 5 * time.Minute
+)
 
 // sessionStick is the account and pinned channel that last completed a
 // conversation. It lives in memory: losing it only makes the next turn cold.
@@ -84,16 +90,32 @@ func (s *Service) rememberStick(session string, account model.Account, upstream 
 	if session == "" || account.ID == "" || account.Key == "" {
 		return
 	}
+	now := time.Now()
 	s.stickMu.Lock()
 	defer s.stickMu.Unlock()
 	if s.sticks == nil {
 		s.sticks = map[string]sessionStick{}
 	}
+	s.sweepSticksLocked(now)
 	s.sticks[session] = sessionStick{
 		accountID: account.ID,
 		upstream:  upstream,
 		keyHash:   accountKeyHash(account.Key),
-		until:     time.Now().Add(sessionStickTTL),
+		until:     now.Add(sessionStickTTL),
+	}
+}
+
+// sweepSticksLocked drops conversations whose time to live elapsed. The
+// interval keeps a busy service from walking the map on every response.
+func (s *Service) sweepSticksLocked(now time.Time) {
+	if !s.stickSweepAt.IsZero() && now.Sub(s.stickSweepAt) < stickSweepInterval {
+		return
+	}
+	s.stickSweepAt = now
+	for session, stick := range s.sticks {
+		if !now.Before(stick.until) {
+			delete(s.sticks, session)
+		}
 	}
 }
 

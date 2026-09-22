@@ -113,3 +113,46 @@ func TestStickyAccountIsSkippedWhenItsQuotaIsFull(t *testing.T) {
 		t.Fatalf("a full sticky account should yield to the spare, got %#v", picked)
 	}
 }
+
+// A conversation the user abandoned never comes back, so its entry has to be
+// swept: the lookup that deletes it only runs for sessions that return.
+func TestStickSweepDropsAbandonedConversations(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpdateConfig(func(cfg *model.Config) {
+		cfg.Accounts = []model.Account{{Name: "main", Key: "key-a", Enabled: true}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(st)
+	account := st.Config().Accounts[0]
+	entry := func(until time.Time) sessionStick {
+		return sessionStick{accountID: account.ID, upstream: "glm", keyHash: accountKeyHash(account.Key), until: until}
+	}
+	service.sticks = map[string]sessionStick{
+		"cache\nmodel\nabandoned": entry(time.Now().Add(-time.Minute)),
+		"cache\nmodel\nlive":      entry(time.Now().Add(time.Minute)),
+	}
+
+	service.rememberStick("cache\nmodel\nfresh", account, "glm")
+	if _, found := service.sticks["cache\nmodel\nabandoned"]; found {
+		t.Fatal("an expired conversation should be swept away")
+	}
+	if _, found := service.sticks["cache\nmodel\nlive"]; !found {
+		t.Fatal("a live conversation must survive the sweep")
+	}
+	if _, found := service.sticks["cache\nmodel\nfresh"]; !found {
+		t.Fatal("the recorded conversation must be stored")
+	}
+
+	// The interval keeps a busy service from walking the map on every response.
+	service.stickSweepAt = time.Now()
+	service.sticks["cache\nmodel\nlate"] = entry(time.Now().Add(-time.Second))
+	service.rememberStick("cache\nmodel\nsecond", account, "glm")
+	if _, found := service.sticks["cache\nmodel\nlate"]; !found {
+		t.Fatal("the sweep should be throttled between intervals")
+	}
+}

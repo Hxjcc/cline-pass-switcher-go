@@ -51,10 +51,15 @@ type Service struct {
 	quotaState  map[string]quotaState
 	quotaHold   map[string]quotaHold
 	quotaFlight map[string]*quotaFlight
+	// quotaBudget overrides quotaSelectionBudget for one service. Zero keeps
+	// the production budget; tests shorten it.
+	quotaBudget time.Duration
 
 	// sticks remembers which account and pinned channel last served a conversation.
 	stickMu sync.Mutex
 	sticks  map[string]sessionStick
+	// stickSweepAt throttles the expired-stick sweep. Guarded by stickMu.
+	stickSweepAt time.Time
 }
 
 type ProbeResult struct {

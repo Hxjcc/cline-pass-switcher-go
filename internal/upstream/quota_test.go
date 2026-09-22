@@ -307,3 +307,39 @@ func TestProbeQuotaFailsClosedWithoutAccount(t *testing.T) {
 		t.Fatalf("missing account should be reported: %#v", quota)
 	}
 }
+
+// A plan endpoint that never answers must not hold selection for one timeout
+// per candidate account: the selection budget caps the whole probe phase, and
+// the request still gets an account.
+func TestPickAccountBoundsQuotaProbes(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		select {
+		case <-request.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+	}))
+	defer upstreamServer.Close()
+
+	st := newQuotaTestStore(t, upstreamServer.URL)
+	if err := st.UpdateConfig(func(cfg *model.Config) {
+		cfg.Accounts = []model.Account{
+			{Name: "a", Key: "key-a", Enabled: true},
+			{Name: "b", Key: "key-b", Enabled: true},
+			{Name: "c", Key: "key-c", Enabled: true},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := New(st)
+	service.quotaBudget = 300 * time.Millisecond
+
+	started := time.Now()
+	account := service.pickAccount(t.Context())
+	elapsed := time.Since(started)
+	if account.Key == "" {
+		t.Fatal("selection must still return an account when the plan reads hang")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("selection waited %s on hanging plan reads", elapsed)
+	}
+}
