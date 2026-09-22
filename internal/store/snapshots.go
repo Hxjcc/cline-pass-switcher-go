@@ -105,6 +105,14 @@ func (s *Store) ShellCompatEnforce() bool {
 	return s.config.ShellCompatEnforce
 }
 
+// CompactionRecentTokens is the verbatim tail budget embedded in compaction
+// items. Zero disables the tail.
+func (s *Store) CompactionRecentTokens() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.CompactionRecentTokens
+}
+
 func (s *Store) UpstreamBase() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

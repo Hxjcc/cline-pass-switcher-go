@@ -59,6 +59,9 @@ type Context struct {
 	// Empty keeps the capability off.
 	webSearchTool string
 	webFetchTool  string
+	// compactionRecent is the verbatim tail embedded in compaction items; it
+	// survives the summary so exact paths, commands and errors are not lost.
+	compactionRecent []CompactionRecentMessage
 	// shellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value and marks the parameter required. Empty keeps
 	// the client's own schema untouched.
@@ -1022,6 +1025,9 @@ type Options struct {
 	// (vercel:browserbase_fetch). It is only declared when the request carries a
 	// link in user-authored text.
 	WebFetchUpstream string
+	// RecentCompactionTokens is the verbatim tail (estimated tokens) kept inside
+	// compaction items. Zero disables it: the item then carries the summary only.
+	RecentCompactionTokens int
 	// ShellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value (for example "powershell") and marks it
 	// required, so Windows clients stop falling back to cmd.exe when a model
@@ -1131,22 +1137,59 @@ func CompactionEvents(compaction map[string]any, context *Context) []Event {
 }
 
 // CompactionEnvelope wraps a readable summary in the same opaque envelope shape
-// used by Codex-compatible third-party compaction implementations.
+// used by Codex-compatible third-party compaction implementations. Envelopes
+// with a verbatim tail (or a degraded marker) use the structured v2 encoding.
 func CompactionEnvelope(summary string) string {
-	return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(summary))
+	return encodeCompactionPayload(CompactionPayload{Summary: summary})
 }
 
-func compactionSummaryFromEnvelope(value string) (string, bool) {
+func encodeCompactionPayload(payload CompactionPayload) string {
+	if len(payload.Recent) == 0 && !payload.Degraded {
+		// Keep the historical shape for plain summaries: other tooling that
+		// decodes the envelope as base64 text keeps working.
+		return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(payload.Summary))
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(payload.Summary))
+	}
+	return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString(raw)
+}
+
+// compactionPayloadFromEnvelope accepts both encodings: the structured v2 JSON
+// and the historical plain-text summary.
+func compactionPayloadFromEnvelope(value string) (CompactionPayload, bool) {
 	encoded, found := strings.CutPrefix(value, compactionEnvelopePrefix)
 	if !found {
-		return "", false
+		return CompactionPayload{}, false
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", false
+		return CompactionPayload{}, false
 	}
-	summary := strings.TrimSpace(string(raw))
-	return summary, summary != ""
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, "{") {
+		var payload CompactionPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return CompactionPayload{}, false
+		}
+		if payload.Summary == "" && len(payload.Recent) == 0 {
+			return CompactionPayload{}, false
+		}
+		return payload, true
+	}
+	return CompactionPayload{Summary: trimmed}, trimmed != ""
+}
+
+func compactionSummaryFromEnvelope(value string) (string, bool) {
+	payload, ok := compactionPayloadFromEnvelope(value)
+	return payload.Summary, ok
+}
+
+// DecodeCompactionEnvelope reads a compaction envelope produced by this proxy
+// (or by an older build that stored the summary as plain text).
+func DecodeCompactionEnvelope(value string) (CompactionPayload, bool) {
+	return compactionPayloadFromEnvelope(value)
 }
 
 func responseOutputText(response map[string]any) string {
@@ -1313,7 +1356,7 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 	output = append(output, map[string]any{
 		"id":                newID("cmp"),
 		"type":              "compaction",
-		"encrypted_content": CompactionEnvelope(summary),
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
 	})
 	return map[string]any{
 		"id": response["id"], "object": "response.compaction", "created_at": response["created_at"],
@@ -1351,7 +1394,7 @@ func CompactionTriggerResponse(chat map[string]any, context *Context) (map[strin
 	item := map[string]any{
 		"id":                newID("cmp"),
 		"type":              "compaction",
-		"encrypted_content": CompactionEnvelope(summary),
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
 	}
 	return context.responseBase(
 		jsonx.String(response["id"]), intValue(response["created_at"]), context.Model, "completed",
@@ -1529,6 +1572,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	pendingToolCalls := make([]any, 0)
 	pendingReasoning := ""
 	compactionSummaries := make([]string, 0, 1)
+	compactionRecent := make([]CompactionRecentMessage, 0, 4)
 	lastAssistantIndex := -1
 	appendReasoning := func(value string) {
 		if strings.TrimSpace(value) == "" {
@@ -1763,8 +1807,16 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			delete(unanswered, strings.TrimSpace(callID))
 			flushAfterToolGroup()
 		case "compaction":
-			if summary, ok := compactionSummaryFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
-				compactionSummaries = append(compactionSummaries, summary)
+			if payload, ok := compactionPayloadFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
+				compactionSummaries = append(compactionSummaries, payload.Summary)
+				for _, message := range payload.Recent {
+					role := strings.TrimSpace(message.Role)
+					text := strings.TrimSpace(message.Text)
+					if (role != "user" && role != "assistant") || text == "" {
+						continue
+					}
+					compactionRecent = append(compactionRecent, CompactionRecentMessage{Role: role, Text: text})
+				}
 			} else {
 				compactionSummaries = append(compactionSummaries, "Earlier conversation was compacted, but its details are not readable by this provider.")
 			}
@@ -1796,6 +1848,13 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		prefixMessages = append(prefixMessages, map[string]any{
 			"role":    "system",
 			"content": "Earlier conversation was compacted. Summary:\n" + strings.Join(compactionSummaries, "\n\n"),
+		})
+	}
+	// Replay the verbatim tail right after the summary so the next model sees
+	// the exact recent turns before the new user message.
+	for _, message := range compactionRecent {
+		prefixMessages = append(prefixMessages, map[string]any{
+			"role": message.Role, "content": message.Text,
 		})
 	}
 	messages = append(prefixMessages, messages...)

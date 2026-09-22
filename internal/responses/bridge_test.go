@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -1515,6 +1516,86 @@ func TestCompactionInstructionsAnchorTheFourSections(t *testing.T) {
 		if !strings.Contains(compactionInstructions, heading) {
 			t.Fatalf("compaction template lost %q:\n%s", heading, compactionInstructions)
 		}
+	}
+}
+
+func TestCompactionEnvelopeKeepsRecentAndReadsLegacyText(t *testing.T) {
+	legacy := "ocx1:" + base64.StdEncoding.EncodeToString([]byte("plain summary"))
+	payload, ok := DecodeCompactionEnvelope(legacy)
+	if !ok || payload.Summary != "plain summary" || len(payload.Recent) != 0 {
+		t.Fatalf("legacy envelope must keep decoding as a plain summary: %#v", payload)
+	}
+
+	encoded := encodeCompactionPayload(CompactionPayload{
+		Summary: "## Objective\nfix the parser",
+		Recent: []CompactionRecentMessage{
+			{Role: "user", Text: "first request"},
+			{Role: "assistant", Text: "first answer"},
+		},
+	})
+	if !strings.HasPrefix(encoded, "ocx1:") {
+		t.Fatalf("envelope prefix changed: %q", encoded)
+	}
+	payload, ok = DecodeCompactionEnvelope(encoded)
+	if !ok || payload.Summary != "## Objective\nfix the parser" || len(payload.Recent) != 2 || payload.Recent[1].Text != "first answer" {
+		t.Fatalf("structured envelope did not round-trip: %#v", payload)
+	}
+}
+
+func TestCompactionTailHonoursBudgetAndTurnBoundary(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "content": "old question"},
+		map[string]any{"role": "assistant", "content": "old answer"},
+		map[string]any{"role": "tool", "tool_call_id": "call_1", "content": strings.Repeat("x", 4000)},
+		map[string]any{"role": "user", "content": "recent question"},
+		map[string]any{"role": "assistant", "content": "recent answer"},
+	}
+	tail := selectCompactionTail(messages, 8)
+	if len(tail) == 0 || tail[0].Role != "user" {
+		t.Fatalf("a tail must start at a user turn: %#v", tail)
+	}
+	raw, err := json.Marshal(tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "old answer") || strings.Contains(string(raw), "xxxx") {
+		t.Fatalf("tail ignored its budget or kept tool output: %s", raw)
+	}
+	full := selectCompactionTail(messages, 8000)
+	if len(full) != 4 {
+		t.Fatalf("a generous budget should keep every user/assistant message: %#v", full)
+	}
+	if got := selectCompactionTail(messages, 0); got != nil {
+		t.Fatalf("zero disables the verbatim tail: %#v", got)
+	}
+}
+
+func TestCompactionChatSummarizesOnlyTheOlderPart(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "OLD-HISTORY-MARKER"}}},
+			map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "ack"}}},
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "RECENT-MARKER"}}},
+			map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "done"}}},
+		},
+	}
+	chat, context, err := ToCompactionChatWithOptions(body, Options{RecentCompactionTokens: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(chat["messages"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "OLD-HISTORY-MARKER") {
+		t.Fatalf("older history must still reach the summarizer: %s", raw)
+	}
+	if strings.Contains(string(raw), "RECENT-MARKER") {
+		t.Fatalf("the verbatim tail must not be summarized again: %s", raw)
+	}
+	if len(context.compactionRecent) == 0 || context.compactionRecent[0].Role != "user" || context.compactionRecent[0].Text != "RECENT-MARKER" {
+		t.Fatalf("verbatim tail was not captured: %#v", context.compactionRecent)
 	}
 }
 

@@ -89,6 +89,11 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.ShellCompatEnforce = enforce
 		}
 	}
+	if rawTokenBudget := strings.TrimSpace(os.Getenv("COMPACTION_RECENT_TOKENS")); rawTokenBudget != "" {
+		if tokens, err := strconv.Atoi(rawTokenBudget); err == nil && tokens >= 0 {
+			cfg.CompactionRecentTokens = tokens
+		}
+	}
 }
 
 func NormalizeConfig(cfg *Config) {
@@ -102,6 +107,12 @@ func NormalizeConfig(cfg *Config) {
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
 	cfg.ShellCompat = strings.TrimSpace(cfg.ShellCompat)
+	if cfg.CompactionRecentTokens < 0 {
+		cfg.CompactionRecentTokens = 0
+	}
+	if cfg.CompactionRecentTokens > 64000 {
+		cfg.CompactionRecentTokens = 64000
+	}
 
 	// The top-level apiKey is a legacy field. It is folded into the account
 	// pool exactly once and then dropped, so it can never come back as a

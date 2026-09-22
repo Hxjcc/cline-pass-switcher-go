@@ -41,14 +41,15 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:    responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:   s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:       responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory:  s.store.StrictToolHistory(),
-		WebSearchUpstream:  s.store.WebSearchUpstream(),
-		WebFetchUpstream:   s.store.WebFetchUpstream(),
-		ShellCompat:        s.store.ShellCompat(),
-		ShellCompatEnforce: s.store.ShellCompatEnforce(),
+		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:      s.store.StrictToolHistory(),
+		WebSearchUpstream:      s.store.WebSearchUpstream(),
+		WebFetchUpstream:       s.store.WebFetchUpstream(),
+		ShellCompat:            s.store.ShellCompat(),
+		ShellCompatEnforce:     s.store.ShellCompatEnforce(),
+		RecentCompactionTokens: s.store.CompactionRecentTokens(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -149,12 +150,13 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:   responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:  s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:      responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory: s.store.StrictToolHistory(),
-		WebSearchUpstream: s.store.WebSearchUpstream(),
-		WebFetchUpstream:  s.store.WebFetchUpstream(),
+		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:      s.store.StrictToolHistory(),
+		WebSearchUpstream:      s.store.WebSearchUpstream(),
+		WebFetchUpstream:       s.store.WebFetchUpstream(),
+		RecentCompactionTokens: s.store.CompactionRecentTokens(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)
@@ -374,14 +376,15 @@ func writeCompactFailure(writer http.ResponseWriter, modelID string, details map
 func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, request *http.Request, body map[string]any) {
 	requestedModel, _ := body["model"].(string)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
-		ReplayReasoning:    responsesbridge.ShouldReplayReasoning(requestedModel),
-		ReasoningEfforts:   s.store.ModelMeta(requestedModel).ReasoningEfforts,
-		RawReasoning:       responsesbridge.ShouldUseRawReasoning(requestedModel),
-		StrictToolHistory:  s.store.StrictToolHistory(),
-		WebSearchUpstream:  s.store.WebSearchUpstream(),
-		WebFetchUpstream:   s.store.WebFetchUpstream(),
-		ShellCompat:        s.store.ShellCompat(),
-		ShellCompatEnforce: s.store.ShellCompatEnforce(),
+		ReplayReasoning:        responsesbridge.ShouldReplayReasoning(requestedModel),
+		ReasoningEfforts:       s.store.ModelMeta(requestedModel).ReasoningEfforts,
+		RawReasoning:           responsesbridge.ShouldUseRawReasoning(requestedModel),
+		StrictToolHistory:      s.store.StrictToolHistory(),
+		WebSearchUpstream:      s.store.WebSearchUpstream(),
+		WebFetchUpstream:       s.store.WebFetchUpstream(),
+		ShellCompat:            s.store.ShellCompat(),
+		ShellCompatEnforce:     s.store.ShellCompatEnforce(),
+		RecentCompactionTokens: s.store.CompactionRecentTokens(),
 	})
 	if err != nil {
 		writeResponsesRequestError(writer, err)

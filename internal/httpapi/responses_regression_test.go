@@ -225,7 +225,8 @@ func TestCompactionDegradesTruncatedSummary(t *testing.T) {
 				item, _ := output[len(output)-1].(map[string]any)
 				envelope, _ = item["encrypted_content"].(string)
 			}
-			summary := decodeCompactionEnvelope(t, envelope)
+			payload := decodeCompactionEnvelope(t, envelope)
+			summary := payload.Summary
 			for _, expected := range []string{"compaction degraded", "max_output_tokens", "partial summary"} {
 				if !strings.Contains(summary, expected) {
 					t.Fatalf("degraded summary is missing %q:\n%s", expected, summary)

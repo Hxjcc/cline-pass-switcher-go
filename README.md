@@ -279,6 +279,7 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 | `SHELL_COMPAT` | `shellCompat` | 留空 | 客户端工具兼容模式。在 Windows 客户端下推荐设为 `powershell`，强制模型在工具调用中声明 shell 参数。 |
 | `SHELL_COMPAT_ENFORCE`| `shellCompatEnforce`| `false` | 是否强制把模型输出中的实际 `shell` 参数改写为 `SHELL_COMPAT`。 |
 | `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 是否开启严格工具历史校验。开启后，未配对的孤儿工具结果将直接报错拒绝。 |
+| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `8000` | 压缩时原样保留的"最近对话"预算（估算 token）。摘要只覆盖更早的部分，最近几轮的原文会随 compaction item 一起回放，避免路径/命令/报错被摘要改写。设为 `0` 关闭该行为。 |
 | `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（仅在未设置 `PROXY_KEY` 时生效）。 |
 | `TRUST_LOCAL_PORT_FORWARD`| `trustLocalPortForward` | Compose: `1` | 信任本地端口映射（容器内将宿主机回环端口视作本机安全请求）。暴露公网时必须清除此项并配置 `PROXY_KEY`。 |
 
@@ -364,7 +365,9 @@ Codex 客户端只为 OpenAI 官方与 Azure-OpenAI 形状的 provider 开启远
 name = "azure"
 base_url = "http://127.0.0.1:3123/v1"
 </code></pre>
-之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。
+之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。<br>
+压缩按其结构分两部分：<b>四段式摘要</b>（Objective / Work State / Next Move / Relevant Files）覆盖较早的对话，<b>最近几轮原文</b>（默认约 8000 token，见 <code>COMPACTION_RECENT_TOKENS</code>）逐字保留在同一个信封里，回放顺序是「摘要 → 最近原文 → 本轮新输入」。<br>
+如果摘要生成彻底失败（连升档重试都失败），压缩会<b>降级</b>而不是报错：仍然返回一个合法的 compaction item，里面写明失败原因、保留已产出的部分摘要，并附上最近的用户请求，让会话能够继续。
 </details>
 
 ---

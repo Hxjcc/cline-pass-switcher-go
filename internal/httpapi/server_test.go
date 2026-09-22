@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/webassets"
@@ -1027,10 +1028,13 @@ func TestResponsesCompactEndpointWrapsChatSummary(t *testing.T) {
 		t.Fatalf("unexpected compaction item: %#v", item)
 	}
 	envelope, _ := item["encrypted_content"].(string)
-	encoded := strings.TrimPrefix(envelope, "ocx1:")
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || string(decoded) != "condensed history" {
-		t.Fatalf("compaction envelope did not round-trip: %q %v", envelope, err)
+	payload2, ok := responsesbridge.DecodeCompactionEnvelope(envelope)
+	if !ok || payload2.Summary != "condensed history" {
+		t.Fatalf("compaction envelope did not round-trip: %q %#v", envelope, payload2)
+	}
+	// The verbatim tail rides inside the same item, not as extra output items.
+	if len(payload2.Recent) != 1 || payload2.Recent[0].Role != "user" || !strings.Contains(payload2.Recent[0].Text, "summarize the conversation") {
+		t.Fatalf("recent tail was not embedded in the item: %#v", payload2.Recent)
 	}
 }
 

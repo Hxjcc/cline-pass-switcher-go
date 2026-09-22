@@ -101,12 +101,17 @@ type Config struct {
 	// ShellCompatEnforce also rewrites the model's actual tool-call arguments
 	// for shell-capable tools. It is off by default and only makes sense when
 	// ShellCompat is set.
-	ShellCompatEnforce bool      `json:"shellCompatEnforce,omitempty"`
-	UpstreamBase       string    `json:"upstreamBase"`
-	Accounts           []Account `json:"accounts"`
-	AccountMode        string    `json:"accountMode"`
-	ActiveAccount      int       `json:"activeAccount"`
-	KnownModels        []string  `json:"knownModels"`
+	ShellCompatEnforce bool `json:"shellCompatEnforce,omitempty"`
+	// CompactionRecentTokens is the verbatim tail kept inside a compaction
+	// item (estimated tokens). The generated summary then only covers the
+	// older part of the conversation, so recent paths, commands and errors
+	// survive the compaction exactly. Zero disables the verbatim tail.
+	CompactionRecentTokens int       `json:"compactionRecentTokens,omitempty"`
+	UpstreamBase           string    `json:"upstreamBase"`
+	Accounts               []Account `json:"accounts"`
+	AccountMode            string    `json:"accountMode"`
+	ActiveAccount          int       `json:"activeAccount"`
+	KnownModels            []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
@@ -231,18 +236,24 @@ type Metadata struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Port:          3123,
-		ProxyKey:      "",
-		PublicBaseURL: "",
-		ExposeCatalog: false,
-		UpstreamBase:  DefaultUpstreamBase,
-		Accounts:      []Account{},
-		AccountMode:   "single",
-		ActiveAccount: 0,
-		KnownModels:   append([]string(nil), DefaultKnownModels...),
-		PerModel:      map[string]PerModelConfig{},
+		Port:                   3123,
+		ProxyKey:               "",
+		PublicBaseURL:          "",
+		ExposeCatalog:          false,
+		CompactionRecentTokens: DefaultCompactionRecentTokens,
+		UpstreamBase:           DefaultUpstreamBase,
+		Accounts:               []Account{},
+		AccountMode:            "single",
+		ActiveAccount:          0,
+		KnownModels:            append([]string(nil), DefaultKnownModels...),
+		PerModel:               map[string]PerModelConfig{},
 	}
 }
+
+// DefaultCompactionRecentTokens keeps roughly the last turn or two verbatim
+// inside a compaction item: enough for exact paths, commands and error text
+// without eating the context the compaction just freed.
+const DefaultCompactionRecentTokens = 8000
 
 func EmptyMetadata() Metadata {
 	return Metadata{

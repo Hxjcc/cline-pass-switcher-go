@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,28 @@ Files, directories, endpoints or config keys that matter, one line each.
 
 Keep every fact another model needs to continue accurately; drop small talk. Thinking alone is not a summary.`
 
+const (
+	// maxCompactionRecentMessageRunes caps one verbatim message.
+	maxCompactionRecentMessageRunes = 2000
+	// maxCompactionRecentTotalRunes caps the whole verbatim tail so the
+	// envelope stays small enough to send back on every request.
+	maxCompactionRecentTotalRunes = 32000
+)
+
+// CompactionRecentMessage is one verbatim turn kept inside a compaction item.
+type CompactionRecentMessage struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+// CompactionPayload is what the ocx1: envelope carries. Older envelopes hold
+// the summary text directly; decoding still accepts those.
+type CompactionPayload struct {
+	Summary  string                    `json:"summary"`
+	Recent   []CompactionRecentMessage `json:"recent,omitempty"`
+	Degraded bool                      `json:"degraded,omitempty"`
+}
+
 func ToCompactionChatWithOptions(body map[string]any, options Options) (map[string]any, *Context, error) {
 	chat, context, err := ToChatWithOptions(body, options)
 	if err != nil {
@@ -39,10 +62,19 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	for leading < len(messages) && jsonx.Map(messages[leading])["role"] == "system" {
 		leading++
 	}
+	// Keep the newest turns verbatim and summarize only what came before them:
+	// duplicating the same turns in both places would waste context and confuse
+	// the next model.
+	tail := selectCompactionTail(messages[leading:], options.RecentCompactionTokens)
+	context.compactionRecent = tail
+	history := messages[leading:]
+	if len(tail) > 0 && len(tail) < len(history) {
+		history = history[:len(history)-len(tail)]
+	}
 	prepared := make([]any, 0, len(messages)+2)
 	prepared = append(prepared, messages[:leading]...)
 	prepared = append(prepared, map[string]any{"role": "system", "content": compactionInstructions})
-	prepared = append(prepared, messages[leading:]...)
+	prepared = append(prepared, history...)
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
 	// Compaction is mechanical summarization, so it runs at "high" rather than
@@ -70,6 +102,67 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	context.outputSchema = nil
 	context.ParallelToolCalls = false
 	return chat, context, nil
+}
+
+// selectCompactionTail walks the converted messages from the end and keeps the
+// newest user/assistant text until the estimated token budget runs out. Tool
+// results, reasoning and images are skipped: they are the bulkiest items and a
+// retained tool result without its call would be rejected on replay.
+func selectCompactionTail(messages []any, budgetTokens int) []CompactionRecentMessage {
+	if budgetTokens <= 0 || len(messages) == 0 {
+		return nil
+	}
+	selected := make([]CompactionRecentMessage, 0, 4)
+	tokens, runes := 0, 0
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := jsonx.Map(messages[index])
+		role := jsonx.String(message["role"])
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		text := strings.TrimSpace(collectPartText(message["content"]))
+		if text == "" {
+			continue
+		}
+		text = truncateText(text, maxCompactionRecentMessageRunes)
+		estimate := estimateCompactionTokens(text)
+		if len(selected) > 0 && tokens+estimate > budgetTokens {
+			break
+		}
+		if runes+len([]rune(text)) > maxCompactionRecentTotalRunes {
+			break
+		}
+		selected = append(selected, CompactionRecentMessage{Role: role, Text: text})
+		tokens += estimate
+		runes += len([]rune(text))
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	// Keep the oldest-first order and start at a user turn so replay never
+	// begins with an answer to a question that was dropped.
+	slices.Reverse(selected)
+	for len(selected) > 0 && selected[0].Role != "user" {
+		selected = selected[1:]
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	return selected
+}
+
+// estimateCompactionTokens approximates the tokenizer closely enough to bound
+// the verbatim tail: CJK runes are about one token, other text about a quarter.
+func estimateCompactionTokens(text string) int {
+	cjk, other := 0, 0
+	for _, r := range text {
+		if r >= 0x2E80 {
+			cjk++
+		} else {
+			other++
+		}
+	}
+	return cjk + other/4 + 1
 }
 
 // compactionReasoningEffort picks "high" when the model advertises it, falling
@@ -179,9 +272,13 @@ func DegradedCompactionTriggerResponse(context *Context, reason, partial string)
 
 func degradedCompactionItem(context *Context, reason, partial string) map[string]any {
 	return map[string]any{
-		"id":                newID("cmp"),
-		"type":              "compaction",
-		"encrypted_content": CompactionEnvelope(degradedCompactionSummary(context, reason, partial)),
+		"id":   newID("cmp"),
+		"type": "compaction",
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{
+			Summary:  degradedCompactionSummary(context, reason, partial),
+			Recent:   context.compactionRecent,
+			Degraded: true,
+		}),
 	}
 }
 
@@ -206,19 +303,23 @@ func degradedCompactionSummary(context *Context, reason, partial string) string 
 		reason = "summary generation failed"
 	}
 	recent := make([]string, 0, 4)
-	for _, raw := range context.compactionUsers {
-		message := jsonx.Map(raw)
-		text := strings.TrimSpace(collectPartText(message["content"]))
-		if text == "" {
-			text = strings.TrimSpace(jsonx.String(message["text"]))
+	// The verbatim tail travels in the envelope's recent list; only list the
+	// user requests inside the text when no structured tail was selected.
+	if len(context.compactionRecent) == 0 {
+		for _, raw := range context.compactionUsers {
+			message := jsonx.Map(raw)
+			text := strings.TrimSpace(collectPartText(message["content"]))
+			if text == "" {
+				text = strings.TrimSpace(jsonx.String(message["text"]))
+			}
+			if text == "" {
+				continue
+			}
+			recent = append(recent, truncateText(text, 400))
 		}
-		if text == "" {
-			continue
+		if len(recent) > 3 {
+			recent = recent[len(recent)-3:]
 		}
-		recent = append(recent, truncateText(text, 400))
-	}
-	if len(recent) > 3 {
-		recent = recent[len(recent)-3:]
 	}
 	var builder strings.Builder
 	builder.WriteString("[compaction degraded] The earlier conversation could not be summarized: ")

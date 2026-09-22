@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 )
 
@@ -234,11 +234,17 @@ func TestResponsesCompactionTriggerDegradesWhenSummaryKeepsFailing(t *testing.T)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "event: response.completed") {
 		t.Fatalf("degraded compaction should still complete: %d %s", response.Code, response.Body.String())
 	}
-	summary := decodeCompactionEnvelope(t, extractCompactionEnvelope(t, response.Body.String()))
-	for _, expected := range []string{"compaction degraded", "## Objective", "## Work State", "## Next Move", "## Relevant Files", "parser fix"} {
-		if !strings.Contains(summary, expected) {
-			t.Fatalf("degraded summary is missing %q:\n%s", expected, summary)
+	payload := decodeCompactionEnvelope(t, extractCompactionEnvelope(t, response.Body.String()))
+	if !payload.Degraded {
+		t.Fatalf("degraded payload must be marked: %#v", payload)
+	}
+	for _, expected := range []string{"compaction degraded", "## Objective", "## Work State", "## Next Move", "## Relevant Files"} {
+		if !strings.Contains(payload.Summary, expected) {
+			t.Fatalf("degraded summary is missing %q:\n%s", expected, payload.Summary)
 		}
+	}
+	if len(payload.Recent) != 1 || !strings.Contains(payload.Recent[0].Text, "parser fix") || payload.Recent[0].Role != "user" {
+		t.Fatalf("degraded payload should keep the recent user request verbatim: %#v", payload.Recent)
 	}
 	if calls := len(recorder.all()); calls != 2 {
 		t.Fatalf("starvation should escalate once before degrading, got %d calls", calls)
@@ -278,26 +284,22 @@ func TestResponsesCompactionDegradesWithoutEscalatingOnGatewayFailure(t *testing
 	}
 	output, _ := payload["output"].([]any)
 	item, _ := output[0].(map[string]any)
-	summary := decodeCompactionEnvelope(t, item["encrypted_content"].(string))
-	if !strings.Contains(summary, "gateway unavailable") {
-		t.Fatalf("degraded summary should carry the failure reason: %s", summary)
+	payload2 := decodeCompactionEnvelope(t, item["encrypted_content"].(string))
+	if !strings.Contains(payload2.Summary, "gateway unavailable") {
+		t.Fatalf("degraded summary should carry the failure reason: %s", payload2.Summary)
 	}
 	if calls := len(recorder.all()); calls != 1 {
 		t.Fatalf("a gateway failure should not escalate, got %d calls", calls)
 	}
 }
 
-func decodeCompactionEnvelope(t *testing.T, envelope string) string {
+func decodeCompactionEnvelope(t *testing.T, envelope string) responsesbridge.CompactionPayload {
 	t.Helper()
-	encoded, found := strings.CutPrefix(envelope, "ocx1:")
-	if !found {
-		t.Fatalf("not a compaction envelope: %q", envelope)
+	payload, ok := responsesbridge.DecodeCompactionEnvelope(envelope)
+	if !ok {
+		t.Fatalf("not a readable compaction envelope: %q", envelope)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(decoded)
+	return payload
 }
 
 // The compaction item the proxy returns must be usable in the next request:
@@ -336,6 +338,14 @@ func TestCompactionTriggerItemReplaysAsSummary(t *testing.T) {
 	raw, _ := json.Marshal(payloads[1]["messages"])
 	if !strings.Contains(string(raw), "condensed history") || !strings.Contains(string(raw), "Earlier conversation was compacted") {
 		t.Fatalf("compaction summary was not replayed: %s", raw)
+	}
+	// The verbatim tail rides between the summary and the new user message.
+	replayed := string(raw)
+	summaryAt := strings.Index(replayed, "Earlier conversation was compacted")
+	recentAt := strings.Index(replayed, "hello")
+	requestAt := strings.Index(replayed, "continue")
+	if summaryAt < 0 || recentAt < 0 || requestAt < 0 || !(summaryAt < recentAt && recentAt < requestAt) {
+		t.Fatalf("replay order must be summary -> recent turns -> new input: %s", replayed)
 	}
 }
 
