@@ -639,7 +639,12 @@ export function ModelsPanel({
                                     })
                                   }
                                 >
-                                  <SelectTrigger size="sm" className="w-40" disabled={pinDisabled}>
+                                  <SelectTrigger
+                                    size="sm"
+                                    className="w-40"
+                                    disabled={pinDisabled}
+                                    aria-label="钉住模式"
+                                  >
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -663,7 +668,12 @@ export function ModelsPanel({
                                     })
                                   }
                                 >
-                                  <SelectTrigger size="sm" className="w-40" disabled={pinDisabled}>
+                                  <SelectTrigger
+                                    size="sm"
+                                    className="w-40"
+                                    disabled={pinDisabled}
+                                    aria-label="排序"
+                                  >
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
