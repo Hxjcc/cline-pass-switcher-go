@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 )
 
@@ -259,6 +261,73 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+// adapterFingerprint is everything about one adapter run that must not depend
+// on how the bytes arrived.
+type adapterFingerprint struct {
+	types string
+	text  string
+	usage string
+}
+
+// feedCapturedBody runs the bridge adapter over the body, cutting it at the
+// given byte offsets.
+func feedCapturedBody(t *testing.T, context *responsesbridge.Context, body []byte, cuts []int) adapterFingerprint {
+	t.Helper()
+	adapter := responsesbridge.NewStreamAdapter(context)
+	events := make([]responsesbridge.Event, 0, 32)
+	offset := 0
+	for _, cut := range cuts {
+		events = append(events, adapter.Feed(body[offset:cut])...)
+		offset = cut
+	}
+	events = append(events, adapter.Feed(body[offset:])...)
+	events = append(events, adapter.Finish(nil)...)
+
+	types := make([]string, 0, len(events))
+	text := &strings.Builder{}
+	usage := ""
+	for _, event := range events {
+		types = append(types, event.Type)
+		switch event.Type {
+		case "response.output_text.delta":
+			text.WriteString(jsonxString(event.Data["delta"]))
+		case "response.completed":
+			response, _ := event.Data["response"].(map[string]any)
+			if stats := usageFromValue(response["usage"]); stats != nil {
+				usage = fmt.Sprintf("%d/%d/%d", stats.PromptTokens, stats.CompletionTokens, stats.ReasoningTokens)
+			}
+		}
+	}
+	return adapterFingerprint{types: strings.Join(types, ","), text: text.String(), usage: usage}
+}
+
+// The replay test covers the chunk sizes an operator can reproduce; this walks
+// every boundary the network could have produced. A stream reader that keeps
+// state where it should (buffered partial events, half a multi-byte character)
+// gives the identical turn at all 8700 of them.
+func TestCapturedStreamIsStableAtEverySplitPoint(t *testing.T) {
+	fixture := loadUpstreamStreamFixture(t)
+	body := []byte(fixture.Text)
+	_, context, err := responsesbridge.ToChat(map[string]any{
+		"model": fixture.Model,
+		"input": "Reply with the single word: ok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reference := feedCapturedBody(t, context, body, nil)
+	if reference.text != "ok" || reference.usage != "37/19/17" {
+		t.Fatalf("whole-body run is not the capture: %+v", reference)
+	}
+	for split := 0; split <= len(body); split++ {
+		got := feedCapturedBody(t, context, body, []int{split})
+		if got != reference {
+			t.Fatalf("splitting at byte %d changed the turn:\n got %+v\nwant %+v", split, got, reference)
+		}
+	}
 }
 
 // The same capture with one broken event: the proxy must fail the turn instead
