@@ -16,6 +16,7 @@ services:
       # 程序内置默认值。这样本文件保持通用：git pull 不会和本地设置冲突，
       # 面板工具也只需要管理一个编排文件。
       - PROXY_KEY=${PROXY_KEY:-}
+      - ADMIN_KEY=${ADMIN_KEY:-}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       # 上游网关的联网能力，按次计费；不需要时在 .env 里写成空值
       - WEB_SEARCH_UPSTREAM=${WEB_SEARCH_UPSTREAM-exa}

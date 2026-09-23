@@ -389,7 +389,10 @@ function App() {
       key: authKey,
       body: value,
     })
-    const nextKey = response.proxyKey || ""
+    // Once an admin key exists the console answers to it, so the stored
+    // credential has to follow - otherwise the next reload would be locked
+    // out with the client key.
+    const nextKey = response.adminKey || response.proxyKey || ""
     // Changing the key keeps whatever lifetime the operator already chose.
     storeAdminKey(nextKey, readPersistentAdminKey() !== "")
     setAuthKey(nextKey)
