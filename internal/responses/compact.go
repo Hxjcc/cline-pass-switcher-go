@@ -1,7 +1,9 @@
 package responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -459,4 +461,193 @@ func compactionUserMessages(input any) []any {
 		users = append(users, message)
 	}
 	return users
+}
+
+const compactionEnvelopePrefix = "ocx1:"
+
+// CompactionEvents preserves the proxy's streaming extension. The buffered
+// endpoint returns response.compaction; SSE uses the normal Response lifecycle
+// with retained user messages followed by the compaction item.
+func CompactionEvents(compaction map[string]any, context *Context) []Event {
+	response := context.responseBase(jsonx.String(compaction["id"]), intValue(compaction["created_at"]),
+		context.Model, "completed", jsonx.Slice(compaction["output"]), compaction["usage"], nil, "")
+	inProgress := context.responseBase(jsonx.String(compaction["id"]), intValue(compaction["created_at"]),
+		context.Model, "in_progress", []any{}, nil, nil, "")
+	events := []Event{
+		event("response.created", map[string]any{"response": inProgress}),
+		event("response.in_progress", map[string]any{"response": inProgress}),
+	}
+	for index, item := range jsonx.Slice(compaction["output"]) {
+		events = append(events,
+			event("response.output_item.added", map[string]any{"output_index": index, "item": item}),
+			event("response.output_item.done", map[string]any{"output_index": index, "item": item}),
+		)
+	}
+	return append(events, event("response.completed", map[string]any{"response": response}))
+}
+
+// CompactionEnvelope wraps a readable summary in the same opaque envelope shape
+// used by Codex-compatible third-party compaction implementations. Envelopes
+// with a verbatim tail (or a degraded marker) use the structured v2 encoding.
+func CompactionEnvelope(summary string) string {
+	return encodeCompactionPayload(CompactionPayload{Summary: summary})
+}
+
+func encodeCompactionPayload(payload CompactionPayload) string {
+	if len(payload.Recent) == 0 && !payload.Degraded {
+		// Keep the historical shape for plain summaries: other tooling that
+		// decodes the envelope as base64 text keeps working.
+		return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(payload.Summary))
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(payload.Summary))
+	}
+	return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString(raw)
+}
+
+// compactionPayloadFromEnvelope accepts both encodings: the structured v2 JSON
+// and the historical plain-text summary.
+func compactionPayloadFromEnvelope(value string) (CompactionPayload, bool) {
+	encoded, found := strings.CutPrefix(value, compactionEnvelopePrefix)
+	if !found {
+		return CompactionPayload{}, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return CompactionPayload{}, false
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, "{") {
+		var payload CompactionPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return CompactionPayload{}, false
+		}
+		if payload.Summary == "" && len(payload.Recent) == 0 {
+			return CompactionPayload{}, false
+		}
+		return payload, true
+	}
+	return CompactionPayload{Summary: trimmed}, trimmed != ""
+}
+
+func compactionSummaryFromEnvelope(value string) (string, bool) {
+	payload, ok := compactionPayloadFromEnvelope(value)
+	return payload.Summary, ok
+}
+
+// DecodeCompactionEnvelope reads a compaction envelope produced by this proxy
+// (or by an older build that stored the summary as plain text).
+func DecodeCompactionEnvelope(value string) (CompactionPayload, bool) {
+	return compactionPayloadFromEnvelope(value)
+}
+
+// CompactionResponse converts a completed Chat Completions response into the
+// Responses compaction shape expected by Codex. The readable summary is wrapped
+// in a local envelope so later requests can restore it for third-party models.
+func CompactionResponse(chat map[string]any, context *Context) (map[string]any, error) {
+	response, err := FromChat(chat, context)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := compactionSummary(chat, response)
+	if err != nil {
+		return nil, err
+	}
+	output := append([]any(nil), context.compactionUsers...)
+	output = append(output, map[string]any{
+		"id":                newID("cmp"),
+		"type":              "compaction",
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
+	})
+	return map[string]any{
+		"id": response["id"], "object": "response.compaction", "created_at": response["created_at"],
+		"output": output, "usage": response["usage"],
+	}, nil
+}
+
+// RequestTriggersCompaction reports whether the client asked for remote
+// compaction v2. Codex appends a {type:"compaction_trigger"} input item to an
+// otherwise ordinary Responses request and expects a single compaction item
+// back over the normal streaming lifecycle.
+func RequestTriggersCompaction(body map[string]any) bool {
+	for _, raw := range jsonx.Slice(body["input"]) {
+		item := jsonx.Map(raw)
+		if item != nil && jsonx.String(item["type"]) == "compaction_trigger" {
+			return true
+		}
+	}
+	return false
+}
+
+// CompactionTriggerResponse builds the remote compaction v2 reply: one normal
+// Responses object whose output holds exactly one compaction item. Codex counts
+// response.output_item.done events, rejects anything but a single compaction
+// item, and waits for response.completed.
+func CompactionTriggerResponse(chat map[string]any, context *Context) (map[string]any, error) {
+	response, err := FromChat(chat, context)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := compactionSummary(chat, response)
+	if err != nil {
+		return nil, err
+	}
+	item := map[string]any{
+		"id":                newID("cmp"),
+		"type":              "compaction",
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
+	}
+	return context.responseBase(
+		jsonx.String(response["id"]), intValue(response["created_at"]), context.Model, "completed",
+		[]any{item}, response["usage"], nil, "",
+	), nil
+}
+
+// CompactionTriggerEvents opens the standard Responses lifecycle around the
+// remote compaction v2 reply.
+func CompactionTriggerEvents(response map[string]any, context *Context) []Event {
+	inProgress := context.responseBase(
+		jsonx.String(response["id"]), intValue(response["created_at"]), context.Model, "in_progress",
+		[]any{}, nil, nil, "",
+	)
+	events := []Event{
+		event("response.created", map[string]any{"response": inProgress}),
+		event("response.in_progress", map[string]any{"response": inProgress}),
+	}
+	for index, item := range jsonx.Slice(response["output"]) {
+		events = append(events,
+			event("response.output_item.added", map[string]any{"output_index": index, "item": item}),
+			event("response.output_item.done", map[string]any{"output_index": index, "item": item}),
+		)
+	}
+	return append(events, event("response.completed", map[string]any{"response": response}))
+}
+
+// compactionSummary validates a completed summarization turn and returns the
+// readable summary both compaction shapes are built from.
+func compactionSummary(chat, response map[string]any) (string, error) {
+	if response["status"] != "completed" {
+		reason := jsonx.String(jsonx.Map(response["incomplete_details"])["reason"])
+		return "", &ChatFailure{Code: "compaction_incomplete", Type: "upstream_error",
+			Message: "upstream compaction summary is incomplete: " + reason, Response: response}
+	}
+	choice := jsonx.Map(jsonx.Slice(chat["choices"])[0])
+	message := jsonx.Map(choice["message"])
+	if jsonx.String(choice["finish_reason"]) != "stop" || len(jsonx.Slice(message["tool_calls"])) > 0 {
+		return "", errors.New("upstream compaction did not finish with a summary")
+	}
+	if jsonx.String(message["refusal"]) != "" {
+		return "", errors.New("upstream refused the compaction request")
+	}
+	for _, raw := range jsonx.Slice(message["content"]) {
+		if jsonx.Map(raw)["type"] == "refusal" {
+			return "", errors.New("upstream refused the compaction request")
+		}
+	}
+	summary := strings.TrimSpace(responseOutputText(response))
+	if summary == "" {
+		return "", errors.New("upstream returned an empty compaction summary")
+	}
+	return summary, nil
 }
