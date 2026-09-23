@@ -55,7 +55,7 @@ Cline Pass 上游
 
 - 🚀 **双协议原生支持**
   - **OpenAI Chat Completions 协议**：标准兼容各大主流客户端与开发框架（`/v1/chat/completions`）。
-  - **OpenAI Responses 协议桥接**：实现 `/v1/responses` 及 `/v1/responses/compact` 接口，无服务端状态持久化要求，覆盖 Codex CLI、ChatGPT Desktop 的多轮交互与上下文压缩。协议边界（不支持 conversation 引用、后台响应、文件/音频输入、强制服务端工具等）逐条列在 [Responses 协议边界与验收](docs/protocol-compatibility.md)，不支持的能力会在请求上游之前返回 400 而不是假装成功。
+  - **OpenAI Responses 协议桥接**：提供 `/v1/responses` 与 `/v1/responses/compact` 接口，不依赖服务端会话存储，支持 Codex CLI、ChatGPT Desktop 的多轮交互与上下文压缩。协议覆盖范围与已知限制（conversation 引用、后台响应、文件与音频输入、强制服务端工具等）见 [Responses 协议边界与验收](docs/protocol-compatibility.md)；不在支持范围内的请求会在转发上游之前返回 HTTP 400。
 - 👥 **企业级多账号池调度**
   - 支持 **主备模式（固定账号）** 与 **均衡轮询（Round-Robin）**。
   - **自适应健康探测与冷却**：遭遇 `401/403` 自动冷却 10 分钟；遭遇 `429` 限流自动冷却 2 分钟，秒级无缝漂移到下一个可用账号。
@@ -238,7 +238,7 @@ curl -X POST http://127.0.0.1:3123/v1/chat/completions \
   - **429 请求超限**：账号进入 **2 分钟** 冷却期。
   - 账号下一次请求成功或用户更新密钥后，旧冷却记录自动清除。
 - **配额过载防护（5h / 7d / 30d 窗口）**：
-  - 用量按需读取，没有后台定时轮询：你在控制台点「查询配额」，或转发前选号时才会请求 Cline 官方用量监控接口（`GET /users/me/plan`、`GET /users/me/plan/usage-limits`，只读且不计入模型 token 消耗）。同一账号 60 秒内最多查一次，已满的账号保留到 `resetsAt` 不再重复查询；
+  - 用量按需读取，无后台轮询：仅在控制台点击「查询配额」或转发前选号时请求 Cline 官方用量监控接口（`GET /users/me/plan`、`GET /users/me/plan/usage-limits`，只读且不计入模型 token 消耗）。同一账号 60 秒内最多查询一次，已满的账号保留至 `resetsAt` 不再重复查询；
   - 任一周期达到 100% 时，该账号被标记为耗尽，避让至该周期的 `resetsAt` 重置时间；
   - 若所有账号皆满额，网关不会拦截请求，仍会尝试发出以保障最大可用性。
 
@@ -266,25 +266,25 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 
 可以通过修改 `config.json` 或设置系统环境变量来进行配置。环境变量优先级高于配置文件。
 
-> **Docker Compose 部署**：仓库自带的 `docker-compose.yml` 已经把这些开关全部透传（写成 `${VAR:-}` 形式），因此**只需要把变量写进项目目录下的 `.env`**，不用改动编排文件——既不会被 `git pull` 冲突打断，面板工具也只需要管理一个文件。`.env` 改动后必须重建容器才生效：`docker compose up -d`（面板里点「重建」）。变量留空或删除该行，程序就用内置默认值。
+> **Docker Compose 部署**：`docker-compose.yml` 已将下列开关全部透传（`${VAR:-}` 形式），因此只需在项目目录的 `.env` 中配置，无需修改编排文件，本地配置也不会与 `git pull` 冲突。`.env` 修改后须重建容器方可生效：`docker compose up -d`（或在面板中执行「重建」）。变量留空或删除该行时，服务使用内置默认值。
 
 | 环境变量 | 对应 config.json | 默认值 | 作用与详细说明 |
 |---|---|---|---|
 | `PORT` | `port` | `3123` | 服务监听端口。 |
 | `BIND_HOST` | - | `127.0.0.1` | 监听地址（源码运行默认 `127.0.0.1`，容器中设为 `0.0.0.0`）。 |
 | `DATA_DIR` | - | `.` (容器为 `/data`) | 运行数据、配置和日志的存储目录。 |
-| `PROXY_KEY` | `proxyKey` | 留空 | **代理主密钥（客户端）**。设置后，模型接口需要 `Bearer <key>`；在未设置 `ADMIN_KEY` 时它也能打开控制台（保持单机用法不变）。 |
-| `ADMIN_KEY` | `adminKey` | 留空 | **管理密钥（控制台）**。留空 = 沿用 `PROXY_KEY`。设置后，控制台与管理接口只认它；`PROXY_KEY` 和下发出去的代理密钥都只能调用模型，无法读取账号或改配置。 |
+| `PROXY_KEY` | `proxyKey` | 留空 | **代理主密钥（客户端）**。设置后，模型接口需携带 `Bearer <key>`；未设置 `ADMIN_KEY` 时，该密钥同时用于登录控制台（保持单机部署的既有行为）。 |
+| `ADMIN_KEY` | `adminKey` | 留空 | **管理密钥（控制台）**。留空时沿用 `PROXY_KEY`；设置后，控制台与管理接口仅接受该密钥，`PROXY_KEY` 及下发的代理密钥只能调用模型，无法读取账号或修改配置。 |
 | `PUBLIC_BASE_URL` | `publicBaseUrl` | 留空 | 服务对外访问的基准 URL（如放在反代后设为 `https://api.example.com`）。 |
 | `CLINE_PASS_KEY` | - | 留空 | 启动时默认注入账号池的初始 Cline Pass API Key。 |
-| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端工具：`exa` / `tako` / `perplexity`；`off` 或留空表示关闭。**由网关执行、按次计费**，只在模型真的调用搜索时产生费用；Compose 默认开启，要关闭就在 `.env` 里写成空值。 |
-| `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | Compose: `browserbase_fetch` / 源码: 留空 | 用户消息中出现 HTTP(S) 链接时自动声明的网页抓取工具：`browserbase_fetch`；留空或 `off` 表示关闭。同样**按次计费**。 |
+| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端搜索工具：`exa` / `tako` / `perplexity`；`off` 或留空表示关闭。该工具由上游网关执行并按次计费，仅在模型实际调用搜索时产生费用；Compose 默认开启，如需关闭可在 `.env` 中置为空值。 |
+| `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | Compose: `browserbase_fetch` / 源码: 留空 | 用户消息中出现 HTTP(S) 链接时声明的网页抓取工具：`browserbase_fetch`；留空或 `off` 表示关闭。同样由网关执行并按次计费。 |
 | `SHELL_COMPAT` | `shellCompat` | 留空 | 客户端工具兼容模式。在 Windows 客户端下推荐设为 `powershell`，强制模型在工具调用中声明 shell 参数。 |
 | `SHELL_COMPAT_ENFORCE`| `shellCompatEnforce`| `false` | 是否强制把模型输出中的实际 `shell` 参数改写为 `SHELL_COMPAT`。 |
 | `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 是否开启严格工具历史校验。开启后，未配对的孤儿工具结果将直接报错拒绝。 |
-| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 压缩时原样保留的"最近对话"预算（估算 token）。摘要只覆盖更早的部分，最近几轮的原文会随 compaction item 一起回放，避免路径/命令/报错被摘要改写。设为 `0` 关闭该行为。 |
-| `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | 压缩轮次使用的推理档位（必须是模型声明的档位之一，或 `auto`＝取最接近 high 的档）。默认 `max`：低档容易把输出预算全花在隐藏思考上、被网关判成 `empty response content`，反而多花一轮重试。想省钱可设为 `high`。 |
-| `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `16384` | 压缩轮次的输出预算下限（上限 32768）。推理模型的思考也占这部分预算，摘要本身常要 5~6k 可见 token，8192 经常第一轮就被截断、白跑一次升档重试，所以默认给两档（16384）；真要重试时再翻倍到上限 32768。 |
+| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 压缩时逐字保留的最近对话预算（估算 token）。摘要只覆盖更早的部分，最近几轮原文随 compaction item 一同回放，避免路径、命令与报错文本被摘要改写。设为 `0` 关闭该行为。 |
+| `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | 压缩轮次使用的推理档位（须为模型声明的档位之一，或 `auto`＝取最接近 high 的档）。默认 `max`：较低档位容易把输出预算全部用于隐藏思考，导致网关返回 `empty response content` 并额外消耗一轮重试；如需降低开销可设为 `high`。 |
+| `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `16384` | 压缩轮次的输出预算下限（上限 32768）。隐藏思考与摘要正文共用该预算，摘要通常需要 5~6k 可见 token，8192 时常在首轮即被截断并触发升档重试，因此默认取两档（16384）；升档重试时再翻倍至上限 32768。 |
 | `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（仅在未设置 `PROXY_KEY` 时生效）。 |
 | `TRUST_LOCAL_PORT_FORWARD`| `trustLocalPortForward` | Compose: `1` | 信任本地端口映射（容器内将宿主机回环端口视作本机安全请求）。暴露公网时必须清除此项并配置 `PROXY_KEY`。 |
 
@@ -325,15 +325,15 @@ server {
 > **安全提示**：对外开放网络访问时，**务必在控制台或环境变量中设置强密码 `PROXY_KEY`**！未设置密钥且暴露端口将导致控制台管理权限完全失窃。
 
 <details>
-<summary><strong>Q: 怎么把代理分享给别人用，又不怕他刷爆我的额度？</strong></summary>
+<summary><strong>Q: 如何把代理分发给其他人，并限制其可用额度？</strong></summary>
 
-在控制台「代理密钥」页新增一个客户端密钥（点「随机生成」会得到一个 <code>sk-</code> 开头的随机串），然后按需收紧两件事：
+在控制台「代理密钥」页新增客户端密钥（「随机生成」会生成一个 <code>sk-</code> 前缀的随机串），再按需配置两项限制：
 <ul>
-  <li><b>绑定账号</b>：选定之后，这个密钥只会用那一个账号，<b>不做故障转移</b>——那个账号不可用时请求直接失败，而不是悄悄花掉别的账号的额度。</li>
-  <li><b>额度上限（USD）</b>：按上游返回的实际费用累计，累计到上限后该密钥的请求会被拒绝（HTTP 429，<code>code=key_spend_limit</code>），主密钥和你们自己的客户端不受影响。累计值写在 <code>data/metadata.json</code> 里，重启不会清零；控制台或 <code>POST /api/keys/reset</code> 可以手动清零。</li>
+  <li><b>绑定账号</b>：该密钥仅使用所绑定的账号，不参与故障转移；绑定账号不可用时请求直接失败，不会改用其他账号的额度。</li>
+  <li><b>额度上限（USD）</b>：按上游返回的实际费用累计，达到上限后该密钥的请求被拒绝（HTTP 429，<code>code=key_spend_limit</code>），主密钥不受影响。累计值持久化于 <code>data/metadata.json</code>，重启不清零，可在控制台或通过 <code>POST /api/keys/reset</code> 清零。</li>
 </ul>
-先把 <code>ADMIN_KEY</code> 设上，控制台就不会被客户端密钥打开：那把 <code>sk-</code> 只能调用模型，读不到账号池和上游密钥。<br>
-注意：额度按 <b>上游报告的费用</b> 累计，上游没返回费用的请求会计 0（不会被凭空估算）。
+建议同时设置 <code>ADMIN_KEY</code>：客户端密钥无法打开控制台，也就无法读取账号池与上游密钥。<br>
+说明：额度以上游返回的费用为准；上游未返回费用的请求按 0 计，不做估算。
 </details>
 
 ---
@@ -345,7 +345,7 @@ server {
 | 文件 | 描述与维护说明 |
 |---|---|
 | `config.json` | 核心配置快照：包含账号列表、密钥、模型偏好与路由钉选设置。 |
-| `metadata.json` | 运行时快照：包含渠道测速结果、官方模型目录缓存、最近 500 条请求历史。 |
+| `metadata.json` | 运行时快照：包含渠道测速结果、官方模型目录缓存、最近 500 条请求历史，以及各代理密钥的累计用量（`keyUsage`，用于额度上限）。 |
 | `store.journal` | WAL（Write-Ahead Log）操作日志：每次配置修改与请求记录均先追加至该日志并批量 fsync，定期合并入上述 JSON 快照中。 |
 
 > **数据备份**：备份或迁移时，先停止容器或服务进程，直接复制整个 `./data` 目录即可。
@@ -377,15 +377,15 @@ server {
 <details>
 <summary><strong>Q: Codex 的 <code>/compact</code> 为什么走的是本地摘要？怎么让它走远端压缩？</strong></summary>
 Codex 客户端只为 OpenAI 官方与 Azure-OpenAI 形状的 provider 开启远端压缩（内部判定 <code>RemoteCompactionSupport::V2</code>），其它自定义 provider 一律回退成"本地摘要"——客户端自己发一次普通 Responses 请求让模型总结。代理已经支持远端压缩 v2 协议：<code>POST /v1/responses</code> 携带 <code>{"type":"compaction_trigger"}</code> 输入项时，会返回恰好一个 <code>compaction</code> item，并用 <code>response.output_item.done</code> + <code>response.completed</code> 的正常生命周期下发。<br>
-想启用，把 provider 的 <code>name</code> 改成 <code>azure</code>（客户端是精确匹配、大小写不敏感；<code>OpenAI</code> 同样能命中，但 <code>azure</code> 只影响这一处能力判定，副作用最小）：
+启用方式：将 provider 的 <code>name</code> 设为 <code>azure</code>（精确匹配、大小写不敏感；<code>OpenAI</code> 亦可命中，但 <code>azure</code> 只参与这一处能力判定，影响面最小）：
 <pre><code>[model_providers.custom]
 name = "azure"
 base_url = "http://127.0.0.1:3123/v1"
 </code></pre>
 之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。<br>
 压缩按其结构分两部分：<b>四段式摘要</b>（Objective / Work State / Next Move / Relevant Files）覆盖较早的对话，<b>最近几轮原文</b>（默认约 16000 token，见 <code>COMPACTION_RECENT_TOKENS</code>）逐字保留在同一个信封里，回放顺序是「摘要 → 最近原文 → 本轮新输入」。<br>
-如果摘要生成彻底失败（连升档重试都失败），压缩会<b>降级</b>而不是报错：仍然返回一个合法的 compaction item，里面写明失败原因、保留已产出的部分摘要，并附上最近的用户请求，让会话能够继续。
-<br>有一种情况不会被重试、但会在历史里标出来：摘要<b>正常结束却没写全四段</b>（例如只写了 Objective + Work State）。压缩照常生效，但那条历史记录的模型列会多一个琥珀色徽章 <code>摘要缺 …</code>，写明缺了哪几段——这是提示摘要变薄了，不是错误。
+摘要生成失败（含升档重试后仍失败）时不返回错误，而是返回<b>降级</b>的 compaction item：其中包含失败原因、已产出的部分摘要与最近的用户请求，会话因此可以继续，代价是较早的上下文丢失；该记录在请求历史中标记为「压缩降级」。<br>
+另一种情况不触发重试，但会在历史中标注：摘要正常结束却缺少锚定段落（例如仅有 Objective 与 Work State）。压缩照常生效，历史记录的模型列会显示琥珀色徽章 <code>摘要缺 …</code>，列出缺失的段落名称。
 </details>
 
 ---

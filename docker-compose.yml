@@ -12,13 +12,12 @@ services:
       # 是网桥网关而不是回环地址，所以这里显式声明这层边界。若把 ports 改
       # 成对外暴露，请删除本行并设置 PROXY_KEY。
       - TRUST_LOCAL_PORT_FORWARD=1
-      # 下面这些开关都读取同目录的 .env（compose 会自动加载它），留空则用
-      # 程序内置默认值。这样本文件保持通用：git pull 不会和本地设置冲突，
-      # 面板工具也只需要管理一个编排文件。
+      # 以下开关统一从同目录的 .env 读取（Compose 自动加载）；留空时使用程序
+      # 内置默认值。据此本文件保持与仓库一致，本地配置不影响 git pull。
       - PROXY_KEY=${PROXY_KEY:-}
       - ADMIN_KEY=${ADMIN_KEY:-}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
-      # 上游网关的联网能力，按次计费；不需要时在 .env 里写成空值
+      # 上游网关的联网能力，由网关执行并按次计费；如需关闭，在 .env 中置为空值
       - WEB_SEARCH_UPSTREAM=${WEB_SEARCH_UPSTREAM-exa}
       - WEB_FETCH_UPSTREAM=${WEB_FETCH_UPSTREAM-browserbase_fetch}
       # Windows 客户端兼容：把工具的 shell 参数收窄成必填的 powershell，
@@ -27,8 +26,8 @@ services:
       # 在参数完整后再把实际 shell 改写成 SHELL_COMPAT 的值。
       # 只有 SHELL_COMPAT 打开时生效；留空 = 关闭（默认）。
       - SHELL_COMPAT_ENFORCE=${SHELL_COMPAT_ENFORCE:-false}
-      # 压缩相关：留空 = 用程序默认值（当前为首轮 16384 / 重试 32768 / max 档
-      # / 尾部 16000），要覆盖就在 .env 里写同名变量。
+      # 压缩相关：留空 = 使用程序默认值（首轮输出预算 16384、重试上限 32768、
+      # 推理档位 max、逐字尾部 16000）；如需覆盖，在 .env 中设置同名变量。
       - COMPACTION_RECENT_TOKENS=${COMPACTION_RECENT_TOKENS:-}
       - COMPACTION_REASONING_EFFORT=${COMPACTION_REASONING_EFFORT:-}
       - COMPACTION_MIN_OUTPUT_TOKENS=${COMPACTION_MIN_OUTPUT_TOKENS:-}
