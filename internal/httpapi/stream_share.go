@@ -43,7 +43,7 @@ func newStreamShareHub() *streamShareHub {
 // Include the original Responses semantics, the effective Chat generation,
 // and routing preferences. Conversion alone is lossy (e.g. tool namespaces and
 // metadata), so identical Chat bodies need not produce identical Responses.
-func responsesShareKey(modelID string, requestBody, chatBody map[string]any, modelConfig model.PerModelConfig) string {
+func responsesShareKey(ctx context.Context, modelID string, requestBody, chatBody map[string]any, modelConfig model.PerModelConfig) string {
 	withoutTransport := func(body map[string]any) map[string]any {
 		view := make(map[string]any, len(body))
 		for key, value := range body {
@@ -55,9 +55,12 @@ func responsesShareKey(modelID string, requestBody, chatBody map[string]any, mod
 		}
 		return view
 	}
+	caller, _ := callerKeyFrom(ctx)
+	accountPin, _ := upstream.AccountPinFrom(ctx)
 	view := map[string]any{
 		"model": modelID, "responses": withoutTransport(requestBody),
 		"chat": withoutTransport(chatBody), "routing": modelConfig,
+		"key_id": caller.ID, "account_pin": accountPin,
 	}
 	raw, _ := json.Marshal(view)
 	sum := sha256.Sum256(raw)
@@ -97,12 +100,14 @@ type sharedResponsesStream struct {
 	readError string
 }
 
-func (h *streamShareHub) join(key string, run func(*sharedResponsesStream)) *sharedResponsesStream {
+func (h *streamShareHub) join(parent context.Context, key string, run func(*sharedResponsesStream)) *sharedResponsesStream {
 	h.mu.Lock()
 	job := h.jobs[key]
 	started := false
 	if job == nil || job.runDone || job.ctx.Err() != nil {
-		ctx, cancel := context.WithCancel(context.Background())
+		// A subscriber may disconnect while others still need the stream.
+		// Keep its authorization values, but let the hub own cancellation.
+		ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 		job = &sharedResponsesStream{
 			hub:       h,
 			key:       key,
@@ -243,7 +248,8 @@ func (s *Server) handleStreamingResponses(
 	modelID string,
 	modelConfig model.PerModelConfig,
 ) {
-	job := s.shares.join(responsesShareKey(modelID, requestBody, chatBody, modelConfig), func(job *sharedResponsesStream) {
+	ctx := request.Context()
+	job := s.shares.join(ctx, responsesShareKey(ctx, modelID, requestBody, chatBody, modelConfig), func(job *sharedResponsesStream) {
 		s.runSharedResponses(job, chatBody, bridgeContext, modelID, modelConfig)
 	})
 	defer job.release()

@@ -33,8 +33,10 @@ type authAttempts struct {
 	blockLevel   time.Duration
 }
 
-// authThrottle is an in-memory failure counter keyed by client address. State
-// is intentionally not persisted: restarting the process clears the counters.
+// authThrottle is an in-memory failure counter keyed by client address. Each
+// API surface owns a separate instance, so authenticating to the client API
+// cannot clear failed admin logins or inherit an admin cooldown. State is not
+// persisted: restarting the process clears the counters.
 type authThrottle struct {
 	mu      sync.Mutex
 	now     func() time.Time

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -178,7 +179,7 @@ func TestStreamingChatSynthesizesChunkFromBufferedCompletion(t *testing.T) {
 
 func TestResponsesShareKeyCoversSamplingParameters(t *testing.T) {
 	key := func(modelID string, body map[string]any) string {
-		return responsesShareKey(modelID, body, body, model.PerModelConfig{})
+		return responsesShareKey(context.Background(), modelID, body, body, model.PerModelConfig{})
 	}
 	base := map[string]any{"messages": []any{"x"}, "tools": nil, "reasoning_effort": "low", "temperature": 0.2, "stream": true}
 	same := key("m", map[string]any{"messages": []any{"x"}, "tools": nil, "reasoning_effort": "low", "temperature": 0.2, "stream": true, "stream_options": map[string]any{"include_usage": true}})

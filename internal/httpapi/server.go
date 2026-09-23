@@ -23,14 +23,15 @@ import (
 )
 
 type Server struct {
-	store    *store.Store
-	upstream *upstream.Service
-	assets   fs.FS
-	file     http.Handler
-	index    []byte
-	csp      string
-	shares   *streamShareHub
-	throttle *authThrottle
+	store          *store.Store
+	upstream       *upstream.Service
+	assets         fs.FS
+	file           http.Handler
+	index          []byte
+	csp            string
+	shares         *streamShareHub
+	adminThrottle  *authThrottle
+	clientThrottle *authThrottle
 }
 
 type chainResult struct {
@@ -41,6 +42,9 @@ type chainResult struct {
 	Trace   []model.Trace
 	NetErr  string
 	Started time.Time
+	// Usage retains all compaction passes, including a discarded summary or
+	// a failed retry, independently of the response returned to the client.
+	Usage *model.UsageStats
 	// Degraded marks a compaction that was returned as a fallback item after
 	// the summarizer failed. The client still sees a successful turn, so the
 	// history needs the flag to tell the two apart.
@@ -55,14 +59,15 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 		return nil, fmt.Errorf("read embedded index.html: %w", err)
 	}
 	return &Server{
-		store:    st,
-		upstream: service,
-		assets:   assets,
-		file:     http.FileServer(http.FS(assets)),
-		index:    index,
-		csp:      contentSecurityPolicy(index),
-		shares:   newStreamShareHub(),
-		throttle: newAuthThrottle(),
+		store:          st,
+		upstream:       service,
+		assets:         assets,
+		file:           http.FileServer(http.FS(assets)),
+		index:          index,
+		csp:            contentSecurityPolicy(index),
+		shares:         newStreamShareHub(),
+		adminThrottle:  newAuthThrottle(),
+		clientThrottle: newAuthThrottle(),
 	}, nil
 }
 
@@ -95,13 +100,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet && path == "/api/meta" {
 		cfg := s.store.Config()
 		payload := map[string]any{
-			"authRequired": s.store.AuthEnabled(),
+			"authRequired": s.store.AdminKey() != "",
 			"configured":   s.store.IsConfigured(),
 		}
 		// The console asks for this before login, so it must stay reachable
 		// without a credential - but the deployment's public address is only
 		// handed to a caller that either has the key or does not need one.
-		if !s.store.AuthEnabled() || s.adminRequestAuthorized(request) {
+		if s.adminRequestAuthorized(request) {
 			payload["proxyBase"] = s.publicProxyBase(cfg)
 		}
 		writeJSON(writer, http.StatusOK, payload)
@@ -317,7 +322,7 @@ func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
 		"proxyKey":      cfg.ProxyKey,
 		"adminKey":      cfg.AdminKey,
 		"publicBaseUrl": cfg.PublicBaseURL,
-		"authRequired":  s.store.AuthEnabled(),
+		"authRequired":  s.store.AdminKey() != "",
 		"exposeCatalog": cfg.ExposeCatalog,
 		// The effective values ride along with the console's own snapshot, so
 		// no extra request is needed to see what is actually in force.
@@ -359,7 +364,7 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 		"proxyKey":      cfg.ProxyKey,
 		"adminKey":      cfg.AdminKey,
 		"publicBaseUrl": cfg.PublicBaseURL,
-		"authRequired":  s.store.AuthEnabled(),
+		"authRequired":  s.store.AdminKey() != "",
 		"proxyBase":     s.publicProxyBase(cfg),
 		"exposeCatalog": cfg.ExposeCatalog,
 	})

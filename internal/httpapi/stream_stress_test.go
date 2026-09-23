@@ -41,7 +41,7 @@ func TestSharedStreamSoak(t *testing.T) {
 			for ctx.Err() == nil {
 				key := fmt.Sprintf("worker-%d-round-%d", worker, rounds.Add(1))
 				resume := make(chan struct{})
-				job := hub.join(key, func(job *sharedResponsesStream) {
+				job := hub.join(context.Background(), key, func(job *sharedResponsesStream) {
 					for chunk := range 64 {
 						if err := job.publishEvents([]responsesbridge.Event{{Type: "response.output_text.delta", Data: map[string]any{"type": "response.output_text.delta", "delta": string(bytes.Repeat([]byte("x"), 1024)), "chunk": chunk}}}); err != nil {
 							t.Error(err)
@@ -60,8 +60,8 @@ func TestSharedStreamSoak(t *testing.T) {
 					t.Error(err)
 				}
 				job.release() // Disconnect, then reconnect within the grace window.
-				reconnected := hub.join(key, func(*sharedResponsesStream) { t.Error("reconnect generated a second run") })
-				second := hub.join(key, func(*sharedResponsesStream) { t.Error("duplicate subscriber generated a second run") })
+				reconnected := hub.join(context.Background(), key, func(*sharedResponsesStream) { t.Error("reconnect generated a second run") })
+				second := hub.join(context.Background(), key, func(*sharedResponsesStream) { t.Error("duplicate subscriber generated a second run") })
 				close(resume)
 				read := func(sub *shareSub) []byte {
 					var result []byte

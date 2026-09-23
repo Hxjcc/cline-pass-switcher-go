@@ -30,7 +30,8 @@ func newThrottleServer(t *testing.T) (*Server, *time.Time) {
 		t.Fatal(err)
 	}
 	clock := time.Now()
-	server.throttle.now = func() time.Time { return clock }
+	server.adminThrottle.now = func() time.Time { return clock }
+	server.clientThrottle.now = func() time.Time { return clock }
 	return server, &clock
 }
 
@@ -166,5 +167,97 @@ func TestMissingCredentialDoesNotSpendTheThrottleBudget(t *testing.T) {
 	}
 	if blocked := sendKey(t, server, remote, "correct-key"); blocked.Code != http.StatusTooManyRequests {
 		t.Fatalf("wrong credentials must still trigger the cooldown: %d", blocked.Code)
+	}
+}
+
+func sendClientKey(server *Server, remote, key string) *httptest.ResponseRecorder {
+	request := localRequest(http.MethodGet, "/v1/models", nil)
+	request.RemoteAddr = remote
+	request.Header.Set("Authorization", "Bearer "+key)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}
+
+func TestClientCredentialsCannotResetAdminThrottle(t *testing.T) {
+	for _, tc := range []struct {
+		key    string
+		status int
+	}{
+		{"correct-key", http.StatusOK},
+		{"issued-key", http.StatusOK},
+		{"disabled-key", http.StatusForbidden},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			server, _ := newThrottleServer(t)
+			if err := server.store.UpdateConfig(func(c *model.Config) {
+				c.AdminKey = "admin-key"
+				c.ProxyKeys = []model.ProxyKeyGrant{
+					{ID: "enabled", Key: "issued-key", Enabled: true},
+					{ID: "disabled", Key: "disabled-key", Enabled: false},
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			const remote = "203.0.113.10:4444"
+			for attempt := 1; attempt <= authFailureLimit; attempt++ {
+				want := http.StatusUnauthorized
+				if attempt == authFailureLimit {
+					want = http.StatusTooManyRequests
+				}
+				if response := sendKey(t, server, remote, "wrong-admin"); response.Code != want {
+					t.Fatalf("admin guess %d: got %d, want %d", attempt, response.Code, want)
+				}
+				// Client calls cannot clear failures or be blocked by an admin
+				// cooldown, even when the master key is the credential used.
+				if response := sendClientKey(server, remote, tc.key); response.Code != tc.status {
+					t.Fatalf("client request: got %d, want %d", response.Code, tc.status)
+				}
+			}
+			if response := sendKey(t, server, remote, "admin-key"); response.Code != http.StatusTooManyRequests {
+				t.Fatalf("client call cleared the admin cooldown: %d", response.Code)
+			}
+		})
+	}
+}
+
+func TestAdminLoginCannotResetClientThrottle(t *testing.T) {
+	server, _ := newThrottleServer(t)
+	const remote = "203.0.113.11:4444"
+	for attempt := 1; attempt <= authFailureLimit; attempt++ {
+		want := http.StatusUnauthorized
+		if attempt == authFailureLimit {
+			want = http.StatusTooManyRequests
+		}
+		if response := sendClientKey(server, remote, "wrong-key"); response.Code != want {
+			t.Fatalf("client guess %d: got %d, want %d", attempt, response.Code, want)
+		}
+		if response := sendKey(t, server, remote, "correct-key"); response.Code != http.StatusOK {
+			t.Fatalf("client guessing locked out the console: %d", response.Code)
+		}
+	}
+	if response := sendClientKey(server, remote, "correct-key"); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("admin login cleared the client cooldown: %d", response.Code)
+	}
+}
+
+func TestDisabledKeyCannotResetClientThrottle(t *testing.T) {
+	server, _ := newThrottleServer(t)
+	if err := server.store.UpdateConfig(func(c *model.Config) {
+		c.ProxyKeys = []model.ProxyKeyGrant{{ID: "disabled", Key: "disabled-key", Enabled: false}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const remote = "203.0.113.12:4444"
+	for attempt := 1; attempt < authFailureLimit; attempt++ {
+		if response := sendClientKey(server, remote, "wrong-key"); response.Code != http.StatusUnauthorized {
+			t.Fatalf("client guess %d: got %d, want 401", attempt, response.Code)
+		}
+		if response := sendClientKey(server, remote, "disabled-key"); response.Code != http.StatusForbidden {
+			t.Fatalf("disabled credential: got %d, want 403", response.Code)
+		}
+	}
+	if response := sendClientKey(server, remote, "wrong-key"); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("disabled credential cleared the client failures: %d", response.Code)
 	}
 }

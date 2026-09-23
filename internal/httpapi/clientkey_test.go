@@ -25,10 +25,11 @@ const costedCompletion = `{"choices":[{"message":{"role":"assistant","content":"
 
 // keyedUpstream records which credential each upstream call presented.
 type keyedUpstream struct {
-	mu     sync.Mutex
-	keys   []string
-	body   string
-	status int
+	mu          sync.Mutex
+	keys        []string
+	body        string
+	status      int
+	contentType string
 }
 
 func (u *keyedUpstream) server(t *testing.T) *httptest.Server {
@@ -40,9 +41,9 @@ func (u *keyedUpstream) server(t *testing.T) *httptest.Server {
 		}
 		u.mu.Lock()
 		u.keys = append(u.keys, request.Header.Get("Authorization"))
-		body, status := u.body, u.status
+		body, status, contentType := u.body, u.status, u.contentType
 		u.mu.Unlock()
-		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Content-Type", firstNonEmpty(contentType, "application/json"))
 		if status != 0 && status != http.StatusOK {
 			writer.WriteHeader(status)
 			_, _ = io.WriteString(writer, `{"error":{"message":"Invalid API key","type":"authentication_error"}}`)

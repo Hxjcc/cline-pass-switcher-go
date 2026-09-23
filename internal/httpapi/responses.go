@@ -187,6 +187,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Usage:           result.Usage,
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
@@ -218,6 +219,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Usage:           result.Usage,
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
@@ -242,6 +244,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&compactEntry, result.Out, compactEntry.MS)
+	compactEntry.Usage = result.Usage
 	s.record(request.Context(), compactEntry)
 	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
 	if !stream {
@@ -300,6 +303,7 @@ func (s *Server) runCompactionChain(
 	degrade compactionDegrade,
 ) (chainResult, map[string]any, error) {
 	result := s.runNonStreamChain(ctx, modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	result.Usage = usageFromValue(result.Out["usage"])
 	compaction, err := convertCompaction(result, bridgeContext, convert)
 	if err == nil {
 		return result, compaction, nil
@@ -314,6 +318,7 @@ func (s *Server) runCompactionChain(
 			bridgeContext.MappedReasoningEffort = effort
 		}
 		escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
+		escalated.Usage = addUsage(result.Usage, usageFromValue(escalated.Out["usage"]))
 		escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
 		compaction, err = convertCompaction(escalated, bridgeContext, convert)
 		if err == nil {
@@ -443,6 +448,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Usage:           result.Usage,
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
@@ -474,6 +480,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
 			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Usage:           result.Usage,
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
@@ -498,6 +505,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)
+	entry.Usage = result.Usage
 	s.record(request.Context(), entry)
 	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)

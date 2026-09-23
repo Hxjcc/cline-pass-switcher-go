@@ -215,6 +215,30 @@ func applyStreamStats(entry *model.HistoryEntry, stats *streamStats) {
 	}
 }
 
+// addUsage accumulates independent upstream passes. Missing cost stays unknown;
+// only amounts actually reported by the upstream are added.
+func addUsage(total, next *model.UsageStats) *model.UsageStats {
+	if next == nil {
+		return total
+	}
+	if total == nil {
+		total = &model.UsageStats{}
+	}
+	total.PromptTokens += next.PromptTokens
+	total.CompletionTokens += next.CompletionTokens
+	total.ReasoningTokens += next.ReasoningTokens
+	total.CachedTokens += next.CachedTokens
+	total.TotalTokens += next.TotalTokens
+	if next.Cost != nil {
+		cost := *next.Cost
+		if total.Cost != nil {
+			cost += *total.Cost
+		}
+		total.Cost = &cost
+	}
+	return total
+}
+
 func recordedEffort(mapped string, body map[string]any) string {
 	if value := strings.TrimSpace(mapped); value != "" {
 		return value

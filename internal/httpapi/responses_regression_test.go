@@ -30,15 +30,15 @@ func TestResponsesShareKeySeparatesConversionAndRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := model.PerModelConfig{}
-	base := responsesShareKey("test", left, leftChat, cfg)
-	if base == responsesShareKey("test", right, rightChat, cfg) {
+	base := responsesShareKey(context.Background(), "test", left, leftChat, cfg)
+	if base == responsesShareKey(context.Background(), "test", right, rightChat, cfg) {
 		t.Fatal("different tool bindings share a key")
 	}
-	if base == responsesShareKey("test", left, leftChat, model.PerModelConfig{Upstreams: []string{"other"}}) {
+	if base == responsesShareKey(context.Background(), "test", left, leftChat, model.PerModelConfig{Upstreams: []string{"other"}}) {
 		t.Fatal("changed routing shares a key")
 	}
 	leftChat["reasoning_effort"] = "high"
-	if base == responsesShareKey("test", left, leftChat, cfg) {
+	if base == responsesShareKey(context.Background(), "test", left, leftChat, cfg) {
 		t.Fatal("changed effective generation shares a key")
 	}
 }
@@ -304,7 +304,7 @@ func TestCancelledResponsesRunIsRecordedAsClientCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := server.shares.join("cancel-test", func(job *sharedResponsesStream) {
+	job := server.shares.join(context.Background(), "cancel-test", func(job *sharedResponsesStream) {
 		server.runSharedResponses(job, chat, bridge, "test", model.PerModelConfig{})
 	})
 	defer job.release()

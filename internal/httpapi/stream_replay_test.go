@@ -247,7 +247,7 @@ func TestSharedReconnectReplaysSpilledEventsAndCleansOldJob(t *testing.T) {
 	hub.budget = replayTestBudget(t)
 	hub.budget.limits.memoryPerStream = 0
 	release := make(chan struct{})
-	job := hub.join("same", func(job *sharedResponsesStream) {
+	job := hub.join(context.Background(), "same", func(job *sharedResponsesStream) {
 		if err := job.publishEvents([]responsesbridge.Event{{Type: "response.output_text.delta", Data: map[string]any{"type": "response.output_text.delta", "delta": strings.Repeat("hello", 100)}}}); err != nil {
 			t.Error(err)
 		}
@@ -262,7 +262,7 @@ func TestSharedReconnectReplaysSpilledEventsAndCleansOldJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	job.release()
-	reconnected := hub.join("same", func(*sharedResponsesStream) { t.Error("reconnect made a new upstream request") })
+	reconnected := hub.join(context.Background(), "same", func(*sharedResponsesStream) { t.Error("reconnect made a new upstream request") })
 	if reconnected != job {
 		t.Fatal("reconnect did not join original stream")
 	}
@@ -281,7 +281,7 @@ func TestSharedReconnectReplaysSpilledEventsAndCleansOldJob(t *testing.T) {
 	close(release)
 	waitJobDone(t, job)
 	// A new completed-key replacement must not prevent the old log's cleanup.
-	replacement := hub.join("same", func(j *sharedResponsesStream) { j.markReady() })
+	replacement := hub.join(context.Background(), "same", func(j *sharedResponsesStream) { j.markReady() })
 	waitJobDone(t, replacement)
 	reconnected.release()
 	replacement.release()

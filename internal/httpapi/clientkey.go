@@ -89,7 +89,7 @@ func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Reques
 		return s.authorizeOpen(writer, request)
 	}
 	client := clientKey(request.RemoteAddr)
-	if delay, blocked := s.throttle.blocked(client); blocked {
+	if delay, blocked := s.adminThrottle.blocked(client); blocked {
 		writeThrottled(writer, delay)
 		return false
 	}
@@ -98,7 +98,7 @@ func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Reques
 		presented = bearerToken(request)
 	}
 	if constantTimeEqual(presented, expected) {
-		s.throttle.succeed(client)
+		s.adminThrottle.succeed(client)
 		return true
 	}
 	if presented == "" {
@@ -110,7 +110,7 @@ func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Reques
 		})
 		return false
 	}
-	if delay := s.throttle.fail(client); delay > 0 {
+	if delay := s.adminThrottle.fail(client); delay > 0 {
 		writeThrottled(writer, delay)
 		return false
 	}
@@ -130,7 +130,7 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		return s.authorizeOpen(writer, request)
 	}
 	client := clientKey(request.RemoteAddr)
-	if delay, blocked := s.throttle.blocked(client); blocked {
+	if delay, blocked := s.clientThrottle.blocked(client); blocked {
 		writeThrottled(writer, delay)
 		return false
 	}
@@ -139,20 +139,20 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		presented = strings.TrimSpace(request.Header.Get("X-Admin-Key"))
 	}
 	if constantTimeEqual(presented, master) {
-		s.throttle.succeed(client)
+		s.clientThrottle.succeed(client)
 		return true
 	}
 	grant, found := s.store.FindProxyKey(presented)
 	if !found {
 		if presented == "" {
 			// See authorizeAdmin: a client that has not been configured yet
-			// must not consume the operator's throttle budget.
+			// must not consume the client's throttle budget.
 			writeJSON(writer, http.StatusUnauthorized, map[string]any{
 				"error": map[string]any{"message": "unauthorized: 代理密钥缺失或错误", "type": "auth_error"},
 			})
 			return false
 		}
-		if delay := s.throttle.fail(client); delay > 0 {
+		if delay := s.clientThrottle.fail(client); delay > 0 {
 			writeThrottled(writer, delay)
 			return false
 		}
@@ -161,7 +161,6 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		})
 		return false
 	}
-	s.throttle.succeed(client)
 	if !grant.Enabled {
 		writeJSON(writer, http.StatusForbidden, map[string]any{
 			"error": map[string]any{
@@ -183,6 +182,7 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		})
 		return false
 	}
+	s.clientThrottle.succeed(client)
 	ctx := withCallerKey(request.Context(), callerKey{
 		ID: grant.ID, Name: grant.Name, AccountID: grant.AccountID, Issued: true,
 	})
@@ -211,11 +211,18 @@ func (s *Server) keyLimitMessage(grant model.ProxyKeyGrant) string {
 	return ""
 }
 
-// authorizeOpen keeps the historical behaviour for a machine with no
-// credentials configured at all: the network boundary is the guard, and
-// browserRequestAllowed has already enforced it.
+// openRequestAllowed requires a trusted local connection whenever this API
+// surface has no credential. A key for the other surface must not disable
+// this boundary.
+func (s *Server) openRequestAllowed(request *http.Request) bool {
+	policy := s.store.AccessPolicy()
+	return localRequestTrusted(request, policy) && loopbackHost(request.Host) &&
+		s.browserRequestAllowed(request)
+}
+
+// authorizeOpen preserves local access to an API with no credential configured.
 func (s *Server) authorizeOpen(writer http.ResponseWriter, request *http.Request) bool {
-	if s.browserRequestAllowed(request) {
+	if s.openRequestAllowed(request) {
 		return true
 	}
 	writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
@@ -228,7 +235,7 @@ func (s *Server) authorizeOpen(writer http.ResponseWriter, request *http.Request
 func (s *Server) adminRequestAuthorized(request *http.Request) bool {
 	expected := s.store.AdminKey()
 	if expected == "" {
-		return true
+		return s.openRequestAllowed(request)
 	}
 	presented := strings.TrimSpace(request.Header.Get("X-Admin-Key"))
 	if presented == "" {
