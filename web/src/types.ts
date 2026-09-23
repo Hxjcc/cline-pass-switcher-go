@@ -136,10 +136,54 @@ export interface AccountsResponse {
 
 export interface SecurityResponse {
   proxyKey: string
+  /** Console credential. Empty falls back to proxyKey on the server. */
+  adminKey: string
   publicBaseUrl: string
   authRequired: boolean
   exposeCatalog: boolean
   proxyBase?: string
+}
+
+/** One console-issued client key, as listed by GET /api/keys. */
+export interface ProxyKeyItem {
+  id: string
+  name?: string
+  /** Only present when the list was fetched with reveal=1. */
+  key?: string
+  keyPreview?: string
+  hasKey: boolean
+  enabled: boolean
+  accountId?: string
+  spendLimitUsd?: number
+  note?: string
+  createdAt?: number
+  requests: number
+  spentUsd: number
+  lastUsed?: number
+  pinnedAccount?: string
+}
+
+export interface KeysResponse {
+  keys: ProxyKeyItem[]
+  maxKeys?: number
+}
+
+/** Editable row of the keys panel; counters are display-only copies. */
+export interface ProxyKeyDraft {
+  id: string
+  name: string
+  key: string
+  enabled: boolean
+  accountId: string
+  spendLimitUsd: number
+  note: string
+  createdAt: number
+  requests: number
+  spentUsd: number
+  lastUsed?: number
+  keyPreview?: string
+  hasKey: boolean
+  dirty: boolean
 }
 
 export interface MetaResponse {

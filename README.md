@@ -273,7 +273,8 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 | `PORT` | `port` | `3123` | 服务监听端口。 |
 | `BIND_HOST` | - | `127.0.0.1` | 监听地址（源码运行默认 `127.0.0.1`，容器中设为 `0.0.0.0`）。 |
 | `DATA_DIR` | - | `.` (容器为 `/data`) | 运行数据、配置和日志的存储目录。 |
-| `PROXY_KEY` | `proxyKey` | 留空 | **代理密钥**。设置后，API 调用与 Web 控制台均需提供此密钥（`Bearer <key>` 或 `X-Admin-Key`）。 |
+| `PROXY_KEY` | `proxyKey` | 留空 | **代理主密钥（客户端）**。设置后，模型接口需要 `Bearer <key>`；在未设置 `ADMIN_KEY` 时它也能打开控制台（保持单机用法不变）。 |
+| `ADMIN_KEY` | `adminKey` | 留空 | **管理密钥（控制台）**。留空 = 沿用 `PROXY_KEY`。设置后，控制台与管理接口只认它；`PROXY_KEY` 和下发出去的代理密钥都只能调用模型，无法读取账号或改配置。 |
 | `PUBLIC_BASE_URL` | `publicBaseUrl` | 留空 | 服务对外访问的基准 URL（如放在反代后设为 `https://api.example.com`）。 |
 | `CLINE_PASS_KEY` | - | 留空 | 启动时默认注入账号池的初始 Cline Pass API Key。 |
 | `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端工具：`exa` / `tako` / `perplexity`；设为 `off` 或留空表示关闭。 |
@@ -322,6 +323,18 @@ server {
 ```
 
 > **安全提示**：对外开放网络访问时，**务必在控制台或环境变量中设置强密码 `PROXY_KEY`**！未设置密钥且暴露端口将导致控制台管理权限完全失窃。
+
+<details>
+<summary><strong>Q: 怎么把代理分享给别人用，又不怕他刷爆我的额度？</strong></summary>
+
+在控制台「代理密钥」页新增一个客户端密钥（点「随机生成」会得到一个 <code>sk-</code> 开头的随机串），然后按需收紧两件事：
+<ul>
+  <li><b>绑定账号</b>：选定之后，这个密钥只会用那一个账号，<b>不做故障转移</b>——那个账号不可用时请求直接失败，而不是悄悄花掉别的账号的额度。</li>
+  <li><b>额度上限（USD）</b>：按上游返回的实际费用累计，累计到上限后该密钥的请求会被拒绝（HTTP 429，<code>code=key_spend_limit</code>），主密钥和你们自己的客户端不受影响。累计值写在 <code>data/metadata.json</code> 里，重启不会清零；控制台或 <code>POST /api/keys/reset</code> 可以手动清零。</li>
+</ul>
+先把 <code>ADMIN_KEY</code> 设上，控制台就不会被客户端密钥打开：那把 <code>sk-</code> 只能调用模型，读不到账号池和上游密钥。<br>
+注意：额度按 <b>上游报告的费用</b> 累计，上游没返回费用的请求会计 0（不会被凭空估算）。
+</details>
 
 ---
 

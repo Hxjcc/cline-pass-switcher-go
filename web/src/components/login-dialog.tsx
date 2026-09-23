@@ -58,10 +58,12 @@ export function LoginDialog({
             <KeyRound className="size-4" />
             控制台鉴权
           </DialogTitle>
-          <DialogDescription>输入当前代理密钥以读取和管理服务配置。</DialogDescription>
+          <DialogDescription>
+            输入管理密钥（未单独设置时就是代理主密钥）以读取和管理服务配置。
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
-          <Label htmlFor="login-key">代理密钥</Label>
+          <Label htmlFor="login-key">管理密钥</Label>
           <Input
             id="login-key"
             type="password"

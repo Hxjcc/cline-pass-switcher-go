@@ -17,6 +17,7 @@ import { BrandMark } from "@/components/brand-mark"
 import { AccountsPanel } from "@/components/accounts-panel"
 import { CatalogPanel } from "@/components/catalog-panel"
 import { HistoryPanel } from "@/components/history-panel"
+import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
 import { ModelsPanel } from "@/components/models-panel"
@@ -33,11 +34,13 @@ import type {
   AccountTestResponse,
   AccountsResponse,
   HistoryResponse,
+  KeysResponse,
   MetaResponse,
   ModelConfig,
   ModelsResponse,
   OfficialResponse,
   ProbeResponse,
+  ProxyKeyDraft,
   QuotaResponse,
   SecurityResponse,
   TestResponse,
@@ -49,8 +52,9 @@ const SNAPSHOT_STORAGE = "cline-pass-switcher-snapshot"
 const TAB_STORAGE = "cline-pass-switcher-tab"
 const HISTORY_PAGE_SIZE = 50
 
-// The proxy key is the only credential for the console and the API. It is kept
-// in sessionStorage by default (gone when the tab closes) and only written to
+// The admin key is the only credential for the console and the management API.
+// The client keys issued below never open this page. The credential is kept in
+// sessionStorage by default (gone when the tab closes) and only written to
 // localStorage when the operator ticks "remember this device" at login.
 function readPersistentAdminKey(): string {
   try {
@@ -86,6 +90,7 @@ function storeAdminKey(key: string, remember: boolean) {
 const TABS = [
   { value: "overview", label: "模型与上游", icon: Boxes },
   { value: "accounts", label: "账号池", icon: Users },
+  { value: "keys", label: "代理密钥", icon: KeyRound },
   { value: "security", label: "访问与安全", icon: ShieldCheck },
   { value: "test", label: "测试台", icon: TestTube2 },
   { value: "history", label: "请求历史", icon: Activity },
@@ -99,14 +104,16 @@ interface CachedSnapshot {
   historyTotal?: number
   historyHasMore?: boolean
   accounts: AccountsResponse
+  keys: KeysResponse
   security: SecurityResponse
 }
 
 async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
-  const [meta, models, accounts, security, history] = await Promise.all([
+  const [meta, models, accounts, keys, security, history] = await Promise.all([
     api<MetaResponse>("/api/meta"),
     api<ModelsResponse>("/api/models", { key }),
     api<AccountsResponse>("/api/accounts", { key }),
+    api<KeysResponse>("/api/keys", { key }),
     api<SecurityResponse>("/api/security", { key }),
     api<HistoryResponse>(`/api/history?limit=${HISTORY_PAGE_SIZE}`, { key }),
   ])
@@ -114,6 +121,7 @@ async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
     meta,
     models,
     accounts,
+    keys,
     security,
     history: history.history,
     historyTotal: history.total,
@@ -131,6 +139,7 @@ function readSnapshot(): CachedSnapshot | null {
       !parsed.meta ||
       !Array.isArray(parsed.history) ||
       !parsed.accounts ||
+      !parsed.keys ||
       !parsed.security
     ) {
       return null
@@ -149,6 +158,7 @@ function App() {
   const [accounts, setAccounts] = useState<AccountsResponse | null>(
     initialSnapshot?.accounts ?? null,
   )
+  const [keys, setKeys] = useState<KeysResponse | null>(initialSnapshot?.keys ?? null)
   const [security, setSecurity] = useState<SecurityResponse | null>(
     initialSnapshot?.security ?? null,
   )
@@ -242,6 +252,7 @@ function App() {
     setMeta(snapshot.meta)
     setModels(snapshot.models)
     setAccounts(snapshot.accounts)
+    setKeys(snapshot.keys)
     setSecurity(snapshot.security)
     setHistory(snapshot.history)
     setHistoryTotal(snapshot.historyTotal ?? snapshot.history.length)
@@ -275,16 +286,16 @@ function App() {
   }, [authKey, handleError])
 
   useEffect(() => {
-    if (!models || !meta || !accounts || !security) return
+    if (!models || !meta || !accounts || !keys || !security) return
     try {
       sessionStorage.setItem(
         SNAPSHOT_STORAGE,
-        JSON.stringify({ models, meta, history, accounts, security } satisfies CachedSnapshot),
+        JSON.stringify({ models, meta, history, accounts, keys, security } satisfies CachedSnapshot),
       )
     } catch {
       // Storage can be unavailable in restricted browser contexts.
     }
-  }, [accounts, history, meta, models, security])
+  }, [accounts, history, keys, meta, models, security])
 
   useEffect(() => {
     sessionStorage.setItem(TAB_STORAGE, tab)
@@ -326,6 +337,39 @@ function App() {
       key: authKey,
       body: { key, id },
     })
+
+  // Issued client keys: the console only ever sends the list; the server owns
+  // identities, spend counters and the spend limit verdict.
+  const saveKeys = async (value: ProxyKeyDraft[]) => {
+    const response = await api<KeysResponse>("/api/keys", {
+      key: authKey,
+      body: {
+        keys: value.map((row) => ({
+          id: row.id.startsWith("draft_") ? "" : row.id,
+          name: row.name,
+          key: row.key,
+          enabled: row.enabled,
+          accountId: row.accountId,
+          spendLimitUsd: row.spendLimitUsd,
+          note: row.note,
+          createdAt: row.createdAt,
+        })),
+      },
+    })
+    setKeys(response)
+    return response
+  }
+
+  const revealKeys = () => api<KeysResponse>("/api/keys?reveal=1", { key: authKey })
+
+  const resetKeyUsage = async (id: string, all = false) => {
+    const response = await api<KeysResponse>("/api/keys/reset", {
+      key: authKey,
+      body: { id, all },
+    })
+    setKeys(response)
+    return response
+  }
 
   // Stored keys stay hidden until the user asks for them; the reveal response
   // is kept in the panel and never written to the cached snapshot.
@@ -625,6 +669,18 @@ function App() {
           <TabsContent value="security">
             {security && (
               <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+            )}
+          </TabsContent>
+
+          <TabsContent value="keys">
+            {keys && accounts && (
+              <KeysPanel
+                data={keys}
+                accounts={accounts}
+                onSave={saveKeys}
+                onReveal={revealKeys}
+                onReset={resetKeyUsage}
+              />
             )}
           </TabsContent>
 

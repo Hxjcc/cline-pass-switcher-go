@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Check, Copy, Eye, EyeOff, Globe2, KeyRound, Save, ShieldCheck } from "lucide-react"
+import { Check, Copy, Dices, Eye, EyeOff, Globe2, KeyRound, Save, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -23,14 +23,26 @@ import type { SecurityResponse } from "@/types"
 interface SecurityPanelProps {
   data: SecurityResponse
   proxyBase: string
-  onSave: (value: Pick<SecurityResponse, "proxyKey" | "publicBaseUrl" | "exposeCatalog">) => Promise<SecurityResponse>
+  onSave: (
+    value: Pick<SecurityResponse, "proxyKey" | "adminKey" | "publicBaseUrl" | "exposeCatalog">,
+  ) => Promise<SecurityResponse>
+}
+
+// Same shape the keys panel mints: sk- plus 48 hex characters, generated in the
+// page.
+function randomKey(): string {
+  const bytes = new Uint8Array(24)
+  crypto.getRandomValues(bytes)
+  return "sk-" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
 export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
   const [draft, setDraft] = useDraft(data)
   const [showKey, setShowKey] = useState(false)
+  const [showAdminKey, setShowAdminKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [copied, setCopied] = useState(false)
+  const adminKeyConfigured = draft.adminKey.trim() !== ""
 
   const copyProxyBase = async () => {
     try {
@@ -48,6 +60,7 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
     try {
       const saved = await onSave({
         proxyKey: draft.proxyKey.trim(),
+        adminKey: draft.adminKey.trim(),
         publicBaseUrl: draft.publicBaseUrl.trim(),
         exposeCatalog: draft.exposeCatalog,
       })
@@ -76,7 +89,49 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
         <CardContent className="space-y-5">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="proxy-key">代理密钥</Label>
+              <Label htmlFor="admin-key">管理密钥（本控制台）</Label>
+              <Badge variant={adminKeyConfigured ? "default" : "outline"}>
+                {adminKeyConfigured ? "独立密钥" : "沿用代理主密钥"}
+              </Badge>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                id="admin-key"
+                type={showAdminKey ? "text" : "password"}
+                value={draft.adminKey}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, adminKey: event.target.value }))
+                }
+                placeholder="留空 = 用下面的代理主密钥登录"
+                className="font-mono"
+                autoComplete="new-password"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setShowAdminKey((value) => !value)}
+                aria-label={showAdminKey ? "隐藏管理密钥" : "显示管理密钥"}
+              >
+                {showAdminKey ? <EyeOff /> : <Eye />}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setDraft((current) => ({ ...current, adminKey: randomKey() }))}
+                aria-label="随机生成管理密钥"
+                title="随机生成一个 sk- 开头的密钥"
+              >
+                <Dices />
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              设了它以后，只有这个密钥能打开控制台；代理主密钥和代理密钥只能调用模型，拿不到账号列表。
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="proxy-key">代理主密钥（客户端）</Label>
               <Badge variant={draft.proxyKey ? "default" : "outline"}>
                 {draft.proxyKey ? "鉴权已开启" : "鉴权已关闭"}
               </Badge>
