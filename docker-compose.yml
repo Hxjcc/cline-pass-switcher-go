@@ -1,3 +1,5 @@
+# 本文件由仓库维护，请勿直接修改：本地配置一律写入同目录的 .env（下方
+# ${VAR:-} 形式会自动读取）。直接编辑本文件会让 git pull 反复冲突。
 services:
   cline-pass-console:
     build: .
