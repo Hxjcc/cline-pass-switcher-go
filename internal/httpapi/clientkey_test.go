@@ -332,3 +332,33 @@ func TestKeysApiRejectsAnUnknownPinnedAccount(t *testing.T) {
 		t.Fatalf("binding to a missing account must fail: %d %s", recorder.Code, recorder.Body)
 	}
 }
+
+// /api/meta has to answer before login (the console uses it to decide whether
+// to ask for a key), but the deployment's public address is only handed to a
+// caller that already presented the console key.
+func TestMetaHidesThePublicAddressBeforeLogin(t *testing.T) {
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.AdminKey = "console"
+		config.PublicBaseURL = "https://console.example"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	anonymous := httptest.NewRecorder()
+	getWithAdminKey(server, "/api/meta", "", anonymous)
+	if anonymous.Code != http.StatusOK {
+		t.Fatalf("meta must stay reachable for the login dialog: %d", anonymous.Code)
+	}
+	if body := anonymous.Body.String(); strings.Contains(body, "console.example") || strings.Contains(body, "proxyBase") {
+		t.Fatalf("the public address leaked to an anonymous caller: %s", body)
+	} else if !strings.Contains(body, `"authRequired":true`) {
+		t.Fatalf("meta must still say that a key is required: %s", body)
+	}
+
+	authenticated := httptest.NewRecorder()
+	getWithAdminKey(server, "/api/meta", "console", authenticated)
+	if !strings.Contains(authenticated.Body.String(), "console.example") {
+		t.Fatalf("the console needs its own base URL after login: %s", authenticated.Body)
+	}
+}

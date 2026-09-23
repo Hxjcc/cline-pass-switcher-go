@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ThemeProvider } from 'next-themes'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
+import { snapshotHtml } from '@/lib/root-snapshot'
 import './index.css'
 import App from './App.tsx'
 
@@ -16,11 +17,7 @@ function saveRootSnapshot() {
   if (!rootElement.firstElementChild) return
 
   try {
-    const snapshot = rootElement.cloneNode(true) as HTMLElement
-    snapshot.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach((field) => {
-      field.setAttribute('value', 'x'.repeat(field.value.length))
-    })
-    sessionStorage.setItem(ROOT_SNAPSHOT_STORAGE, snapshot.innerHTML)
+    sessionStorage.setItem(ROOT_SNAPSHOT_STORAGE, snapshotHtml(rootElement))
   } catch {
     // Storage can be unavailable in restricted browser contexts.
   }

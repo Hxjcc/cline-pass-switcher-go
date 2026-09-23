@@ -227,6 +227,9 @@ export interface HistoryItem {
   trace?: TraceAttempt[]
   /** Anchored summary sections a completed compaction left out (advisory). */
   missingSummarySections?: string[]
+  /** The compaction returned a fallback item because summarization failed. */
+  degraded?: boolean
+  degradeReason?: string
 }
 
 export interface HistoryResponse {

@@ -97,6 +97,7 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
             <div className="flex gap-2">
               <Input
                 id="admin-key"
+                data-secret="1"
                 type={showAdminKey ? "text" : "password"}
                 value={draft.adminKey}
                 onChange={(event) =>
@@ -139,6 +140,7 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
             <div className="flex gap-2">
               <Input
                 id="proxy-key"
+                data-secret="1"
                 type={showKey ? "text" : "password"}
                 value={draft.proxyKey}
                 onChange={(event) =>

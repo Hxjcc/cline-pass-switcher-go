@@ -226,6 +226,7 @@ export function KeysPanel({ data, accounts, onSave, onReveal, onReset }: KeysPan
                       onChange={(event) => update(index, { key: event.target.value })}
                       placeholder={row.hasKey ? row.keyPreview || "已保存" : "sk-..."}
                       aria-label="客户端密钥"
+                      data-secret="1"
                       className="h-8 font-mono text-xs"
                     />
                     <Button

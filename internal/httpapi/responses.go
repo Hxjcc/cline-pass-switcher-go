@@ -12,6 +12,7 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
 
 func setResponsesHeaders(writer http.ResponseWriter, targets []string, result chainResult, effort string) {
@@ -236,6 +237,8 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		MissingSummarySections: compactionMissingSections(compaction),
+		Degraded:               result.Degraded,
+		DegradeReason:          result.DegradeReason,
 	}
 	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&compactEntry, result.Out, compactEntry.MS)
@@ -321,10 +324,13 @@ func (s *Server) runCompactionChain(
 	if degrade == nil || ctx.Err() != nil {
 		return result, nil, err
 	}
-	degraded := degrade(bridgeContext, compactionFailureReason(result, err), responsesbridge.PartialCompactionSummary(result.Out))
+	reason := compactionFailureReason(result, err)
+	degraded := degrade(bridgeContext, reason, responsesbridge.PartialCompactionSummary(result.Out))
 	result.Status = http.StatusOK
 	result.Out = map[string]any{}
 	result.NetErr = ""
+	result.Degraded = true
+	result.DegradeReason = strx.Truncate(reason, 200)
 	return result, degraded, nil
 }
 
@@ -487,6 +493,8 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		MissingSummarySections: compactionMissingSections(compaction),
+		Degraded:               result.Degraded,
+		DegradeReason:          result.DegradeReason,
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)

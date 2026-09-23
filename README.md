@@ -55,7 +55,7 @@ Cline Pass 上游
 
 - 🚀 **双协议原生支持**
   - **OpenAI Chat Completions 协议**：标准兼容各大主流客户端与开发框架（`/v1/chat/completions`）。
-  - **OpenAI Responses 协议桥接**：完整实现 `/v1/responses` 及 `/v1/responses/compact` 接口，无服务端状态持久化要求，完美支持 Codex CLI、ChatGPT Desktop 的多轮交互与上下文自动压缩。
+  - **OpenAI Responses 协议桥接**：实现 `/v1/responses` 及 `/v1/responses/compact` 接口，无服务端状态持久化要求，覆盖 Codex CLI、ChatGPT Desktop 的多轮交互与上下文压缩。协议边界（不支持 conversation 引用、后台响应、文件/音频输入、强制服务端工具等）逐条列在 [Responses 协议边界与验收](docs/protocol-compatibility.md)，不支持的能力会在请求上游之前返回 400 而不是假装成功。
 - 👥 **企业级多账号池调度**
   - 支持 **主备模式（固定账号）** 与 **均衡轮询（Round-Robin）**。
   - **自适应健康探测与冷却**：遭遇 `401/403` 自动冷却 10 分钟；遭遇 `429` 限流自动冷却 2 分钟，秒级无缝漂移到下一个可用账号。
@@ -277,8 +277,8 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 | `ADMIN_KEY` | `adminKey` | 留空 | **管理密钥（控制台）**。留空 = 沿用 `PROXY_KEY`。设置后，控制台与管理接口只认它；`PROXY_KEY` 和下发出去的代理密钥都只能调用模型，无法读取账号或改配置。 |
 | `PUBLIC_BASE_URL` | `publicBaseUrl` | 留空 | 服务对外访问的基准 URL（如放在反代后设为 `https://api.example.com`）。 |
 | `CLINE_PASS_KEY` | - | 留空 | 启动时默认注入账号池的初始 Cline Pass API Key。 |
-| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端工具：`exa` / `tako` / `perplexity`；设为 `off` 或留空表示关闭。 |
-| `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | Compose: `browserbase_fetch` / 源码: 留空 | 用户消息中出现 HTTP(S) 链接时自动声明的网页抓取工具：`browserbase_fetch`；留空或 `off` 表示关闭。 |
+| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端工具：`exa` / `tako` / `perplexity`；`off` 或留空表示关闭。**由网关执行、按次计费**，只在模型真的调用搜索时产生费用；Compose 默认开启，要关闭就在 `.env` 里写成空值。 |
+| `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | Compose: `browserbase_fetch` / 源码: 留空 | 用户消息中出现 HTTP(S) 链接时自动声明的网页抓取工具：`browserbase_fetch`；留空或 `off` 表示关闭。同样**按次计费**。 |
 | `SHELL_COMPAT` | `shellCompat` | 留空 | 客户端工具兼容模式。在 Windows 客户端下推荐设为 `powershell`，强制模型在工具调用中声明 shell 参数。 |
 | `SHELL_COMPAT_ENFORCE`| `shellCompatEnforce`| `false` | 是否强制把模型输出中的实际 `shell` 参数改写为 `SHELL_COMPAT`。 |
 | `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 是否开启严格工具历史校验。开启后，未配对的孤儿工具结果将直接报错拒绝。 |

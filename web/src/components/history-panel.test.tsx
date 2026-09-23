@@ -49,6 +49,13 @@ test("leaves complete compactions unflagged", () => {
   expect(screen.getByText("压缩")).toBeTruthy()
 })
 
+// A degraded compaction still answered the client with a valid item, so only
+// the badge tells the operator that this turn is not a real summary.
+test("flags a compaction that fell back to a placeholder", () => {
+  renderPanel([{ ...compactEntry, degraded: true, degradeReason: "upstream 503" }])
+  expect(screen.getByText("压缩降级")).toBeTruthy()
+})
+
 test("does not fetch anything on render", () => {
   const fetchSpy = vi.spyOn(globalThis, "fetch")
   renderPanel([compactEntry])

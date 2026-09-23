@@ -363,6 +363,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                             autoComplete="off"
                             placeholder={account.hasKey ? "" : "密钥"}
                             aria-label="API Key"
+                            data-secret="1"
                             size={24}
                             onFocus={() => setKeyFocused(account.id || `new-${index}`)}
                             onBlur={() => setKeyFocused((current) => (current === (account.id || `new-${index}`) ? null : current))}

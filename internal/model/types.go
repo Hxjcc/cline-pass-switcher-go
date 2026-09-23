@@ -231,6 +231,12 @@ type HistoryEntry struct {
 	// compaction left out. The compaction still succeeded, so this is an
 	// advisory note for the console rather than an error.
 	MissingSummarySections []string `json:"missingSummarySections,omitempty"`
+	// Degraded marks a compaction whose summary could not be produced: the
+	// client received a fallback item so the session could continue, and the
+	// console shows that this turn is not a real summary.
+	Degraded bool `json:"degraded,omitempty"`
+	// DegradeReason is the short failure text carried by that fallback item.
+	DegradeReason string `json:"degradeReason,omitempty"`
 }
 
 type AccountStats struct {

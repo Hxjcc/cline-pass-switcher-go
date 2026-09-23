@@ -317,6 +317,19 @@ export function HistoryPanel({
                           压缩
                         </Badge>
                       )}
+                      {item.degraded ? (
+                        <Badge
+                          variant="outline"
+                          className={warnChipClass}
+                          title={
+                            item.degradeReason
+                              ? `摘要生成失败，已返回降级占位：${item.degradeReason}`
+                              : "摘要生成失败，已返回降级占位"
+                          }
+                        >
+                          压缩降级
+                        </Badge>
+                      ) : null}
                       {item.missingSummarySections?.length ? (
                         <Badge
                           variant="outline"

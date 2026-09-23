@@ -41,6 +41,12 @@ type chainResult struct {
 	Trace   []model.Trace
 	NetErr  string
 	Started time.Time
+	// Degraded marks a compaction that was returned as a fallback item after
+	// the summarizer failed. The client still sees a successful turn, so the
+	// history needs the flag to tell the two apart.
+	Degraded bool
+	// DegradeReason is the short failure text embedded in that item.
+	DegradeReason string
 }
 
 func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, error) {
@@ -88,11 +94,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.Method == http.MethodGet && path == "/api/meta" {
 		cfg := s.store.Config()
-		writeJSON(writer, http.StatusOK, map[string]any{
+		payload := map[string]any{
 			"authRequired": s.store.AuthEnabled(),
-			"proxyBase":    s.publicProxyBase(cfg),
 			"configured":   s.store.IsConfigured(),
-		})
+		}
+		// The console asks for this before login, so it must stay reachable
+		// without a credential - but the deployment's public address is only
+		// handed to a caller that either has the key or does not need one.
+		if !s.store.AuthEnabled() || s.adminRequestAuthorized(request) {
+			payload["proxyBase"] = s.publicProxyBase(cfg)
+		}
+		writeJSON(writer, http.StatusOK, payload)
 		return
 	}
 	// Client endpoints and the console answer to different credentials. A key

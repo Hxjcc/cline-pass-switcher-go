@@ -221,3 +221,18 @@ func (s *Server) authorizeOpen(writer http.ResponseWriter, request *http.Request
 	writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
 	return false
 }
+
+// adminRequestAuthorized reports whether the request carries the console key.
+// It is the read-only half of authorizeAdmin, used by the few handlers that
+// answer both authenticated and unauthenticated callers with different detail.
+func (s *Server) adminRequestAuthorized(request *http.Request) bool {
+	expected := s.store.AdminKey()
+	if expected == "" {
+		return true
+	}
+	presented := strings.TrimSpace(request.Header.Get("X-Admin-Key"))
+	if presented == "" {
+		presented = bearerToken(request)
+	}
+	return constantTimeEqual(presented, expected)
+}

@@ -66,6 +66,7 @@ export function LoginDialog({
           <Label htmlFor="login-key">管理密钥</Label>
           <Input
             id="login-key"
+            data-secret="1"
             type="password"
             value={key}
             autoFocus

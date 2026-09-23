@@ -257,6 +257,9 @@ func TestResponsesCompactionTriggerDegradesWhenSummaryKeepsFailing(t *testing.T)
 	if len(history) != 1 || history[0].Kind != "compact" || history[0].Error != nil || len(history[0].Trace) != 2 {
 		t.Fatalf("degraded compaction should be one successful entry with both passes traced: %#v", history)
 	}
+	if !history[0].Degraded || history[0].DegradeReason == "" {
+		t.Fatalf("a fallback item must be marked in the history: %#v", history[0])
+	}
 }
 
 // A failure that another pass cannot fix (gateway 503) degrades immediately
