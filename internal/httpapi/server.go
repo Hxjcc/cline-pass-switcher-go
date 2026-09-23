@@ -140,6 +140,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleSaveSecurity(writer, request)
 	case request.Method == http.MethodGet && path == "/api/keys":
 		s.handleGetKeys(writer, request)
+	case request.Method == http.MethodGet && path == "/api/settings":
+		s.handleSettings(writer, request)
 	case request.Method == http.MethodPost && path == "/api/keys":
 		s.handleSaveKeys(writer, request)
 	case request.Method == http.MethodPost && path == "/api/keys/reset":
@@ -317,6 +319,9 @@ func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
 		"publicBaseUrl": cfg.PublicBaseURL,
 		"authRequired":  s.store.AuthEnabled(),
 		"exposeCatalog": cfg.ExposeCatalog,
+		// The effective values ride along with the console's own snapshot, so
+		// no extra request is needed to see what is actually in force.
+		"settings": s.effectiveSettings(),
 	})
 }
 

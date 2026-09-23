@@ -26,6 +26,12 @@ type Store struct {
 	pending      int
 	closed       bool
 	writeErr     error
+	// configFileKeys remembers which top-level keys config.json actually
+	// carried at startup. Effective-value reporting needs it to tell an
+	// explicitly configured value from a built-in default; the running
+	// configuration cannot answer that on its own because normalization fills
+	// every field.
+	configFileKeys map[string]struct{}
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -53,12 +59,13 @@ func Open(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{
-		configPath:  configPath,
-		metaPath:    metaPath,
-		config:      cfg,
-		meta:        meta,
-		journalPath: filepath.Join(dataDir, "store.journal"),
-		lock:        lock,
+		configPath:     configPath,
+		metaPath:       metaPath,
+		config:         cfg,
+		meta:           meta,
+		journalPath:    filepath.Join(dataDir, "store.journal"),
+		lock:           lock,
+		configFileKeys: readConfigKeys(configPath),
 	}
 	if err := store.recoverJournal(); err != nil {
 		return nil, err

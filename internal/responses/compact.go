@@ -36,9 +36,10 @@ const (
 	// envelope stays small enough to send back on every request.
 	maxCompactionRecentTotalRunes = 32000
 	// compactionEscalatedFloorTokens is what a retry starts from before the
-	// doubling below; the ceiling keeps one retry inside the model's window.
+	// doubling below; the exported ceiling keeps one retry inside the model's
+	// window and is reported by the console's effective-settings view.
 	compactionEscalatedFloorTokens   = 16384
-	compactionEscalatedCeilingTokens = 32768
+	CompactionEscalatedCeilingTokens = 32768
 )
 
 // compactionSections are the anchored headings compaction summaries must
@@ -300,8 +301,8 @@ func EscalateCompactionBudget(body map[string]any, efforts []string) {
 		tokens = compactionEscalatedFloorTokens
 	}
 	tokens *= 2
-	if tokens > compactionEscalatedCeilingTokens {
-		tokens = compactionEscalatedCeilingTokens
+	if tokens > CompactionEscalatedCeilingTokens {
+		tokens = CompactionEscalatedCeilingTokens
 	}
 	body["max_tokens"] = tokens
 }

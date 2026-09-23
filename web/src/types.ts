@@ -142,6 +142,17 @@ export interface SecurityResponse {
   authRequired: boolean
   exposeCatalog: boolean
   proxyBase?: string
+  /** Values actually in force, with the layer that supplied each one. */
+  settings?: EffectiveSetting[]
+}
+
+export interface EffectiveSetting {
+  key: string
+  label: string
+  value: string
+  /** env | config | default | builtin */
+  source: string
+  secret?: boolean
 }
 
 /** One console-issued client key, as listed by GET /api/keys. */

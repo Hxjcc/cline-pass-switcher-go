@@ -18,7 +18,50 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { errorMessage } from "@/lib/api"
 import { useDraft } from "@/lib/use-draft"
-import type { SecurityResponse } from "@/types"
+import { cn } from "@/lib/utils"
+import type { EffectiveSetting, SecurityResponse } from "@/types"
+
+// The badge tells the operator which layer supplied a value, which is the only
+// way to tell "my .env change took effect" from "an old config.json entry or a
+// built-in default is still in force".
+const sourceLabels: Record<string, { label: string; className: string }> = {
+  env: {
+    label: "环境变量",
+    className:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300",
+  },
+  config: {
+    label: "config.json",
+    className: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300",
+  },
+  default: {
+    label: "内置默认",
+    className: "",
+  },
+  builtin: {
+    label: "代码常量",
+    className: "",
+  },
+}
+
+function SettingsTable({ settings }: { settings: EffectiveSetting[] }) {
+  return (
+    <div className="divide-y rounded-lg border">
+      {settings.map((row) => {
+        const source = sourceLabels[row.source] ?? { label: row.source, className: "" }
+        return (
+          <div key={row.key} className="flex items-center gap-3 px-3 py-2">
+            <span className="min-w-0 flex-1 truncate text-sm">{row.label}</span>
+            <span className="font-mono text-xs">{row.value}</span>
+            <Badge variant="outline" className={cn("h-5 px-1.5 py-0 text-2xs", source.className)}>
+              {source.label}
+            </Badge>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 interface SecurityPanelProps {
   data: SecurityResponse
@@ -199,6 +242,23 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
               修改代理密钥后，本地控制台会同步使用新密钥，下游客户端需更新为同一密钥。
             </AlertDescription>
           </Alert>
+
+          {data.settings?.length ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>运行参数（当前生效值）</Label>
+                <span className="text-muted-foreground text-xs">
+                  来源优先级：环境变量 &gt; config.json &gt; 内置默认
+                </span>
+              </div>
+              <SettingsTable settings={data.settings} />
+              <p className="text-muted-foreground text-xs">
+                修改 <code className="font-mono">.env</code> 后需重建容器（
+                <code className="font-mono">docker compose up -d</code>）才会反映到这里；
+                同一份数据也可通过 <code className="font-mono">GET /api/settings</code> 读取。
+              </p>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
