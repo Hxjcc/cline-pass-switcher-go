@@ -29,6 +29,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
+import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
+import { HISTORY_PAGE_SIZE, fetchSnapshot, readSnapshot, writeSnapshot, type CachedSnapshot } from "@/lib/console-snapshot"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import type {
   AccountTestResponse,
@@ -47,45 +49,7 @@ import type {
   ValidationResponse,
 } from "@/types"
 
-const ADMIN_KEY_STORAGE = "cline-pass-switcher-admin-key"
-const SNAPSHOT_STORAGE = "cline-pass-switcher-snapshot"
 const TAB_STORAGE = "cline-pass-switcher-tab"
-const HISTORY_PAGE_SIZE = 50
-
-// The admin key is the only credential for the console and the management API.
-// The client keys issued below never open this page. The credential is kept in
-// sessionStorage by default (gone when the tab closes) and only written to
-// localStorage when the operator ticks "remember this device" at login.
-function readPersistentAdminKey(): string {
-  try {
-    return localStorage.getItem(ADMIN_KEY_STORAGE) ?? ""
-  } catch {
-    return ""
-  }
-}
-
-function readAdminKey(): string {
-  try {
-    return sessionStorage.getItem(ADMIN_KEY_STORAGE) ?? readPersistentAdminKey()
-  } catch {
-    return readPersistentAdminKey()
-  }
-}
-
-function storeAdminKey(key: string, remember: boolean) {
-  try {
-    if (key) sessionStorage.setItem(ADMIN_KEY_STORAGE, key)
-    else sessionStorage.removeItem(ADMIN_KEY_STORAGE)
-  } catch {
-    // Storage can be unavailable in restricted browser contexts.
-  }
-  try {
-    if (key && remember) localStorage.setItem(ADMIN_KEY_STORAGE, key)
-    else localStorage.removeItem(ADMIN_KEY_STORAGE)
-  } catch {
-    // Storage can be unavailable in restricted browser contexts.
-  }
-}
 
 const TABS = [
   { value: "overview", label: "模型与上游", icon: Boxes },
@@ -96,59 +60,6 @@ const TABS = [
   { value: "history", label: "请求历史", icon: Activity },
   { value: "catalog", label: "完整目录", icon: Settings2 },
 ] as const
-
-interface CachedSnapshot {
-  models: ModelsResponse
-  meta: MetaResponse
-  history: HistoryResponse["history"]
-  historyTotal?: number
-  historyHasMore?: boolean
-  accounts: AccountsResponse
-  keys: KeysResponse
-  security: SecurityResponse
-}
-
-async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
-  const [meta, models, accounts, keys, security, history] = await Promise.all([
-    api<MetaResponse>("/api/meta"),
-    api<ModelsResponse>("/api/models", { key }),
-    api<AccountsResponse>("/api/accounts", { key }),
-    api<KeysResponse>("/api/keys", { key }),
-    api<SecurityResponse>("/api/security", { key }),
-    api<HistoryResponse>(`/api/history?limit=${HISTORY_PAGE_SIZE}`, { key }),
-  ])
-  return {
-    meta,
-    models,
-    accounts,
-    keys,
-    security,
-    history: history.history,
-    historyTotal: history.total,
-    historyHasMore: history.hasMore,
-  }
-}
-
-function readSnapshot(): CachedSnapshot | null {
-  try {
-    const raw = sessionStorage.getItem(SNAPSHOT_STORAGE)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<CachedSnapshot>
-    if (
-      !parsed.models?.subscription ||
-      !parsed.meta ||
-      !Array.isArray(parsed.history) ||
-      !parsed.accounts ||
-      !parsed.keys ||
-      !parsed.security
-    ) {
-      return null
-    }
-    return parsed as CachedSnapshot
-  } catch {
-    return null
-  }
-}
 
 function App() {
   const [initialSnapshot] = useState(readSnapshot)
@@ -296,14 +207,7 @@ function App() {
 
   useEffect(() => {
     if (!models || !meta || !accounts || !keys || !security) return
-    try {
-      sessionStorage.setItem(
-        SNAPSHOT_STORAGE,
-        JSON.stringify({ models, meta, history, accounts, keys, security } satisfies CachedSnapshot),
-      )
-    } catch {
-      // Storage can be unavailable in restricted browser contexts.
-    }
+    writeSnapshot({ models, meta, history, accounts, keys, security })
   }, [accounts, history, keys, meta, models, security])
 
   useEffect(() => {
