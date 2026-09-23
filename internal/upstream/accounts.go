@@ -133,6 +133,12 @@ func (s *Service) pickAccount(ctx context.Context) model.Account {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A pinned request skips stickiness, quota avoidance and round-robin: one
+	// key, one account. An unavailable pin returns no account so the caller
+	// answers with a configuration error instead of spending another budget.
+	if accountID, pinned := AccountPinFrom(ctx); pinned {
+		return s.pinnedAccount(accountID)
+	}
 	budget := s.quotaBudget
 	if budget <= 0 {
 		budget = quotaSelectionBudget
@@ -143,6 +149,29 @@ func (s *Service) pickAccount(ctx context.Context) model.Account {
 		return account
 	}
 	return s.pickOpenAccount(budgetCtx)
+}
+
+// pinnedAccount resolves a hard pin. Only a usable row qualifies: a deleted,
+// disabled or key-less account returns the zero value, which every attempt
+// path turns into a "no account" configuration error.
+func (s *Service) pinnedAccount(accountID string) model.Account {
+	account := s.store.FindAccount(accountID)
+	if account.Key == "" || !account.Enabled {
+		return model.Account{}
+	}
+	return account
+}
+
+// pinBlocksFailover reports whether a failure of a pinned request should end
+// the chain immediately. The pin exists precisely because the holder may only
+// use that account, so a rejected credential, a rate limit or a server error
+// that another account could fix is still not ours to fix - the request must
+// come back to the caller instead of spending somebody else's budget.
+func pinBlocksFailover(ctx context.Context, status int) bool {
+	if _, pinned := AccountPinFrom(ctx); !pinned {
+		return false
+	}
+	return status >= 400
 }
 
 // preferredAccount returns the conversation's sticky account when it can still

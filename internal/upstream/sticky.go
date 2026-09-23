@@ -29,6 +29,30 @@ type sessionStick struct {
 
 type stickContextKey struct{}
 
+// accountPinContextKey carries a hard restriction to one account pool entry.
+// Issued keys use it: the operator promised the holder that specific account,
+// so the request must not silently drift to another one when it is busy.
+type accountPinContextKey struct{}
+
+// WithAccountPin restricts the request to one account. An empty id leaves the
+// context untouched, which is what the master key and the console want.
+func WithAccountPin(ctx context.Context, accountID string) context.Context {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, accountPinContextKey{}, accountID)
+}
+
+// AccountPinFrom reports the account a request is pinned to.
+func AccountPinFrom(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	accountID, ok := ctx.Value(accountPinContextKey{}).(string)
+	return accountID, ok && accountID != ""
+}
+
 type stickHint struct {
 	session   string
 	accountID string

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -185,6 +186,22 @@ func (s *Store) applyEntry(entry journalEntry) {
 			stats.Requests++
 			stats.LastUsed, stats.LastError = e.TS, e.Error
 			s.meta.Stats[statsKey] = stats
+		}
+		// The same journal record carries the spend of an issued key. It is
+		// replayed (and therefore survives restarts) exactly like the account
+		// counters above; only upstream-reported cost is counted, so a limit
+		// can never be enforced against a number we made up.
+		if e.KeyID != "" {
+			if s.meta.KeyUsage == nil {
+				s.meta.KeyUsage = map[string]model.KeyUsage{}
+			}
+			usage := s.meta.KeyUsage[e.KeyID]
+			usage.Requests++
+			usage.LastUsed = e.TS
+			if e.Usage != nil && e.Usage.Cost != nil && *e.Usage.Cost > 0 {
+				usage.SpentMicroUSD += int64(math.Round(*e.Usage.Cost * 1e6))
+			}
+			s.meta.KeyUsage[e.KeyID] = usage
 		}
 	case "remove":
 		known := make([]string, 0, len(s.config.KnownModels))

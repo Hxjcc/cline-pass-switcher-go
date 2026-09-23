@@ -23,7 +23,7 @@ import (
 // simple cross-origin POSTs can otherwise change configuration without preflight.
 func (s *Server) browserRequestAllowed(r *http.Request) bool {
 	policy := s.store.AccessPolicy()
-	if policy.ProxyKey == "" {
+	if !policy.AuthEnabled {
 		if !localRequestTrusted(r, policy) {
 			return false // Non-local and unauthenticated: refuse to expose accounts.
 		}
@@ -50,7 +50,7 @@ func (s *Server) browserRequestAllowed(r *http.Request) bool {
 		return true
 	}
 	// Explicit external URL supports TLS termination without trusting forwarded headers.
-	if policy.ProxyKey != "" && policy.PublicBaseURL != "" {
+	if policy.AuthEnabled && policy.PublicBaseURL != "" {
 		base, err := url.Parse(policy.PublicBaseURL)
 		return err == nil && base.Scheme == u.Scheme && strings.EqualFold(base.Host, u.Host)
 	}

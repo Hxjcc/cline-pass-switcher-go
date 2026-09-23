@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -36,7 +37,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		fatal := false
 		for accountsUsed := 1; ; accountsUsed++ {
 			if !budget.acquire() {
-				s.writeChatStreamFailure(writer, modelID, body, last)
+				s.writeChatStreamFailure(ctx, writer, modelID, body, last)
 				return
 			}
 			started := time.Now()
@@ -52,7 +53,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 					Note:     "buffered completion",
 				})
 				last.Account = result.Account
-				s.writeBufferedChatStream(writer, targets, last, result, modelID, body)
+				s.writeBufferedChatStream(ctx, writer, targets, last, result, modelID, body)
 				return
 			}
 			if !result.SSE {
@@ -155,7 +156,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 				Trace:     last.Trace,
 			}
 			applyStreamStats(&entry, stats)
-			s.record(entry)
+			s.record(ctx, entry)
 			streamed = true
 			break
 		}
@@ -167,7 +168,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		}
 	}
 
-	s.writeChatStreamFailure(writer, modelID, body, last)
+	s.writeChatStreamFailure(ctx, writer, modelID, body, last)
 }
 
 // chatStreamFailure turns the end of a committed chat stream into a history
@@ -196,12 +197,12 @@ func chatStreamFailure(copyErr error, stats *streamStats) *string {
 // writeChatStreamFailure is the single exit for a streaming chat request that
 // never committed an upstream stream: it records the account, trace and error
 // before the client receives the error body.
-func (s *Server) writeChatStreamFailure(writer http.ResponseWriter, modelID string, body map[string]any, last chainResult) {
+func (s *Server) writeChatStreamFailure(ctx context.Context, writer http.ResponseWriter, modelID string, body map[string]any, last chainResult) {
 	message := friendlyCancelText(chainErrorMessage(last))
 	if message == "" {
 		message = "upstream returned no response"
 	}
-	s.record(model.HistoryEntry{
+	s.record(ctx, model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     modelID,
 		MS:        time.Since(last.Started).Milliseconds(),
@@ -230,6 +231,7 @@ func (s *Server) writeChatStreamFailure(writer http.ResponseWriter, modelID stri
 // answered with a plain JSON completion: the completion becomes one chunk
 // followed by [DONE], so the client still gets the protocol it requested.
 func (s *Server) writeBufferedChatStream(
+	ctx context.Context,
 	writer http.ResponseWriter,
 	targets []string,
 	last chainResult,
@@ -279,7 +281,7 @@ func (s *Server) writeBufferedChatStream(
 		Trace:     last.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
-	s.record(entry)
+	s.record(ctx, entry)
 }
 
 type streamTapWriter struct {

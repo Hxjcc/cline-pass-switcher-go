@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -90,14 +89,22 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet && path == "/api/meta" {
 		cfg := s.store.Config()
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"authRequired": cfg.ProxyKey != "",
+			"authRequired": s.store.AuthEnabled(),
 			"proxyBase":    s.publicProxyBase(cfg),
 			"configured":   s.store.IsConfigured(),
 		})
 		return
 	}
-	if s.isProtected(path) && !s.authorizeProtected(writer, request) {
-		return
+	// Client endpoints and the console answer to different credentials. A key
+	// handed to somebody else must be able to call models and nothing else.
+	if isClientPath(path) {
+		if !s.authorizeClient(writer, request) {
+			return
+		}
+	} else if strings.HasPrefix(path, "/api/") {
+		if !s.authorizeAdmin(writer, request) {
+			return
+		}
 	}
 
 	switch {
@@ -119,6 +126,12 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleGetSecurity(writer)
 	case request.Method == http.MethodPost && path == "/api/security":
 		s.handleSaveSecurity(writer, request)
+	case request.Method == http.MethodGet && path == "/api/keys":
+		s.handleGetKeys(writer, request)
+	case request.Method == http.MethodPost && path == "/api/keys":
+		s.handleSaveKeys(writer, request)
+	case request.Method == http.MethodPost && path == "/api/keys/reset":
+		s.handleResetKeyUsage(writer, request)
 	case request.Method == http.MethodPost && path == "/api/validate-upstreams":
 		s.handleValidate(writer, request)
 	case request.Method == http.MethodPost && path == "/api/fetch-official-models":
@@ -288,8 +301,9 @@ func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
 	cfg := s.store.Config()
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"proxyKey":      cfg.ProxyKey,
+		"adminKey":      cfg.AdminKey,
 		"publicBaseUrl": cfg.PublicBaseURL,
-		"authRequired":  cfg.ProxyKey != "",
+		"authRequired":  s.store.AuthEnabled(),
 		"exposeCatalog": cfg.ExposeCatalog,
 	})
 }
@@ -297,6 +311,7 @@ func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
 func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		ProxyKey      *string `json:"proxyKey"`
+		AdminKey      *string `json:"adminKey"`
 		PublicBaseURL *string `json:"publicBaseUrl"`
 		ExposeCatalog *bool   `json:"exposeCatalog"`
 	}
@@ -307,6 +322,9 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 	if err := s.store.UpdateConfig(func(cfg *model.Config) {
 		if body.ProxyKey != nil {
 			cfg.ProxyKey = strings.TrimSpace(*body.ProxyKey)
+		}
+		if body.AdminKey != nil {
+			cfg.AdminKey = strings.TrimSpace(*body.AdminKey)
 		}
 		if body.PublicBaseURL != nil {
 			cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(*body.PublicBaseURL), "/")
@@ -322,8 +340,9 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok":            true,
 		"proxyKey":      cfg.ProxyKey,
+		"adminKey":      cfg.AdminKey,
 		"publicBaseUrl": cfg.PublicBaseURL,
-		"authRequired":  cfg.ProxyKey != "",
+		"authRequired":  s.store.AuthEnabled(),
 		"proxyBase":     s.publicProxyBase(cfg),
 		"exposeCatalog": cfg.ExposeCatalog,
 	})
@@ -607,7 +626,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 		Trace:     result.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
-	s.record(entry)
+	s.record(request.Context(), entry)
 	modelMeta := s.store.ModelMeta(body.Model)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok": true, "ms": time.Since(started).Milliseconds(), "targets": modelConfig.Upstreams,
@@ -798,7 +817,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	if result.Status == http.StatusOK {
 		applyChatStats(&entry, result.Out, entry.MS)
 	}
-	s.record(entry)
+	s.record(request.Context(), entry)
 
 	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, body))
 	writer.Header().Set("Content-Type", "application/json")
@@ -838,50 +857,6 @@ func (s *Server) serveStatic(writer http.ResponseWriter, request *http.Request) 
 	if request.Method != http.MethodHead {
 		_, _ = writer.Write(s.index)
 	}
-}
-
-func (s *Server) isProtected(path string) bool {
-	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/") ||
-		isModelsPath(path) || isChatPath(path) || isResponsesPath(path) || isResponsesCompactPath(path)
-}
-
-func (s *Server) authOK(request *http.Request) bool {
-	expected := s.store.ProxyKey()
-	if expected == "" {
-		return true
-	}
-	header := request.Header.Get("Authorization")
-	if len(header) >= 7 && strings.EqualFold(header[:7], "Bearer ") {
-		header = strings.TrimSpace(header[7:])
-	} else {
-		header = ""
-	}
-	admin := strings.TrimSpace(request.Header.Get("X-Admin-Key"))
-	return constantTimeEqual(header, expected) || constantTimeEqual(admin, expected)
-}
-
-// authorizeProtected gates every protected route and writes the refusal itself.
-// A source address that has exhausted its attempts is refused before the key is
-// compared at all, so guessing cannot continue at full speed; addresses that
-// present the right key clear their counter.
-func (s *Server) authorizeProtected(writer http.ResponseWriter, request *http.Request) bool {
-	client := clientKey(request.RemoteAddr)
-	if delay, blocked := s.throttle.blocked(client); blocked {
-		writeThrottled(writer, delay)
-		return false
-	}
-	if s.authOK(request) {
-		s.throttle.succeed(client)
-		return true
-	}
-	if delay := s.throttle.fail(client); delay > 0 {
-		writeThrottled(writer, delay)
-		return false
-	}
-	writeJSON(writer, http.StatusUnauthorized, map[string]any{
-		"error": map[string]any{"message": "unauthorized: 代理密钥缺失或错误", "type": "auth_error"},
-	})
-	return false
 }
 
 func writeThrottled(writer http.ResponseWriter, delay time.Duration) {
@@ -1049,16 +1024,6 @@ func extractAttemptError(value map[string]any) string {
 		}
 		return string(encoded)
 	}
-}
-
-func constantTimeEqual(left, right string) bool {
-	if left == "" || right == "" {
-		return false
-	}
-	if len(left) != len(right) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
 func headerSafe(value string) string {

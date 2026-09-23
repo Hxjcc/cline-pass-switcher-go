@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/subtle"
 	"maps"
 	"slices"
 
@@ -52,11 +53,71 @@ func (s *Store) ProxyKey() string {
 	return s.config.ProxyKey
 }
 
+// AdminKey is the console key. An empty value means the console keeps working
+// with the proxy key, which is how single-machine deployments have always
+// behaved.
+func (s *Store) AdminKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config.AdminKey != "" {
+		return s.config.AdminKey
+	}
+	return s.config.ProxyKey
+}
+
+// ProxyKeys returns a detached copy of the issued client keys.
+func (s *Store) ProxyKeys() []model.ProxyKeyGrant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.config.ProxyKeys)
+}
+
+// FindProxyKey looks up an issued key. Disabled grants are still reported so the
+// caller can answer "this key was revoked" instead of "unknown key".
+func (s *Store) FindProxyKey(candidate string) (model.ProxyKeyGrant, bool) {
+	if candidate == "" {
+		return model.ProxyKeyGrant{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, grant := range s.config.ProxyKeys {
+		if subtle.ConstantTimeCompare([]byte(grant.Key), []byte(candidate)) == 1 {
+			return grant, true
+		}
+	}
+	return model.ProxyKeyGrant{}, false
+}
+
+// AuthEnabled reports whether any credential is configured. While it is false
+// the console relies on the network boundary exactly as before.
+func (s *Store) AuthEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config.ProxyKey != "" || s.config.AdminKey != "" {
+		return true
+	}
+	for _, grant := range s.config.ProxyKeys {
+		if grant.Key != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// KeyUsage reports the durable accounting of every issued key.
+func (s *Store) KeyUsage() map[string]model.KeyUsage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return maps.Clone(s.meta.KeyUsage)
+}
+
 // AccessPolicy is the immutable snapshot the request guard evaluates: the
 // proxy key, the optional public console URL, and the explicit trust the
 // operator declared for unauthenticated local access.
 type AccessPolicy struct {
 	ProxyKey              string
+	AdminKey              string
+	AuthEnabled           bool
 	PublicBaseURL         string
 	TrustedProxies        []string
 	TrustLocalPortForward bool
@@ -65,8 +126,23 @@ type AccessPolicy struct {
 func (s *Store) AccessPolicy() AccessPolicy {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	admin := s.config.AdminKey
+	if admin == "" {
+		admin = s.config.ProxyKey
+	}
+	authenticated := s.config.ProxyKey != "" || admin != ""
+	if !authenticated {
+		for _, grant := range s.config.ProxyKeys {
+			if grant.Key != "" {
+				authenticated = true
+				break
+			}
+		}
+	}
 	return AccessPolicy{
 		ProxyKey:              s.config.ProxyKey,
+		AdminKey:              admin,
+		AuthEnabled:           authenticated,
 		PublicBaseURL:         s.config.PublicBaseURL,
 		TrustedProxies:        slices.Clone(s.config.TrustedProxies),
 		TrustLocalPortForward: s.config.TrustLocalPortForward,

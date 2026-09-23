@@ -54,6 +54,9 @@ func ApplyEnvironment(cfg *Config) {
 	if key := strings.TrimSpace(os.Getenv("PROXY_KEY")); key != "" {
 		cfg.ProxyKey = key
 	}
+	if key := strings.TrimSpace(os.Getenv("ADMIN_KEY")); key != "" {
+		cfg.AdminKey = key
+	}
 	if baseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); baseURL != "" {
 		cfg.PublicBaseURL = strings.TrimRight(baseURL, "/")
 	}
@@ -114,6 +117,8 @@ func NormalizeConfig(cfg *Config) {
 	cfg.UpstreamBase = strings.TrimRight(strings.TrimSpace(cfg.UpstreamBase), "/")
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
+	cfg.AdminKey = strings.TrimSpace(cfg.AdminKey)
+	cfg.ProxyKeys = normalizeProxyKeys(cfg.ProxyKeys, cfg.ProxyKey, cfg.AdminKey)
 	cfg.ShellCompat = strings.TrimSpace(cfg.ShellCompat)
 	if cfg.CompactionRecentTokens < 0 {
 		cfg.CompactionRecentTokens = 0
@@ -247,6 +252,9 @@ func NormalizeMetadata(meta *Metadata) {
 	}
 	if meta.Stats == nil {
 		meta.Stats = map[string]AccountStats{}
+	}
+	if meta.KeyUsage == nil {
+		meta.KeyUsage = map[string]KeyUsage{}
 	}
 	if len(meta.History) > HistoryLimit {
 		meta.History = meta.History[:HistoryLimit]

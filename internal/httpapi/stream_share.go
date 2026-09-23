@@ -353,7 +353,7 @@ func (s *Server) recordSharedRun(
 	if job.okSSE {
 		applyStreamStats(&entry, job.stats)
 	}
-	s.record(entry)
+	s.record(job.ctx, entry)
 }
 
 func (s *Server) runSharedResponses(

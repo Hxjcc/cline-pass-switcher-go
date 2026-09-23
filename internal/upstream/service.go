@@ -921,6 +921,9 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 			NetErr:  details.Message,
 			Routing: Routing{},
 			Account: account,
+			// A pinned key has no second account to move to, so repeating the
+			// same rejected credential only burns time: report it once.
+			Fatal: pinBlocksFailover(ctx, details.Status),
 		}
 	}
 	s.noteAccountStatus(account, http.StatusOK)
@@ -1073,6 +1076,9 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 			Out:     apierr.Body(details),
 			NetErr:  details.Message,
 			Account: account,
+			// See the non-streaming path: a pinned key has nothing to fail
+			// over to.
+			Fatal: pinBlocksFailover(ctx, details.Status),
 		}
 	}
 
@@ -1095,7 +1101,10 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		// account-level verdict is the same one the non-SSE branch records.
 		s.noteAccountStatus(account, details.Status)
 		s.observeStick(ctx, account, attempt.Upstream, details.Status)
-		return StreamAttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account}
+		return StreamAttemptResult{
+			Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account,
+			Fatal: pinBlocksFailover(ctx, details.Status),
+		}
 	}
 	// The response is committed from here on; switch the guard to the silence
 	// budget and hand body ownership (including guard release) to the caller.

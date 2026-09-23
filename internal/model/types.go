@@ -68,11 +68,21 @@ type PerModelConfig struct {
 }
 
 type Config struct {
-	Port          int    `json:"port"`
-	APIKey        string `json:"apiKey,omitempty"`
-	ProxyKey      string `json:"proxyKey"`
-	PublicBaseURL string `json:"publicBaseUrl"`
-	ExposeCatalog bool   `json:"exposeCatalog"`
+	Port   int    `json:"port"`
+	APIKey string `json:"apiKey,omitempty"`
+	// ProxyKey is the master client key: it opens the OpenAI-compatible
+	// endpoints. It also opens the console until AdminKey is set, so a single
+	// machine keeps working exactly as before.
+	ProxyKey string `json:"proxyKey"`
+	// AdminKey protects the console and the management API. Leaving it empty
+	// falls back to ProxyKey; setting it takes the client key out of the
+	// console entirely, which is what a shared deployment wants.
+	AdminKey string `json:"adminKey,omitempty"`
+	// ProxyKeys are additional client keys issued from the console. Each may be
+	// pinned to one account and capped at a spend limit.
+	ProxyKeys     []ProxyKeyGrant `json:"proxyKeys,omitempty"`
+	PublicBaseURL string          `json:"publicBaseUrl"`
+	ExposeCatalog bool            `json:"exposeCatalog"`
 	// TrustedProxies lists IP addresses or CIDR blocks whose forwarded client
 	// address headers (X-Forwarded-For / X-Real-IP) may be trusted. It only
 	// matters while ProxyKey is empty, when every unauthenticated request has
@@ -209,9 +219,14 @@ type HistoryEntry struct {
 	Account         string      `json:"account,omitempty"`
 	// AccountID is the stable identity behind Account. Per-account counters
 	// are keyed by it so renaming an account keeps its statistics.
-	AccountID string   `json:"accountId,omitempty"`
-	Attempts  []string `json:"attempts,omitempty"`
-	Trace     []Trace  `json:"trace,omitempty"`
+	AccountID string `json:"accountId,omitempty"`
+	// KeyID / KeyName identify the issued client key that carried the request.
+	// Both stay empty for console and master-key traffic; the store uses KeyID
+	// to accumulate the spend a shared key is allowed to burn.
+	KeyID    string   `json:"keyId,omitempty"`
+	KeyName  string   `json:"keyName,omitempty"`
+	Attempts []string `json:"attempts,omitempty"`
+	Trace    []Trace  `json:"trace,omitempty"`
 	// MissingSummarySections names the anchored summary sections a completed
 	// compaction left out. The compaction still succeeded, so this is an
 	// advisory note for the console rather than an error.
@@ -234,15 +249,19 @@ type OfficialFetch struct {
 
 type Metadata struct {
 	// Last durable journal entry included in this snapshot.
-	StoreSequence       uint64                  `json:"storeSequence,omitempty"`
-	Models              map[string]ModelMeta    `json:"models"`
-	History             []HistoryEntry          `json:"history"`
-	Catalog             []string                `json:"catalog"`
-	CatalogFetchedAt    int64                   `json:"catalogFetchedAt"`
-	ORModels            []string                `json:"orModelList"`
-	ORModelsFetchedAt   int64                   `json:"orModelsFetchedAt"`
-	Stats               map[string]AccountStats `json:"stats"`
-	OfficialModelsFetch *OfficialFetch          `json:"officialModelsFetch,omitempty"`
+	StoreSequence     uint64                  `json:"storeSequence,omitempty"`
+	Models            map[string]ModelMeta    `json:"models"`
+	History           []HistoryEntry          `json:"history"`
+	Catalog           []string                `json:"catalog"`
+	CatalogFetchedAt  int64                   `json:"catalogFetchedAt"`
+	ORModels          []string                `json:"orModelList"`
+	ORModelsFetchedAt int64                   `json:"orModelsFetchedAt"`
+	Stats             map[string]AccountStats `json:"stats"`
+	// KeyUsage accumulates the spend each issued client key caused, keyed by
+	// grant ID. It survives restarts so a spend limit cannot be reset by
+	// restarting the proxy.
+	KeyUsage            map[string]KeyUsage `json:"keyUsage,omitempty"`
+	OfficialModelsFetch *OfficialFetch      `json:"officialModelsFetch,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -286,10 +305,11 @@ const DefaultCompactionMinOutputTokens = 16384
 
 func EmptyMetadata() Metadata {
 	return Metadata{
-		Models:  map[string]ModelMeta{},
-		History: []HistoryEntry{},
-		Catalog: []string{},
-		Stats:   map[string]AccountStats{},
+		Models:   map[string]ModelMeta{},
+		History:  []HistoryEntry{},
+		Catalog:  []string{},
+		Stats:    map[string]AccountStats{},
+		KeyUsage: map[string]KeyUsage{},
 	}
 }
 
