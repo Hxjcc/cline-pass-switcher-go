@@ -17,6 +17,9 @@ docs/acceptance-*.json
 web/node_modules/
 web/coverage/
 web/.vitest/
+# Playwright end-to-end artefacts
+web/test-results/
+web/playwright-report/
 
 # Local build output
 /cline-pass-switcher
