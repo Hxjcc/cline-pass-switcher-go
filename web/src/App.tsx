@@ -265,9 +265,18 @@ function App() {
 
   useEffect(() => {
     let active = true
-    void fetchSnapshot(authKey)
-      .then((snapshot) => { if (active) applySnapshot(snapshot) })
-      .catch((error: unknown) => { if (active) handleError(error) })
+    const load = async () => {
+      // With no credential stored, ask the public /api/meta first: firing the
+      // five protected calls of a fresh page load counts as failed attempts on
+      // the server and locked the operator out of his own console for a while.
+      if (!authKey) {
+        const probe = await api<MetaResponse>("/api/meta")
+        if (probe.authRequired) return
+      }
+      const snapshot = await fetchSnapshot(authKey)
+      if (active) applySnapshot(snapshot)
+    }
+    void load().catch((error: unknown) => { if (active) handleError(error) })
     return () => { active = false }
   }, [authKey, applySnapshot, handleError])
 

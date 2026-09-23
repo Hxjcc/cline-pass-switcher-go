@@ -101,6 +101,15 @@ func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Reques
 		s.throttle.succeed(client)
 		return true
 	}
+	if presented == "" {
+		// An empty credential is a missing configuration, not a guess. The
+		// console probes /api/* before login, and counting that would lock the
+		// operator out of their own panel for 30 seconds.
+		writeJSON(writer, http.StatusUnauthorized, map[string]any{
+			"error": map[string]any{"message": "unauthorized: 管理密钥缺失或错误", "type": "auth_error"},
+		})
+		return false
+	}
 	if delay := s.throttle.fail(client); delay > 0 {
 		writeThrottled(writer, delay)
 		return false
@@ -135,6 +144,14 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 	}
 	grant, found := s.store.FindProxyKey(presented)
 	if !found {
+		if presented == "" {
+			// See authorizeAdmin: a client that has not been configured yet
+			// must not consume the operator's throttle budget.
+			writeJSON(writer, http.StatusUnauthorized, map[string]any{
+				"error": map[string]any{"message": "unauthorized: 代理密钥缺失或错误", "type": "auth_error"},
+			})
+			return false
+		}
 		if delay := s.throttle.fail(client); delay > 0 {
 			writeThrottled(writer, delay)
 			return false

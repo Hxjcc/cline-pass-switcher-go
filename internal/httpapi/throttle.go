@@ -6,12 +6,14 @@ import (
 	"time"
 )
 
-// The proxy key is the only credential for both the console and the API, so a
-// public deployment must not allow unlimited guessing. Failed attempts are
-// counted per source address; once the limit is reached the address is refused
-// outright for a growing cooldown, including attempts that would otherwise
-// succeed. That last part is deliberate: rate limiting only the *rejections*
-// would still evaluate every guess and hand the key to whoever finds it.
+// A public deployment must not allow unlimited guessing. Attempts that present
+// a *wrong* credential are counted per source address; once the limit is
+// reached the address is refused outright for a growing cooldown, including
+// attempts that would otherwise succeed. That last part is deliberate: rate
+// limiting only the *rejections* would still evaluate every guess and hand the
+// key to whoever finds it. A request that presents no credential at all is not
+// a guess - it is answered with 401 and leaves the counter alone, so a console
+// page loading before login cannot lock its own operator out.
 //
 // Behind a Docker port mapping every client appears as the bridge gateway, so
 // all remote users share one bucket. That is acceptable for a self-hosted

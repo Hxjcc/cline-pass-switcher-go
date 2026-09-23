@@ -141,3 +141,30 @@ func TestThrottleIgnoresRequestsWhenNoKeyIsConfigured(t *testing.T) {
 		}
 	}
 }
+
+// A console page opened without a stored key fires several protected requests
+// before the operator types anything. They are not guesses, so they must not
+// push the operator into a cooldown of his own making - only wrong credentials
+// spend the budget.
+func TestMissingCredentialDoesNotSpendTheThrottleBudget(t *testing.T) {
+	server, _ := newThrottleServer(t)
+	const remote = "203.0.113.9:4444"
+
+	for attempt := 0; attempt < authFailureLimit+2; attempt++ {
+		response := sendKey(t, server, remote, "")
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d, want 401", attempt, response.Code)
+		}
+	}
+	if allowed := sendKey(t, server, remote, "correct-key"); allowed.Code != http.StatusOK {
+		t.Fatalf("logging in must still work after empty probes: %d %s", allowed.Code, allowed.Body)
+	}
+
+	// The guesses themselves are still throttled.
+	for attempt := 0; attempt < authFailureLimit; attempt++ {
+		sendKey(t, server, remote, "still-wrong")
+	}
+	if blocked := sendKey(t, server, remote, "correct-key"); blocked.Code != http.StatusTooManyRequests {
+		t.Fatalf("wrong credentials must still trigger the cooldown: %d", blocked.Code)
+	}
+}
