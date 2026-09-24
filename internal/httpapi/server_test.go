@@ -277,6 +277,38 @@ func TestModelsEndpointDoesNotLimitSubscriptionModels(t *testing.T) {
 	}
 }
 
+// Clients see the same list the console shows: a routing entry for a model
+// outside the subscription does not advertise it.
+func TestModelsEndpointListsOnlyTheSubscription(t *testing.T) {
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(c *model.Config) {
+		c.KnownModels = []string{"cline-pass/first", "cline-pass/second", "cline-pass/first"}
+		c.PerModel = map[string]model.PerModelConfig{"cline-pass/unsubscribed": {}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := st.Config().PerModel["cline-pass/unsubscribed"]; !kept {
+		t.Fatal("setup: the routing entry outside the subscription was not stored")
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, localRequest(http.MethodGet, "/v1/models", nil))
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, item := range payload.Data {
+		ids = append(ids, item.ID)
+	}
+	if !slices.Equal(ids, []string{"cline-pass/first", "cline-pass/second"}) {
+		t.Fatalf("models = %v, want the subscription in order", ids)
+	}
+}
+
 func TestResponsesEndpointConvertsRequestAndResponse(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/chat/completions" {

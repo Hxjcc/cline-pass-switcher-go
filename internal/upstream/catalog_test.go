@@ -248,53 +248,6 @@ func TestProbeModelResolvesDirectProviderAgainstOpenRouterEndpoints(t *testing.T
 	}
 }
 
-func TestCatalogUsesTheOneHourCache(t *testing.T) {
-	var requests atomic.Int32
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/models" {
-			http.NotFound(writer, request)
-			return
-		}
-		requests.Add(1)
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"data":[{"id":"cline-pass/first"},{"id":"cline-pass/second"}]}`)
-	}))
-	defer upstreamServer.Close()
-
-	st := newStreamTestStore(t, upstreamServer.URL)
-	service := New(st)
-	for attempt := 0; attempt < 2; attempt++ {
-		ids := service.Catalog(t.Context())
-		if len(ids) != 2 || ids[0] != "cline-pass/first" || ids[1] != "cline-pass/second" {
-			t.Fatalf("catalog = %#v", ids)
-		}
-	}
-	if requests.Load() != 1 {
-		t.Fatalf("catalog should be cached for an hour, upstream requests = %d", requests.Load())
-	}
-	if st.Metadata().CatalogFetchedAt == 0 {
-		t.Fatal("the fetched catalog should be recorded in metadata")
-	}
-}
-
-// A failing catalog refresh must not erase the list the console is showing.
-func TestCatalogKeepsTheStoredListWhenUpstreamFails(t *testing.T) {
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer upstreamServer.Close()
-
-	st := newStreamTestStore(t, upstreamServer.URL)
-	if err := st.UpdateMetadata(func(meta *model.Metadata) {
-		meta.Catalog = []string{"cline-pass/known"}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if ids := New(st).Catalog(t.Context()); len(ids) != 1 || ids[0] != "cline-pass/known" {
-		t.Fatalf("catalog = %#v", ids)
-	}
-}
-
 // Quota probing never consumes inference quota. The console draws a meter for
 // every row, disabled ones included, so the probe has to cover every account
 // that still has a credential. Selection reads the same snapshot.

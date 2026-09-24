@@ -82,7 +82,6 @@ type Config struct {
 	// pinned to one account and capped at a spend limit.
 	ProxyKeys     []ProxyKeyGrant `json:"proxyKeys,omitempty"`
 	PublicBaseURL string          `json:"publicBaseUrl"`
-	ExposeCatalog bool            `json:"exposeCatalog"`
 	// TrustedProxies lists IP addresses or CIDR blocks whose forwarded client
 	// address headers (X-Forwarded-For / X-Real-IP) may be trusted. It only
 	// matters while ProxyKey is empty, when every unauthenticated request has
@@ -258,8 +257,6 @@ type Metadata struct {
 	StoreSequence     uint64                  `json:"storeSequence,omitempty"`
 	Models            map[string]ModelMeta    `json:"models"`
 	History           []HistoryEntry          `json:"history"`
-	Catalog           []string                `json:"catalog"`
-	CatalogFetchedAt  int64                   `json:"catalogFetchedAt"`
 	ORModels          []string                `json:"orModelList"`
 	ORModelsFetchedAt int64                   `json:"orModelsFetchedAt"`
 	Stats             map[string]AccountStats `json:"stats"`
@@ -275,7 +272,6 @@ func DefaultConfig() Config {
 		Port:                      3123,
 		ProxyKey:                  "",
 		PublicBaseURL:             "",
-		ExposeCatalog:             false,
 		CompactionRecentTokens:    DefaultCompactionRecentTokens,
 		CompactionReasoningEffort: DefaultCompactionReasoningEffort,
 		CompactionMinOutputTokens: DefaultCompactionMinOutputTokens,
@@ -313,7 +309,6 @@ func EmptyMetadata() Metadata {
 	return Metadata{
 		Models:   map[string]ModelMeta{},
 		History:  []HistoryEntry{},
-		Catalog:  []string{},
 		Stats:    map[string]AccountStats{},
 		KeyUsage: map[string]KeyUsage{},
 	}

@@ -185,7 +185,7 @@ export CLINE_PROXY_KEY="your-proxy-key" # 若未开启代理密钥，可填任�
 | **Responses** | `POST /v1/responses` (或 `/responses`) | Codex / ChatGPT 协议 |
 | **Responses Compact** | `POST /v1/responses/compact` | 独立压缩端点（脚本 / 自定义客户端） |
 | **Responses 远端压缩 v2** | `POST /v1/responses` + `{"type":"compaction_trigger"}` 输入项 | Codex 的远端压缩协议，返回恰好一个 `compaction` item |
-| **Models 列表** | `GET /v1/models` (或 `/models`) | 获取已订阅/全量模型清单 |
+| **Models 列表** | `GET /v1/models` (或 `/models`) | 返回已订阅的模型，与控制台「模型与上游」列表一致 |
 | **健康检查** | `GET /healthz` | 服务健康探针 |
 
 **Curl 快速验证**：
@@ -348,7 +348,7 @@ server {
 | 文件 | 描述与维护说明 |
 |---|---|
 | `config.json` | 核心配置快照：包含账号列表、密钥、模型偏好与路由钉选设置。 |
-| `metadata.json` | 运行时快照：包含渠道测速结果、官方模型目录缓存、最近 500 条请求历史，以及各代理密钥的累计用量（`keyUsage`，用于额度上限）。 |
+| `metadata.json` | 运行时快照：包含渠道测速结果、模型能力信息、最近 500 条请求历史，以及各代理密钥的累计用量（`keyUsage`，用于额度上限）。 |
 | `store.journal` | WAL（Write-Ahead Log）操作日志：每次配置修改与请求记录均先追加至该日志并批量 fsync，定期合并入上述 JSON 快照中。 |
 
 > **数据备份**：备份或迁移时，先停止容器或服务进程，直接复制整个 `./data` 目录即可。

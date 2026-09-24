@@ -593,37 +593,6 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	return result, nil
 }
 
-func (s *Service) Catalog(ctx context.Context) []string {
-	meta := s.store.Metadata()
-	if len(meta.Catalog) > 0 && time.Now().UnixMilli()-meta.CatalogFetchedAt < time.Hour.Milliseconds() {
-		return meta.Catalog
-	}
-	account := s.store.PickAccount()
-	if account.Key == "" {
-		return meta.Catalog
-	}
-	cfg := s.store.Config()
-	_, raw, err := s.fetchJSON(ctx, http.MethodGet, cfg.UpstreamBase+"/models", chatHeaders(account.Key), nil, 60*time.Second)
-	if err != nil {
-		return meta.Catalog
-	}
-	items := getSlice(jsonx.Map(raw), "data")
-	ids := make([]string, 0, len(items))
-	for _, item := range items {
-		if id := getString(jsonx.Map(item), "id"); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return meta.Catalog
-	}
-	s.updateMetadata(func(current *model.Metadata) {
-		current.Catalog = ids
-		current.CatalogFetchedAt = time.Now().UnixMilli()
-	})
-	return ids
-}
-
 // TestAccount probes one credential. The stored key may be addressed by
 // account ID instead of being resubmitted, so the console never has to cache a
 // revealed key to test a saved account.

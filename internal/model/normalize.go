@@ -247,9 +247,6 @@ func NormalizeMetadata(meta *Metadata) {
 	if meta.History == nil {
 		meta.History = []HistoryEntry{}
 	}
-	if meta.Catalog == nil {
-		meta.Catalog = []string{}
-	}
 	if meta.Stats == nil {
 		meta.Stats = map[string]AccountStats{}
 	}

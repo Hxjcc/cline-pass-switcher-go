@@ -196,7 +196,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && path == "/api/config":
 		s.handleSaveConfig(writer, request)
 	case request.Method == http.MethodGet && isModelsPath(path):
-		s.handleListModels(writer, request)
+		s.handleListModels(writer)
 	case request.Method == http.MethodPost && isChatPath(path):
 		s.handleChat(writer, request)
 	case request.Method == http.MethodPost && isResponsesPath(path):
@@ -219,7 +219,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request) {
-	catalog := s.upstream.Catalog(request.Context())
 	cfg := s.store.Config()
 	meta := s.store.Metadata()
 	subscription := make([]map[string]any, 0, len(cfg.KnownModels))
@@ -232,8 +231,6 @@ func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request)
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"subscription":  subscription,
-		"catalogCount":  len(catalog),
-		"catalog":       catalog,
 		"proxyBase":     s.publicProxyBase(cfg),
 		"officialFetch": meta.OfficialModelsFetch,
 	})
@@ -353,7 +350,6 @@ func (s *Server) handleGetSecurity(writer http.ResponseWriter) {
 		"adminKey":      cfg.AdminKey,
 		"publicBaseUrl": cfg.PublicBaseURL,
 		"authRequired":  s.store.AdminKey() != "",
-		"exposeCatalog": cfg.ExposeCatalog,
 		// The effective values ride along with the console's own snapshot, so
 		// no extra request is needed to see what is actually in force.
 		"settings": s.effectiveSettings(),
@@ -365,7 +361,6 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 		ProxyKey      *string `json:"proxyKey"`
 		AdminKey      *string `json:"adminKey"`
 		PublicBaseURL *string `json:"publicBaseUrl"`
-		ExposeCatalog *bool   `json:"exposeCatalog"`
 	}
 	if err := readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
@@ -381,9 +376,6 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 		if body.PublicBaseURL != nil {
 			cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(*body.PublicBaseURL), "/")
 		}
-		if body.ExposeCatalog != nil {
-			cfg.ExposeCatalog = *body.ExposeCatalog
-		}
 	}); err != nil {
 		writeInternalError(writer, err)
 		return
@@ -396,7 +388,6 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 		"publicBaseUrl": cfg.PublicBaseURL,
 		"authRequired":  s.store.AdminKey() != "",
 		"proxyBase":     s.publicProxyBase(cfg),
-		"exposeCatalog": cfg.ExposeCatalog,
 	})
 }
 
@@ -593,16 +584,9 @@ func (s *Server) handleSaveConfig(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s *Server) handleListModels(writer http.ResponseWriter, request *http.Request) {
-	cfg := s.store.Config()
-	ids := append([]string{}, cfg.KnownModels...)
-	for modelID := range cfg.PerModel {
-		ids = append(ids, modelID)
-	}
-	if cfg.ExposeCatalog {
-		ids = append(ids, s.upstream.Catalog(request.Context())...)
-	}
-	ids = strx.UniqueTrimmed(ids)
+// handleListModels advertises exactly the subscription the console shows.
+func (s *Server) handleListModels(writer http.ResponseWriter) {
+	ids := strx.UniqueTrimmed(s.store.Config().KnownModels)
 	data := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		data = append(data, map[string]any{"id": id, "object": "model"})
