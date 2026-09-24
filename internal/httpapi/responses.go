@@ -184,14 +184,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		if message == "" {
 			message = "upstream returned no response"
 		}
-		s.record(request.Context(), model.HistoryEntry{
-			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
-			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
-			Usage:           result.Usage,
-			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
-			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		})
+		s.record(request.Context(), compactionFailureEntry(modelID, stream, started, bridgeContext, chatBody, result, message))
 		if stream {
 			details := map[string]any{"message": message, "type": "upstream_error"}
 			if upstreamError, ok := result.Out["error"].(map[string]any); ok {
@@ -215,15 +208,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 
 	if err != nil {
-		message := err.Error()
-		s.record(request.Context(), model.HistoryEntry{
-			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
-			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
-			Usage:           result.Usage,
-			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
-			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		})
+		s.record(request.Context(), compactionFailureEntry(modelID, stream, started, bridgeContext, chatBody, result, err.Error()))
 		if stream {
 			writeCompactFailure(writer, modelID, conversionErrorBody(err))
 			return
@@ -232,20 +217,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		return
 	}
 
-	compactEntry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID,
-		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
-		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
-		Account: result.Account.Name, AccountID: result.Account.ID,
-		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		MissingSummarySections: compactionMissingSections(compaction),
-		Degraded:               result.Degraded,
-		DegradeReason:          result.DegradeReason,
-	}
-	applyReasoningEffort(&compactEntry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
-	applyChatStats(&compactEntry, result.Out, compactEntry.MS)
-	compactEntry.Usage = result.Usage
-	s.record(request.Context(), compactEntry)
+	s.record(request.Context(), compactionEntry(modelID, stream, started, bridgeContext, chatBody, result, compaction))
 	targets := attemptTargets(s.upstream.BuildAttempts(modelID, modelConfig))
 	if !stream {
 		setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
@@ -259,6 +231,54 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	writer.WriteHeader(http.StatusOK)
 	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), responsesbridge.CompactionEvents(compaction, bridgeContext))
+}
+
+// compactionFailureEntry is the history row of a compaction turn that
+// produced no compaction item.
+func compactionFailureEntry(
+	modelID string,
+	stream bool,
+	started time.Time,
+	bridgeContext *responsesbridge.Context,
+	chatBody map[string]any,
+	result chainResult,
+	message string,
+) model.HistoryEntry {
+	return model.HistoryEntry{
+		TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
+		Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+		Usage:           result.Usage,
+		RequestedEffort: bridgeContext.RequestedReasoningEffort,
+		Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
+		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+	}
+}
+
+// compactionEntry is the history row of a compaction turn that returned a
+// compaction item, degraded or not. Usage covers every summarization pass.
+func compactionEntry(
+	modelID string,
+	stream bool,
+	started time.Time,
+	bridgeContext *responsesbridge.Context,
+	chatBody map[string]any,
+	result chainResult,
+	compaction map[string]any,
+) model.HistoryEntry {
+	entry := model.HistoryEntry{
+		TS: time.Now().UnixMilli(), Model: modelID,
+		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
+		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
+		Account: result.Account.Name, AccountID: result.Account.ID,
+		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
+		MissingSummarySections: compactionMissingSections(compaction),
+		Degraded:               result.Degraded,
+		DegradeReason:          result.DegradeReason,
+	}
+	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
+	applyChatStats(&entry, result.Out, entry.MS)
+	entry.Usage = result.Usage
+	return entry
 }
 
 // compactionMinOutputTokens is the built-in output floor for compaction turns;
@@ -445,14 +465,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		if message == "" {
 			message = "upstream returned no response"
 		}
-		s.record(request.Context(), model.HistoryEntry{
-			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
-			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
-			Usage:           result.Usage,
-			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
-			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		})
+		s.record(request.Context(), compactionFailureEntry(modelID, stream, started, bridgeContext, chatBody, result, message))
 		if stream {
 			details := map[string]any{"message": message, "type": "upstream_error"}
 			if upstreamError, ok := result.Out["error"].(map[string]any); ok {
@@ -476,15 +489,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	}
 
 	if err != nil {
-		message := err.Error()
-		s.record(request.Context(), model.HistoryEntry{
-			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
-			Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
-			Usage:           result.Usage,
-			RequestedEffort: bridgeContext.RequestedReasoningEffort,
-			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
-			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		})
+		s.record(request.Context(), compactionFailureEntry(modelID, stream, started, bridgeContext, chatBody, result, err.Error()))
 		if stream {
 			writeCompactFailure(writer, modelID, conversionErrorBody(err))
 			return
@@ -493,20 +498,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		return
 	}
 
-	entry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID,
-		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
-		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
-		Account: result.Account.Name, AccountID: result.Account.ID,
-		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
-		MissingSummarySections: compactionMissingSections(compaction),
-		Degraded:               result.Degraded,
-		DegradeReason:          result.DegradeReason,
-	}
-	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
-	applyChatStats(&entry, result.Out, entry.MS)
-	entry.Usage = result.Usage
-	s.record(request.Context(), entry)
+	s.record(request.Context(), compactionEntry(modelID, stream, started, bridgeContext, chatBody, result, compaction))
 	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if !stream {

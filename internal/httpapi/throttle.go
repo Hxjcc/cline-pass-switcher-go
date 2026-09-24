@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,11 @@ import (
 // a guess - it is answered with 401 and leaves the counter alone, so a console
 // page loading before login cannot lock its own operator out.
 //
-// Behind a Docker port mapping every client appears as the bridge gateway, so
-// all remote users share one bucket. That is acceptable for a self-hosted
-// console with one operator; it is also why the entry map is bounded.
+// Behind a reverse proxy every client arrives from the proxy's address. When
+// that hop is the loopback interface or a trusted proxy, its forwarding chain
+// names the real client and each client gets its own bucket (throttleClient);
+// otherwise - a Docker port mapping without TRUSTED_PROXIES, say - all of them
+// share the peer's bucket. The entry map is bounded either way.
 const (
 	authFailureLimit  = 5
 	authFailureWindow = time.Minute
@@ -55,6 +58,22 @@ func clientKey(remoteAddr string) string {
 		return ip.String()
 	}
 	return strings.TrimSpace(remoteAddr)
+}
+
+// throttleClient picks the address a failed credential is charged to. A hop
+// that may speak for other clients - the loopback interface or a trusted
+// proxy - is resolved through its forwarding chain, so one client with a stale
+// key cannot lock out everybody behind the same proxy. Any other peer is
+// charged directly: its forwarding headers are self-reported, and honouring
+// them would hand a guesser a fresh bucket per request.
+func throttleClient(request *http.Request, trustedProxies []string) string {
+	peer := remoteIP(request.RemoteAddr)
+	if peer != nil && (peer.IsLoopback() || ipTrusted(peer, trustedProxies)) && hasForwardingHeaders(request) {
+		if client, found := forwardedClientIP(request, trustedProxies); found {
+			return client.String()
+		}
+	}
+	return clientKey(request.RemoteAddr)
 }
 
 // blocked reports how long the address must wait before its next attempt.

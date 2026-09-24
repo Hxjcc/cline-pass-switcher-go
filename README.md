@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go" alt="Go Version" />
+  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go" alt="Go Version" />
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker" alt="Docker Ready" />
-  <img src="https://img.shields.io/badge/Node.js-22%2B%20(Build%20Only)-339933?style=flat-square&logo=node.js" alt="Node Version" />
+  <img src="https://img.shields.io/badge/Node.js-22.12%2B%20(Build%20Only)-339933?style=flat-square&logo=node.js" alt="Node Version" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
@@ -114,8 +114,8 @@ Cline Pass 上游
 ### 方式二：本地源码编译运行
 
 #### 环境要求
-- **Go**: 1.24 或更高版本
-- **Node.js**: 22+ 及 npm（仅构建前端资源时需要）
+- **Go**: 1.25 或更高版本
+- **Node.js**: 22.12 或更高版本及 npm（仅构建前端资源时需要；运行前端单元测试需要 22.22+ 或 24.15+）
 
 #### 构建步骤
 ```bash
@@ -287,7 +287,7 @@ ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由�
 | `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 压缩时逐字保留的最近对话预算（估算 token）。摘要只覆盖更早的部分，最近几轮原文随 compaction item 一同回放，避免路径、命令与报错文本被摘要改写。设为 `0` 关闭该行为。 |
 | `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | 压缩轮次使用的推理档位（须为模型声明的档位之一，或 `auto`＝取最接近 high 的档）。默认 `max`：较低档位容易把输出预算全部用于隐藏思考，导致网关返回 `empty response content` 并额外消耗一轮重试；如需降低开销可设为 `high`。 |
 | `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `16384` | 压缩轮次的输出预算下限（上限 32768）。隐藏思考与摘要正文共用该预算，摘要通常需要 5~6k 可见 token，8192 时常在首轮即被截断并触发升档重试，因此默认取两档（16384）；升档重试时再翻倍至上限 32768。 |
-| `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（仅在未设置 `PROXY_KEY` 时生效）。 |
+| `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（逗号分隔）。来自这些地址（以及本机回环）的 `X-Forwarded-For` / `X-Real-IP` 会被采信，用于两件事：未设置密钥时判断请求是否来自本机；认证失败限流按真实客户端 IP 分别计数，避免一个用错密钥的客户端连累同一反代后面的所有人。Docker 部署并由宿主机反代时，请填宿主机在容器网络中的网关地址（可用 `docker network inspect` 查看，一般形如 `172.18.0.1`），不要填整段私网网段，否则同网络的其他容器也能伪造来源。 |
 | `TRUST_LOCAL_PORT_FORWARD`| `trustLocalPortForward` | Compose: `1` | 信任本地端口映射（容器内将宿主机回环端口视作本机安全请求）。暴露公网时必须清除此项并配置 `PROXY_KEY`。 |
 
 ---
@@ -335,7 +335,9 @@ server {
   <li><b>额度上限（USD）</b>：按上游返回的实际费用累计，达到上限后该密钥的请求被拒绝（HTTP 429，<code>code=key_spend_limit</code>），主密钥不受影响。累计值持久化于 <code>data/metadata.json</code>，重启不清零，可在控制台或通过 <code>POST /api/keys/reset</code> 清零。</li>
 </ul>
 建议同时设置 <code>ADMIN_KEY</code>：客户端密钥无法打开控制台，也就无法读取账号池与上游密钥。<br>
-说明：额度以上游返回的费用为准；上游未返回费用的请求按 0 计，不做估算。
+说明：额度以上游返回的费用为准；上游未返回费用的请求按 0 计，不做估算。客户端中途取消的流式请求拿不到上游返回的费用，也按 0 计，但上游仍会照常扣费，因此额度统计可能偏低。<br>
+<b>并发预留</b>：准入时把进行中的请求按该密钥的历史平均单次费用预留。「已用 + 预留」达到上限时，新请求返回 HTTP 429（响应头 <code>X-Cline-Key-Limit: reserved</code>），等进行中的请求结束后即可重试。<br>
+在反向代理后面分发密钥时，请配置 <code>TRUSTED_PROXIES</code>（见上文配置表），否则所有客户端共用反代地址的认证失败计数：某个客户端连续用错密钥，会让同一反代后的其他人一起被短暂拒绝。
 </details>
 
 ---

@@ -88,7 +88,7 @@ func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Reques
 	if expected == "" {
 		return s.authorizeOpen(writer, request)
 	}
-	client := clientKey(request.RemoteAddr)
+	client := throttleClient(request, s.store.AccessPolicy().TrustedProxies)
 	if delay, blocked := s.adminThrottle.blocked(client); blocked {
 		writeThrottled(writer, delay)
 		return false
@@ -129,7 +129,7 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 	if master == "" && len(issued) == 0 {
 		return s.authorizeOpen(writer, request)
 	}
-	client := clientKey(request.RemoteAddr)
+	client := throttleClient(request, s.store.AccessPolicy().TrustedProxies)
 	if delay, blocked := s.clientThrottle.blocked(client); blocked {
 		writeThrottled(writer, delay)
 		return false
@@ -172,26 +172,36 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		return false
 	}
 	if message := s.keyLimitMessage(grant); message != "" {
-		writer.Header().Set("X-Cline-Key-Limit", "exceeded")
-		writeJSON(writer, http.StatusTooManyRequests, map[string]any{
-			"error": map[string]any{
-				"message": message,
-				"type":    "insufficient_quota",
-				"code":    "key_spend_limit",
-			},
-		})
+		writeKeyLimit(writer, "exceeded", message)
+		return false
+	}
+	hold, message := s.spendHolds.admit(grant, s.store.KeyUsage()[grant.ID])
+	if message != "" {
+		writeKeyLimit(writer, "reserved", message)
 		return false
 	}
 	s.clientThrottle.succeed(client)
 	ctx := withCallerKey(request.Context(), callerKey{
 		ID: grant.ID, Name: grant.Name, AccountID: grant.AccountID, Issued: true,
 	})
+	ctx = withSpendHold(ctx, hold)
 	// A pinned key never falls back to another account: the operator promised
 	// the holder this specific pool entry, and silent failover would spend
 	// somebody else's budget instead.
 	ctx = upstream.WithAccountPin(ctx, grant.AccountID)
 	*request = *request.WithContext(ctx)
 	return true
+}
+
+func writeKeyLimit(writer http.ResponseWriter, reason, message string) {
+	writer.Header().Set("X-Cline-Key-Limit", reason)
+	writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "insufficient_quota",
+			"code":    "key_spend_limit",
+		},
+	})
 }
 
 // keyLimitMessage reports why an issued key may not run, or an empty string

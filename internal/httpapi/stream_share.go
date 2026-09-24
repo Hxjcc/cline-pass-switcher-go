@@ -33,10 +33,24 @@ type streamShareHub struct {
 	mu     sync.Mutex
 	jobs   map[string]*sharedResponsesStream
 	budget *replayBudget
+	closed bool
+	// running counts upstream runs, which may outlive every handler.
+	running sync.WaitGroup
 }
 
 func newStreamShareHub() *streamShareHub {
 	return &streamShareHub{jobs: map[string]*sharedResponsesStream{}, budget: &replayBudget{limits: defaultReplayLimits()}}
+}
+
+// close cancels every run and makes later runs start cancelled, so a
+// shutdown only waits for the runs to record what they have.
+func (h *streamShareHub) close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closed = true
+	for _, job := range h.jobs {
+		job.cancel()
+	}
 }
 
 // responsesShareKey identifies requests that may share one upstream stream.
@@ -119,13 +133,23 @@ func (h *streamShareHub) join(parent context.Context, key string, run func(*shar
 			keepalive: maxStreamKeepaliveInterval,
 		}
 		job.events = responsesbridge.NewEventWriter(job.replay)
+		if h.closed {
+			cancel()
+		}
 		h.jobs[key] = job
 		started = true
+		h.running.Add(1)
 	}
 	job.refs++
 	h.mu.Unlock()
 	if started {
+		// The run records the spend after its first client may have left,
+		// so it keeps that client's reservation until then.
+		hold := spendHoldFrom(parent)
+		hold.retain()
 		go func() {
+			defer h.running.Done()
+			defer hold.release()
 			run(job)
 			job.finish()
 		}()

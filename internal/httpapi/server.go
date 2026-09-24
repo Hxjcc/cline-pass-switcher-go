@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
@@ -32,6 +33,10 @@ type Server struct {
 	shares         *streamShareHub
 	adminThrottle  *authThrottle
 	clientThrottle *authThrottle
+	spendHolds     *spendHolds
+	// requests counts running handlers, so Shutdown can wait for their
+	// history records before the store closes.
+	requests sync.WaitGroup
 }
 
 type chainResult struct {
@@ -68,10 +73,34 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 		shares:         newStreamShareHub(),
 		adminThrottle:  newAuthThrottle(),
 		clientThrottle: newAuthThrottle(),
+		spendHolds:     newSpendHolds(),
 	}, nil
 }
 
+// Shutdown cancels shared streams nobody is reading any more and waits until
+// every running request has written its history record. Call it after the
+// HTTP server has stopped accepting requests and before the store is closed.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.shares.close()
+	done := make(chan struct{})
+	go func() {
+		// Shared runs are only started by handlers, so once the handlers are
+		// gone no new run can be added while the second wait is in progress.
+		s.requests.Wait()
+		s.shares.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	s.requests.Add(1)
+	defer s.requests.Done()
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("Cache-Control", "no-store")
 	// The console keeps the proxy key in browser storage, so a script injected
@@ -118,6 +147,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if !s.authorizeClient(writer, request) {
 			return
 		}
+		defer spendHoldFrom(request.Context()).release()
 	} else if strings.HasPrefix(path, "/api/") {
 		if !s.authorizeAdmin(writer, request) {
 			return

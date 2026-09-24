@@ -372,4 +372,28 @@ func TestUnauthenticatedTrustWarnings(t *testing.T) {
 	if lines := strings.Count(strings.TrimSpace(both), "\n") + 1; lines != 2 {
 		t.Fatalf("both switches should produce two lines, got %d: %q", lines, both)
 	}
+
+	// Each surface is judged by its own credential: naming only the surface
+	// that is actually open keeps the warning from overstating the exposure.
+	grant := []model.ProxyKeyGrant{{ID: "k", Key: "issued", Enabled: true}}
+	for _, tc := range []struct {
+		name          string
+		config        model.Config
+		console, apis bool
+	}{
+		{"admin-only", model.Config{AdminKey: "admin"}, false, true},
+		{"issued-only", model.Config{ProxyKeys: grant}, true, false},
+		{"admin-and-issued", model.Config{AdminKey: "admin", ProxyKeys: grant}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.config.TrustLocalPortForward = true
+			output := captureLog(t, func() { warnUnauthenticatedAccess(tc.config) })
+			if got := strings.Contains(output, "[警告] 控制台"); got != tc.console {
+				t.Fatalf("console named = %v, want %v: %q", got, tc.console, output)
+			}
+			if got := strings.Contains(output, "模型接口未设置"); got != tc.apis {
+				t.Fatalf("model API named = %v, want %v: %q", got, tc.apis, output)
+			}
+		})
+	}
 }
