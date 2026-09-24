@@ -32,7 +32,7 @@ test("issuing a client key keeps the secret out of the boot frame", async ({ pag
   const minted = await field.inputValue()
   expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
 
-  await page.getByPlaceholder("给谁用").fill("e2e")
+  await page.getByPlaceholder("使用者或用途").fill("e2e")
   await page.getByRole("button", { name: /^保存$/ }).click()
   await expect(page.getByText("代理密钥已保存")).toBeVisible()
 
@@ -42,7 +42,7 @@ test("issuing a client key keeps the secret out of the boot frame", async ({ pag
   await page.getByRole("tab", { name: "代理密钥" }).click()
   const stored = page.getByLabel("客户端密钥")
   await expect(stored).toHaveValue("")
-  await expect(page.getByPlaceholder("给谁用")).toHaveValue("e2e")
+  await expect(page.getByPlaceholder("使用者或用途")).toHaveValue("e2e")
 
   // Revealing it puts the plaintext into the DOM; the boot frame written on
   // pagehide must still not contain it.

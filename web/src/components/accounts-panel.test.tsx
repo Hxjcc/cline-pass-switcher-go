@@ -268,7 +268,7 @@ test("says a full quota window is skipped while another account is usable", asyn
     ],
   }
   renderPanel({ quota: full })
-  await waitFor(() => expect(screen.getByText("已满，有其他可用账号时会跳过")).toBeTruthy())
+  await waitFor(() => expect(screen.getByText("已用满，存在其他可用账号时将跳过")).toBeTruthy())
 })
 
 test("reports a failed quota probe without hiding the account", async () => {

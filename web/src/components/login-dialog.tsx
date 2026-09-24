@@ -56,40 +56,47 @@ export function LoginDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <KeyRound className="size-4" />
-            控制台鉴权
+            登录控制台
           </DialogTitle>
           <DialogDescription>
-            输入管理密钥（未单独设置时就是代理主密钥）以读取和管理服务配置。
+            请输入管理密钥。未单独设置管理密钥时，请使用代理主密钥。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor="login-key">管理密钥</Label>
-          <Input
-            id="login-key"
-            data-secret="1"
-            type="password"
-            value={key}
-            autoFocus
-            autoComplete="current-password"
-            onChange={(event) => setKey(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void submit()
-            }}
-          />
-          <Label className="mt-2 font-normal" htmlFor="login-remember">
-            <Checkbox
-              id="login-remember"
-              checked={remember}
-              onCheckedChange={(checked) => setRemember(checked === true)}
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="login-key" className="text-muted-foreground text-xs font-normal">
+              管理密钥
+            </Label>
+            <Input
+              id="login-key"
+              data-secret="1"
+              type="password"
+              value={key}
+              autoFocus
+              autoComplete="current-password"
+              aria-invalid={error ? true : undefined}
+              onChange={(event) => setKey(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submit()
+              }}
             />
-            在这台设备上记住密钥
-          </Label>
-          <p className="text-muted-foreground text-xs">
-            {remember
-              ? "密钥会写入浏览器 localStorage，关闭浏览器后仍然保留。"
-              : "密钥只保存在本次会话（sessionStorage），关闭标签页即失效。"}
-          </p>
-          {error && <p className="text-destructive text-sm">{error}</p>}
+            {error && <p className="text-destructive text-xs leading-5">{error}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="font-normal" htmlFor="login-remember">
+              <Checkbox
+                id="login-remember"
+                checked={remember}
+                onCheckedChange={(checked) => setRemember(checked === true)}
+              />
+              在这台设备上记住密钥
+            </Label>
+            <p className="text-muted-foreground pl-6 text-xs leading-5">
+              {remember
+                ? "密钥将保存在浏览器本地存储中，关闭浏览器后仍会保留。"
+                : "密钥仅保存在当前会话中，关闭标签页后失效。"}
+            </p>
+          </div>
         </div>
         <DialogFooter>
           <Button onClick={submit} disabled={loading || !key.trim()}>

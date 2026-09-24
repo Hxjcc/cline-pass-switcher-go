@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { KeysPanel } from "./keys-panel"
@@ -87,4 +87,42 @@ test("flags a spent-out key and an unusable binding", () => {
   ])
   expect(screen.getByText("额度已用尽")).toBeTruthy()
   expect(screen.getByText("绑定账号不可用")).toBeTruthy()
+})
+
+test("reveals stored secrets on demand and masks them again", async () => {
+  const stored = { id: "key_1", name: "ci", keyPreview: "sk-12…cdef", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
+  const onReveal = vi.fn(async (): Promise<KeysResponse> => ({ keys: [{ ...stored, key: "sk-plain" }] }))
+  render(
+    <KeysPanel
+      data={{ keys: [stored] }}
+      accounts={accounts}
+      onSave={vi.fn()}
+      onReveal={onReveal}
+      onReset={vi.fn()}
+    />,
+  )
+  const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
+  expect(input.value).toBe("")
+
+  fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
+  await vi.waitFor(() => expect(input.value).toBe("sk-plain"))
+
+  fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
+  expect(input.value).toBe("")
+})
+
+test("shows spend against the limit with readable amounts", () => {
+  renderPanel([
+    { id: "key_small", name: "small", hasKey: true, enabled: true, spendLimitUsd: 0.5, requests: 2, spentUsd: 0.0018 },
+  ])
+  const card = within(screen.getByRole("article", { name: "small" }))
+  expect(card.getByText("$0.0018")).toBeTruthy()
+  expect(card.getByText(/\$0\.50/)).toBeTruthy()
+  expect(card.getByRole("progressbar", { name: "额度用量" }).getAttribute("aria-valuenow")).toBe("0")
+})
+
+test("an empty list offers a single way to add a key", () => {
+  renderPanel([])
+  expect(screen.getByText("尚未签发客户端密钥")).toBeTruthy()
+  expect(screen.getAllByRole("button", { name: /新增客户端密钥/ })).toHaveLength(1)
 })

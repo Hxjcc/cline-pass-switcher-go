@@ -1,7 +1,8 @@
 import { useRef, useState } from "react"
-import { CalendarClock, Eye, EyeOff, Gauge, KeyRound, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
+import { CalendarClock, Eye, EyeOff, Gauge, PlugZap, Plus, RefreshCw, Save, Trash2, Users } from "lucide-react"
 import { toast } from "sonner"
 
+import { EmptyState, Field, IconAction, SummaryBar, SummaryItem } from "@/components/console-kit"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,6 +26,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { errorMessage } from "@/lib/api"
+import { cardActionClass, chipClass } from "@/lib/console-styles"
 import { useDraft } from "@/lib/use-draft"
 import { useAccountQuota } from "@/lib/use-account-quota"
 import {
@@ -44,8 +46,6 @@ import type {
   QuotaCaps,
   QuotaResponse,
 } from "@/types"
-
-const chipClass = "h-5 px-1.5 py-0 text-2xs"
 
 // Unsaved rows get a client-side identity so the selection survives filtering
 // and reordering before the account even exists on the server.
@@ -165,7 +165,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
     // that never had one are dropped here.
     const kept = draft.accounts.filter((account) => account.key.trim() || account.hasKey)
     if (!kept.length) {
-      toast.error("至少需要一个填写了 key 的账号")
+      toast.error("至少需要一个已填写 API Key 的账号")
       return
     }
     // Filtering out an empty row above the selection must not move the choice;
@@ -195,7 +195,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
     const typed = account.key.trim()
     const savedID = account.id.trim()
     if (!typed && (!savedID || !account.hasKey)) {
-      toast.error("请先填写一个新的 Key，或保存后再测试已存密钥")
+      toast.error("请先填写 API Key，或保存后再测试已保存的密钥")
       return
     }
     setTesting(index)
@@ -205,7 +205,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
       const result = await onTest(typed, typed ? undefined : savedID)
       if (result.ok) {
         toast.success(
-          `${account.name || `账号${index + 1}`} 可用 · ${result.ms} ms${result.note ? ` · ${result.note}` : ""}`,
+          `${account.name || `账号${index + 1}`} 可用，耗时 ${result.ms} ms${result.note ? ` · ${result.note}` : ""}`,
         )
       } else {
         toast.error(result.error || "账号不可用")
@@ -239,12 +239,12 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
 
   return (
     <Card className="@container/accounts">
-      <CardHeader className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1">
-          <CardTitle>账号池</CardTitle>
-          <CardDescription>管理账号、切换调度方式，查看各周期套餐用量。某个周期达到 100% 时，有其他可用账号就会跳过。</CardDescription>
-        </div>
-        <CardAction className="grid w-full grid-cols-2 items-center gap-2 @min-[640px]/accounts:flex @min-[640px]/accounts:w-auto @min-[640px]/accounts:flex-wrap">
+      <CardHeader>
+        <CardTitle>账号池</CardTitle>
+        <CardDescription>
+          管理 Cline Pass 账号与调度方式，并查看各周期的套餐用量；用量已满的账号在有其他可用账号时会被跳过。
+        </CardDescription>
+        <CardAction className={cardActionClass}>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -291,9 +291,11 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
-          <div className="flex flex-wrap items-center gap-3">
-            <Label id="account-mode-label" className="text-muted-foreground text-xs">调度模式</Label>
+        <SummaryBar className="py-2">
+          <div className="flex items-center gap-2.5">
+            <Label id="account-mode-label" className="text-muted-foreground text-xs font-normal">
+              调度模式
+            </Label>
             <Select
               value={draft.mode}
               items={modeItems}
@@ -304,7 +306,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                 }))
               }
             >
-              <SelectTrigger aria-labelledby="account-mode-label" className="bg-card w-36">
+              <SelectTrigger size="sm" aria-labelledby="account-mode-label" className="bg-card w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -316,11 +318,22 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
               </SelectContent>
             </Select>
           </div>
-          <div className="text-muted-foreground flex items-center gap-2 text-xs">
-            <KeyRound className="size-3.5" />
-            {draft.accounts.filter((account) => account.key || account.hasKey).length} 个已配置账号
-          </div>
-        </div>
+          <SummaryItem
+            label="已配置"
+            value={draft.accounts.filter((account) => account.key || account.hasKey).length}
+            unit="个账号"
+          />
+          <SummaryItem
+            label="已启用"
+            value={draft.accounts.filter((account) => account.enabled).length}
+            unit="个"
+          />
+          <span>
+            {draft.mode === "roundrobin"
+              ? "请求在所有已启用账号之间轮流分配。"
+              : "请求优先使用当前账号，不可用时按列表顺序改用下一个。"}
+          </span>
+        </SummaryBar>
 
         {draft.accounts.length ? (
           <div className="grid grid-cols-1 items-start gap-3 @min-[1100px]/accounts:grid-cols-2">
@@ -328,6 +341,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
               const stats = draft.stats[account.id]
               const isActive = draft.mode === "single" && draft.active === index
               const inPool = draft.mode === "roundrobin" && account.enabled
+              const rowKey = account.id || `new-${index}`
               return (
                 <article
                   key={account.id || `new-${index}`}
@@ -338,82 +352,55 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                     !account.enabled && "bg-muted/20",
                   )}
                 >
-                  <div className="space-y-2.5 p-3">
-                    <div className="grid min-w-0 items-end gap-3 @min-[480px]/account:grid-cols-[minmax(0,1fr)_auto]">
-                      <div className="flex min-w-0 flex-wrap items-end gap-3">
-                        <label className="w-fit min-w-0 max-w-[min(100%,18rem)] space-y-1.5">
-                          <span className="text-muted-foreground block text-xs">账号名称</span>
-                          <Input
-                            value={account.name}
-                            onChange={(event) => updateAccount(index, { name: event.target.value })}
-                            placeholder="名称"
-                            aria-label="账号名称"
-                            size={8}
-                            className="bg-background/40 h-8 w-auto min-w-20 max-w-full [field-sizing:content] font-medium"
-                          />
-                        </label>
-                        <label className="w-fit min-w-0 max-w-[min(100%,28rem)] space-y-1.5">
-                          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                            <KeyRound className="size-3" aria-hidden="true" />
-                            API Key
-                          </span>
-                          <Input
-                            value={keyFieldValue(account, showKeys, revealed, keyFocused === (account.id || `new-${index}`))}
-                            type={showKeys ? "text" : "password"}
-                            autoComplete="off"
-                            placeholder={account.hasKey ? "" : "密钥"}
-                            aria-label="API Key"
-                            data-secret="1"
-                            size={24}
-                            onFocus={() => setKeyFocused(account.id || `new-${index}`)}
-                            onBlur={() => setKeyFocused((current) => (current === (account.id || `new-${index}`) ? null : current))}
-                            onChange={(event) => updateAccount(index, { key: event.target.value })}
-                            className={cn("bg-background/40 h-8 w-auto min-w-[min(14rem,100%)] max-w-full [field-sizing:content] font-mono text-xs", !showKeys && "tracking-[0.18em]")}
-                          />
-                        </label>
-                      </div>
-                      <div className="flex h-8 shrink-0 items-center justify-end gap-1.5">
-                        <label className="mr-auto flex cursor-pointer items-center gap-1.5 pr-1 text-xs @min-[480px]/account:mr-0">
-                          <Switch
-                            checked={account.enabled}
-                            onCheckedChange={(checked) => updateAccount(index, { enabled: checked })}
-                            aria-label="启用账号"
-                          />
-                          <span className={cn(!account.enabled && "text-muted-foreground")}>
-                            {account.enabled ? "已启用" : "已停用"}
-                          </span>
-                        </label>
+                  <div className="grid gap-3 p-4 @min-[520px]/account:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                    <Field label="账号名称" htmlFor={`${rowKey}-name`}>
+                      <Input
+                        id={`${rowKey}-name`}
+                        value={account.name}
+                        onChange={(event) => updateAccount(index, { name: event.target.value })}
+                        placeholder="例如：主账号"
+                        aria-label="账号名称"
+                      />
+                    </Field>
+                    <Field label="API Key" htmlFor={`${rowKey}-key`}>
+                      <div className="flex gap-1.5">
+                        <Input
+                          id={`${rowKey}-key`}
+                          value={keyFieldValue(account, showKeys, revealed, keyFocused === rowKey)}
+                          type={showKeys ? "text" : "password"}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder={account.hasKey ? "" : "sk_..."}
+                          aria-label="API Key"
+                          data-secret="1"
+                          onFocus={() => setKeyFocused(rowKey)}
+                          onBlur={() => setKeyFocused((current) => (current === rowKey ? null : current))}
+                          onChange={(event) => updateAccount(index, { key: event.target.value })}
+                          className={cn("font-mono text-xs", !showKeys && "tracking-[0.18em]")}
+                        />
                         <Button
-                          variant="ghost"
-                          size="xs"
-                          className="text-muted-foreground px-1.5"
+                          variant="outline"
+                          className="shrink-0"
                           disabled={testing === index}
                           onClick={() => testAccount(index)}
                         >
-                          {testing === index && (
+                          {testing === index ? (
                             <RefreshCw className="animate-spin" data-icon="inline-start" />
+                          ) : (
+                            <PlugZap data-icon="inline-start" />
                           )}
                           测试
                         </Button>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                aria-label="删除账号"
-                                onClick={() => removeAccount(index)}
-                              />
-                            }
-                          >
-                            <Trash2 />
-                          </TooltipTrigger>
-                          <TooltipContent>删除账号</TooltipContent>
-                        </Tooltip>
                       </div>
+                    </Field>
+                  </div>
+                  {!isDraftId(account.id) && account.hasKey && (
+                    <div className="border-t px-4 py-3">
+                      <QuotaReadout quota={quotas[account.id]?.quota} loading={quotaLoading} refreshError={quotas[account.id]?.refreshError} />
                     </div>
-                    <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+                  )}
+                  <div className="bg-muted/25 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-b-xl border-t px-4 py-2">
+                    <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
                       {draft.mode === "single" && (
                         <label className={cn("flex cursor-pointer items-center gap-2", isActive && "text-primary font-medium")}>
                           <Checkbox
@@ -432,7 +419,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                       <span>
                         累计请求 <span className="text-foreground font-medium tabular-nums">{(stats?.requests ?? 0).toLocaleString("zh-CN")}</span> 次
                       </span>
-                      <span title={`最近使用 ${formatTime(stats?.lastUsed)}`}>
+                      <span title={stats?.lastUsed ? `最近使用 ${formatTime(stats.lastUsed)}` : undefined}>
                         {stats?.lastUsed ? `最近使用 ${formatCompactTime(stats.lastUsed)}` : "尚未使用"}
                       </span>
                       {stats?.lastError && (
@@ -446,32 +433,38 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                         </Tooltip>
                       )}
                     </div>
-                  </div>
-                  {!isDraftId(account.id) && account.hasKey && (
-                    <div className="bg-muted/25 rounded-b-xl border-t px-3 py-2.5">
-                      <QuotaReadout quota={quotas[account.id]?.quota} loading={quotaLoading} refreshError={quotas[account.id]?.refreshError} />
+                    <div className="ml-auto flex h-7 items-center gap-1.5">
+                      <label className="flex cursor-pointer items-center gap-1.5 pr-1 text-xs">
+                        <Switch
+                          checked={account.enabled}
+                          onCheckedChange={(checked) => updateAccount(index, { enabled: checked })}
+                          aria-label="启用账号"
+                        />
+                        <span className={cn(!account.enabled && "text-muted-foreground")}>
+                          {account.enabled ? "已启用" : "已停用"}
+                        </span>
+                      </label>
+                      <IconAction
+                        label="删除账号"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => removeAccount(index)}
+                      >
+                        <Trash2 />
+                      </IconAction>
                     </div>
-                  )}
+                  </div>
                 </article>
               )
             })}
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-10 text-center">
-            <div className="bg-muted flex size-10 items-center justify-center rounded-full">
-              <KeyRound className="text-muted-foreground size-5" />
-            </div>
-            <div className="space-y-1">
-              <div className="text-sm font-medium">还没有账号</div>
-              <div className="text-muted-foreground text-sm">
-                添加一个 Cline API Key 并保存后，代理即可开始转发请求。
-              </div>
-            </div>
-            <Button variant="outline" size="sm" onClick={addAccount}>
-              <Plus data-icon="inline-start" />
-              添加账号
-            </Button>
-          </div>
+          <EmptyState
+            icon={Users}
+            title="尚未添加账号"
+            description="添加 Cline Pass API Key 并保存后，代理即可开始转发请求。"
+          />
         )}
       </CardContent>
     </Card>
@@ -505,16 +498,16 @@ function QuotaReadout({ quota, loading, refreshError }: { quota?: AccountQuota; 
         {refreshError || (quota && !quota.ok) ? (
           <Tooltip>
             <TooltipTrigger render={<span tabIndex={0} className="text-destructive cursor-help" />}>
-              {refreshError ? "更新失败 · 显示上次数据" : "配额不可用"}
+              {refreshError ? "更新失败，显示上次数据" : "配额不可用"}
             </TooltipTrigger>
             <TooltipContent className="max-w-md whitespace-pre-wrap">
               {refreshError || quota?.error || "探测失败"}
             </TooltipContent>
           </Tooltip>
         ) : quota?.ok && quota.limits?.some((limit) => limit.percentUsed >= 100) ? (
-          <span className="text-destructive">已满，有其他可用账号时会跳过</span>
+          <span className="text-destructive">已用满，存在其他可用账号时将跳过</span>
         ) : (
-          <span>{loading ? "更新中…" : !quota ? "配额未查询" : ""}</span>
+          <span>{loading ? "更新中…" : !quota ? "尚未查询配额" : ""}</span>
         )}
       </div>
       <div className="grid min-w-0 grid-cols-1 gap-3 @min-[360px]/account:grid-cols-3">

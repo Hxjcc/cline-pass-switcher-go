@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   Boxes,
+  Check,
+  Copy,
   KeyRound,
   RadioTower,
   RefreshCw,
   Router,
-  Settings2,
   ShieldCheck,
+  ShieldOff,
   TestTube2,
   Users,
 } from "lucide-react"
@@ -15,7 +17,6 @@ import { toast } from "sonner"
 
 import { BrandMark } from "@/components/brand-mark"
 import { AccountsPanel } from "@/components/accounts-panel"
-import { CatalogPanel } from "@/components/catalog-panel"
 import { HistoryPanel } from "@/components/history-panel"
 import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
@@ -25,13 +26,14 @@ import { SecurityPanel } from "@/components/security-panel"
 import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
 import { HISTORY_PAGE_SIZE, fetchSnapshot, readSnapshot, writeSnapshot, type CachedSnapshot } from "@/lib/console-snapshot"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
+import { cn } from "@/lib/utils"
 import type {
   AccountTestResponse,
   AccountsResponse,
@@ -58,8 +60,13 @@ const TABS = [
   { value: "security", label: "访问与安全", icon: ShieldCheck },
   { value: "test", label: "测试台", icon: TestTube2 },
   { value: "history", label: "请求历史", icon: Activity },
-  { value: "catalog", label: "完整目录", icon: Settings2 },
 ] as const
+
+// The session may remember a tab this build no longer has.
+function initialTab() {
+  const stored = sessionStorage.getItem(TAB_STORAGE)
+  return TABS.some((item) => item.value === stored) ? stored! : "overview"
+}
 
 function App() {
   const [initialSnapshot] = useState(readSnapshot)
@@ -85,8 +92,9 @@ function App() {
     onlyErrors: false,
   })
   const [loginOpen, setLoginOpen] = useState(false)
-  const [tab, setTab] = useState(() => sessionStorage.getItem(TAB_STORAGE) || "overview")
+  const [tab, setTab] = useState(initialTab)
   const [refreshing, setRefreshing] = useState(false)
+  const [proxyBaseCopied, setProxyBaseCopied] = useState(false)
   const [batchProbe, setBatchProbe] = useState<{ done: number; total: number } | null>(null)
   const batchProbeAbort = useRef<AbortController | null>(null)
 
@@ -296,7 +304,7 @@ function App() {
     }), [authKey])
 
   const saveSecurity = async (
-    value: Pick<SecurityResponse, "proxyKey" | "publicBaseUrl" | "exposeCatalog">,
+    value: Pick<SecurityResponse, "proxyKey" | "adminKey" | "publicBaseUrl">,
   ) => {
     const response = await api<SecurityResponse>("/api/security", {
       key: authKey,
@@ -457,38 +465,82 @@ function App() {
 
   const proxyBase = models?.proxyBase ?? meta?.proxyBase ?? "http://127.0.0.1:3123/v1"
 
+  const copyProxyBase = async () => {
+    try {
+      await navigator.clipboard.writeText(proxyBase)
+      setProxyBaseCopied(true)
+      toast.success("代理地址已复制")
+      window.setTimeout(() => setProxyBaseCopied(false), 1600)
+    } catch {
+      toast.error("无法访问剪贴板")
+    }
+  }
+
   return (
     <div data-app-shell className="min-h-svh">
       <header className="bg-card sticky top-0 z-40 border-b">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-3 px-4 py-3">
-          <BrandMark className="size-10 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="flex h-6 items-center gap-2">
-              <h1 className="truncate text-base leading-6 font-semibold">
-                Cline Pass 上游控制台
-              </h1>
-              {meta && (
-                <Badge variant={meta.configured ? "default" : "destructive"}>
-                  {meta.configured ? "已配置" : "缺少账号"}
-                </Badge>
-              )}
-            </div>
-            <div className="text-muted-foreground flex h-4 items-center gap-2 text-xs leading-4">
-              <Router className="size-3.5" />
-              <span className="truncate font-mono">{proxyBase}</span>
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <BrandMark className="size-9 shrink-0" />
+            <div className="min-w-0 space-y-1">
+              <h1 className="truncate text-base leading-5 font-semibold">Cline Pass 上游控制台</h1>
+              <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs leading-6">
+                {meta && (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-1.5 rounded-full",
+                          meta.configured ? "bg-emerald-500" : "bg-destructive",
+                        )}
+                      />
+                      <span className={cn(!meta.configured && "text-destructive")}>
+                        {meta.configured ? "账号已就绪" : "尚未配置账号"}
+                      </span>
+                    </span>
+                    <span aria-hidden="true" className="bg-border h-3 w-px" />
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                      {meta.authRequired ? (
+                        <ShieldCheck className="size-3.5" aria-hidden="true" />
+                      ) : (
+                        <ShieldOff className="size-3.5" aria-hidden="true" />
+                      )}
+                      {meta.authRequired ? "已启用鉴权" : "未启用鉴权"}
+                    </span>
+                    <span aria-hidden="true" className="bg-border h-3 w-px" />
+                  </>
+                )}
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <Router className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate font-mono" title="客户端使用的代理地址">
+                    {proxyBase}
+                  </span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-muted-foreground -my-1"
+                          aria-label="复制代理地址"
+                          onClick={() => void copyProxyBase()}
+                        />
+                      }
+                    >
+                      {proxyBaseCopied ? <Check /> : <Copy />}
+                    </TooltipTrigger>
+                    <TooltipContent>复制代理地址</TooltipContent>
+                  </Tooltip>
+                </span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {meta?.authRequired && (
-              <Badge variant="outline">
-                <ShieldCheck data-icon="inline-start" />
-                鉴权开启
-              </Badge>
-            )}
+          <div className="ml-auto flex items-center gap-2">
             {meta?.authRequired && (
               <Button variant="outline" size="sm" onClick={() => setLoginOpen(true)}>
                 <KeyRound data-icon="inline-start" />
-                切换密钥
+                切换管理密钥
               </Button>
             )}
             <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
@@ -508,7 +560,7 @@ function App() {
           <Alert variant="destructive">
             <KeyRound />
             <AlertTitle>尚未配置 Cline Pass 账号</AlertTitle>
-            <AlertDescription>前往账号池添加账号与 API Key，保存后即可使用代理。</AlertDescription>
+            <AlertDescription>请在「账号池」中添加账号及 API Key，保存后即可使用代理。</AlertDescription>
           </Alert>
         )}
 
@@ -529,25 +581,25 @@ function App() {
               <MetricCard
                 label="订阅模型"
                 value={models ? models.subscription.length : "—"}
-                detail={`${models?.catalogCount ?? 0} 个目录模型`}
+                detail="客户端可见的模型"
                 icon={Boxes}
               />
               <MetricCard
                 label="启用账号"
                 value={accounts ? statistics.enabledAccounts : "—"}
-                detail={accounts?.mode === "roundrobin" ? "轮询模式" : "单账号模式"}
+                detail={accounts?.mode === "roundrobin" ? "调度模式：账号池轮询" : "调度模式：单账号"}
                 icon={Users}
               />
               <MetricCard
                 label="累计请求"
                 value={accounts ? statistics.requestCount : "—"}
-                detail="按账号统计"
+                detail="所有账号合计"
                 icon={Activity}
               />
               <MetricCard
                 label="已观测渠道"
                 value={models ? statistics.observedProviders : "—"}
-                detail="来自请求与探测结果"
+                detail="来自请求记录与探测结果"
                 icon={RadioTower}
               />
             </div>
@@ -593,6 +645,7 @@ function App() {
               <KeysPanel
                 data={keys}
                 accounts={accounts}
+                proxyBase={proxyBase}
                 onSave={saveKeys}
                 onReveal={revealKeys}
                 onReset={resetKeyUsage}
@@ -627,10 +680,6 @@ function App() {
               }}
               onClear={clearHistory}
             />
-          </TabsContent>
-
-          <TabsContent value="catalog">
-            {models && <CatalogPanel data={models} onProbe={probe} />}
           </TabsContent>
         </Tabs>
       </main>

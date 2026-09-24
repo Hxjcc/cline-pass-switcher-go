@@ -3,8 +3,8 @@ import type { UpstreamState } from "@/types"
 export const upstreamLabels: Record<UpstreamState, string> = {
   ok: "可用",
   limited: "限流",
-  bad: "不可钉",
-  auth: "Key 异常",
+  bad: "不可钉住",
+  auth: "密钥异常",
   unknown: "未判定",
 }
 
@@ -108,7 +108,7 @@ export function pipelineLabel(pipeline?: string): string {
 const providerLabels: Record<string, { label: string; hint: string }> = {
   "openai-compatible-private": {
     label: "私有接口",
-    hint: "Cline 在网关里私有注册的 OpenAI 兼容接口，通常是厂商自己的 API；这类模型没有其他渠道可选。",
+    hint: "Cline 在网关中私有注册的 OpenAI 兼容接口，通常为厂商自有 API；此类模型没有其他渠道可选。",
   },
 }
 
@@ -130,7 +130,7 @@ export function pinReasonLabel(reason?: string): string {
     case "gateway_ignores_provider_preferences":
       return "网关已忽略上游偏好"
     case "single_provider":
-      return "只有一个候选渠道，无需钉住"
+      return "仅有一个候选渠道，无需钉住"
     case "probe_failed":
       return "无法确认网关是否支持钉住"
     case "no_channels":
@@ -138,7 +138,7 @@ export function pinReasonLabel(reason?: string): string {
     case "unsupported_pipeline":
       return "无法识别路由线路"
     default:
-      return reason ? `当前不可钉（${reason}）` : "当前不可钉"
+      return reason ? `当前不可钉住（${reason}）` : "当前不可钉住"
   }
 }
 
@@ -153,7 +153,7 @@ export function isPinDisabled(
 export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: string): string {
   const pinDisabled = isPinDisabled({ pinnable, pinReason })
   if (pinDisabled && pinReason === "single_provider") {
-    return "这个模型只有一个候选渠道，无需钉住，也没有其他渠道可校验。"
+    return "该模型仅有一个候选渠道，无需钉住，也没有其他渠道可供校验。"
   }
   if (pinDisabled) {
     const reason = pinReasonLabel(pinReason)

@@ -82,9 +82,9 @@ test("providerLabel shortens the private-endpoint slug and passes others through
 
 test("pinReasonLabel maps the backend probe reasons", () => {
   expect(pinReasonLabel("gateway_ignores_provider_preferences")).toBe("网关已忽略上游偏好")
-  expect(pinReasonLabel("single_provider")).toBe("只有一个候选渠道，无需钉住")
+  expect(pinReasonLabel("single_provider")).toBe("仅有一个候选渠道，无需钉住")
   expect(pinReasonLabel("probe_failed")).toBe("无法确认网关是否支持钉住")
-  expect(pinReasonLabel(undefined)).toBe("当前不可钉")
+  expect(pinReasonLabel(undefined)).toBe("当前不可钉住")
 })
 
 test("isPinDisabled accepts either the explicit false or the legacy reason", () => {
@@ -102,7 +102,7 @@ test("pipelineHint explains when pinning is unavailable", () => {
   expect(pipelineHint("planner", undefined, "gateway_ignores_provider_preferences")).toContain(
     "网关已忽略上游偏好",
   )
-  expect(pipelineHint("planner", false, "single_provider")).toContain("只有一个候选渠道")
+  expect(pipelineHint("planner", false, "single_provider")).toContain("仅有一个候选渠道")
   expect(pipelineHint("planner", true)).toContain("providerOptions.gateway")
   expect(pipelineHint("direct", true)).toContain("provider 字段")
   expect(pipelineHint(undefined)).toContain("无法区分渠道")

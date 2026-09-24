@@ -32,8 +32,6 @@ const data: ModelsResponse = {
       },
     },
   ],
-  catalog: ["cline-pass/deepseek-v4.1-flash"],
-  catalogCount: 1,
   proxyBase: "http://127.0.0.1:3123",
   officialFetch: null,
 }

@@ -85,8 +85,6 @@ export interface OfficialFetch {
 
 export interface ModelsResponse {
   subscription: SubscriptionModel[]
-  catalogCount: number
-  catalog: string[]
   proxyBase: string
   officialFetch: OfficialFetch | null
 }
@@ -140,7 +138,6 @@ export interface SecurityResponse {
   adminKey: string
   publicBaseUrl: string
   authRequired: boolean
-  exposeCatalog: boolean
   proxyBase?: string
   /** Values actually in force, with the layer that supplied each one. */
   settings?: EffectiveSetting[]

@@ -11,7 +11,6 @@ const data: SecurityResponse = {
   adminKey: "sk-console",
   publicBaseUrl: "https://cline.example",
   authRequired: true,
-  exposeCatalog: false,
   settings: [
     { key: "compactionMinOutputTokens", label: "压缩首轮输出预算下限", value: "16384", source: "env" },
     { key: "compactionRecentTokens", label: "压缩逐字尾部（估算 token）", value: "16000", source: "config" },
