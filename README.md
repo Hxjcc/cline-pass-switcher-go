@@ -1,160 +1,73 @@
-# Cline Pass Switcher (Go)
+# Cline Pass Switcher
 
-<p align="center">
-  <strong>专为 Cline、Codex CLI 及 OpenAI 兼容生态打造的高性能本地网关与智能多账号调度代理</strong>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go" alt="Go Version" />
-  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker" alt="Docker Ready" />
-  <img src="https://img.shields.io/badge/Node.js-22.12%2B%20(Build%20Only)-339933?style=flat-square&logo=node.js" alt="Node Version" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
-</p>
-
----
-
-## 📖 项目简介
-
-**Cline Pass Switcher** 是一个运行在本地的高性能中继网关。它将来自 **Cline**（VS Code 插件）、**Codex CLI**（ChatGPT Desktop / CLI）等客户端的请求，无缝转换为对 [Cline Pass](https://cline.bot/) 上游 API 的标准调用。
-
-服务端采用 **Go 语言**重构开发，前端控制台（React + Tailwind CSS）在构建阶段直接静态打包并内嵌至二进制文件（`embed.FS`）中，**运行时零 Node.js 依赖**，具备毫秒级冷启动、极低内存占用以及工业级的稳定性。
+把 [Cline Pass](https://cline.bot/) 订阅变成 OpenAI 兼容接口的网关，供 Cline、Codex CLI 以及其他 OpenAI 兼容客户端使用。用 Go 编写，控制台前端内嵌在二进制里，运行时只需要一个可执行文件和一个数据目录。
 
 ```
-客户端层
-  Cline / Codex CLI / Continue
-        │
-        │ HTTP (OpenAI Chat / Responses 协议)
+Cline / Codex / OpenAI SDK
+        │  Chat Completions 或 Responses
         ▼
-Cline Pass Switcher (Go)
-  ├─ 协议转换与适配
-  │  ├─ Chat Completions
-  │  ├─ Responses 桥
-  │  └─ 结构化校验
-  ├─ 智能账号池与健康调度
-  │  ├─ 轮询 / 固定 + 备用
-  │  ├─ 401/403/429 动态冷却
-  │  └─ 5h / 7d / 30d 配额自动避让
-  ├─ 渠道调度与探测
-  │  ├─ 渠道钉选 / 排除
-  │  └─ 成本 / 时延排序
-  ├─ 会话粘性与流式回放
-  │  ├─ 30min Prompt Cache 锁定
-  │  └─ 共享流分发 / 内存磁盘溢出
-  ├─ WAL 预写日志 (`store.journal`) + JSON 快照持久化
-  └─ 内嵌 Web 管理控制台（默认端口 3123）
-        │
-        │ HTTPS (Cline Pass 官方网关)
+Cline Pass Switcher ── 账号池、渠道选择、协议转换、请求记录
+        │  Chat Completions
         ▼
-Cline Pass 上游
-  DeepSeek / GLM / Kimi / Qwen…
+Cline Pass 上游（api.cline.bot）
 ```
 
----
+## 功能
 
-## ✨ 核心特性
+- **两种协议。** `/v1/chat/completions` 基本原样转发；`/v1/responses` 在网关内转换成 Chat Completions，支持工具调用、思考内容、Codex 远端上下文压缩和结构化输出校验。
+- **账号池。** 可以添加多个 Cline Pass 账号，使用单账号或轮询模式。上游返回 401、403、429 时自动换账号重试；套餐用量已满的账号自动跳过，直到重置。
+- **渠道控制。** 对支持的模型，可以指定优先渠道、排除渠道，或让网关按成本、首字延迟、吞吐选择渠道。
+- **会话粘性。** 同一会话的后续请求优先使用上次成功的账号和渠道，便于命中上游的提示缓存。
+- **分发密钥。** 可以签发多个客户端密钥分给他人使用，每个密钥可以绑定账号、设置美元额度上限。
+- **控制台与请求历史。** 在浏览器里管理账号、模型、密钥和访问设置，查看最近 500 条请求的耗时、token、费用、实际渠道和错误原因。
 
-- 🚀 **双协议原生支持**
-  - **OpenAI Chat Completions 协议**：标准兼容各大主流客户端与开发框架（`/v1/chat/completions`）。
-  - **OpenAI Responses 协议桥接**：提供 `/v1/responses` 与 `/v1/responses/compact` 接口，不依赖服务端会话存储，支持 Codex CLI、ChatGPT Desktop 的多轮交互与上下文压缩。协议覆盖范围与已知限制（conversation 引用、后台响应、文件与音频输入、强制服务端工具等）见 [Responses 协议边界与验收](docs/protocol-compatibility.md)；不在支持范围内的请求会在转发上游之前返回 HTTP 400。
-- 👥 **企业级多账号池调度**
-  - 支持 **主备模式（固定账号）** 与 **均衡轮询（Round-Robin）**。
-  - **自适应健康探测与冷却**：遭遇 `401/403` 自动冷却 10 分钟；遭遇 `429` 限流自动冷却 2 分钟，秒级无缝漂移到下一个可用账号。
-  - **5h / 7d / 30d 配额深度监控**：自动探查套餐窗口利用率，任一周期耗尽（100%）时自动避让至重置时间（`resetsAt`），零额外扣费，探查失败不阻塞正常推理。
-- 🧠 **会话粘性（Session Stickiness）与 Prompt Cache**
-  - 自动识别客户端的 `prompt_cache_key`（如 Codex 会话），将同一会话锁定在上次成功的账号与渠道上达 30 分钟，最大化利用服务端 KV 缓存降低首字延迟与调用资费。
-- 🎯 **精细化渠道控制与钉选**
-  - 针对支持渠道钉选的模型（如 GLM 部分渠道），支持自定义优选渠道、排除不可用渠道，并按 **成本、首字延迟（TTFT）、吞吐量（TPS）** 自动测速排序。
-  - 针对只支持自动路由的模型（如当前 DeepSeek），网关探测后自动退化为安全自动路由，防止无效重试。
-- 🛠️ **桌面客户端与 Agent 兼容补丁**
-  - **工具历史归一化（Orphan Tool Normalization）**：桌面客户端产生的未配对孤儿工具输出（如委派子任务 `<codex_delegation>`、`create_thread`）自动转写为安全用户消息，防止上游报错。
-  - **联网搜索与抓取映射**：将客户端 `web_search` 无缝映射到网关服务端工具（`exa` / `tako` / `perplexity`）；用户消息附带 URL 时自动触发 `browserbase_fetch` 页面抓取。
-  - **Windows Shell 兼容保障**：`SHELL_COMPAT=powershell` 强制收拢执行器声明，杜绝客户端意外回退至 `cmd.exe`。
-  - **Token 膨胀折算**：智能折叠网关内部多轮搜索的 token 累计值，防止 Codex 发生误判而提前强制压缩上下文。
-  - **本地严格 JSON Schema 校验**：集成 `draft 2020-12` 校验器，在上游输出不符合 strict schema 时即刻拦截报错。
-- ⚡ **极致性能与流式回放**
-  - 极低内存占用（微基准测试单流内存开销降低 ~98%）。
-  - **共享流分发（Stream Share Hub）**：支持多订阅者复用上游同一 SSE 数据流；采用分页内存块（32 KiB 块）与自动临时文件溢出机制（单流内存 1 MiB、进程合计 32 MiB，超过即整条流写入临时文件；回放总量单流上限 128 MiB、进程合计 1 GiB），确保长流高并发下绝无内存泄漏。
-  - 客户端每 10 秒 SSE 心跳保活，防止各类云厂商反向代理超时断连。
-- 📊 **现代化全功能可视化控制台**
-  - 账号管理、模型订阅、渠道钉选、在线测试台、实时请求调用链追踪（含耗时、TTFT、账单 token 及费用详情）。
-- 🛡️ **高安全与持久化**
-  - **WAL 预写日志（`store.journal`）**：批量 fsync 与序列号校验。进程崩溃不丢记录（重启会重放日志）；意外断电最多丢失最近的少量记录（请求记录每 32 条 fsync 一次，管理操作与正常退出也会落盘）。
-  - 严格的主机访问防护、CSP 策略、防密码暴力破解限流保护。
+## 快速开始
 
----
+### Docker Compose（推荐）
 
-## 🚀 快速开始
-
-### 方式一：Docker Compose（推荐，开箱即用）
-
-1. **准备配置文件与数据目录**：
-
-   **Linux / macOS**：
-   ```bash
-   mkdir -p data
-   cp config.example.json data/config.json
-   docker compose up -d --build
-   ```
-
-   **Windows PowerShell**：
-   ```powershell
-   New-Item -ItemType Directory -Force data | Out-Null
-   Copy-Item config.example.json data\config.json
-   docker compose up -d --build
-   ```
-
-2. **访问控制台**：
-   打开浏览器访问：**<http://127.0.0.1:3123/>**  
-   在 **「账号池」** 面板填入你的 **Cline Pass API Key** 并保存，即可开始使用。
-
-> **权限说明**：容器默认以非 root 用户（UID/GID `10001`）运行，容器入口脚本会自动修正挂载卷所有权，无需手动 `chown`。若需指定用户，可在同级 `.env` 文件中设置 `PUID=1000` 与 `PGID=1000`。
-
----
-
-### 方式二：本地源码编译运行
-
-#### 环境要求
-- **Go**: 1.25 或更高版本
-- **Node.js**: 22.12 或更高版本及 npm（仅构建前端资源时需要；运行前端单元测试需要 22.22+ 或 24.15+）
-
-#### 构建步骤
 ```bash
-# 1. 构建前端静态资源（产物内嵌到 Go package 中）
+git clone https://github.com/Hxjcc/cline-pass-switcher-go.git
+cd cline-pass-switcher-go
+docker compose up -d --build
+```
+
+浏览器打开 <http://127.0.0.1:3123/>，在「账号池」页添加 Cline Pass API Key 并保存，就可以开始使用。
+
+- 端口只绑定在宿主机的 `127.0.0.1:3123`，数据保存在 `./data` 目录。
+- 容器以 UID/GID `10001` 运行，启动时会自动修正 `./data` 的属主。需要其他用户时，在 `.env` 中设置 `PUID` 和 `PGID`。
+- 本地配置写在同目录的 `.env` 文件里，不要修改 `docker-compose.yml`。可用的变量见[配置参考](docs/configuration.md#docker-compose-的默认值)。
+- Compose 默认开启了联网搜索（`exa`）和网页抓取（`browserbase_fetch`），它们由上游按次计费，只在模型实际调用时产生费用。不需要时在 `.env` 中写 `WEB_SEARCH_UPSTREAM=off` 和 `WEB_FETCH_UPSTREAM=off`。
+
+### 源码编译运行
+
+需要 Go 1.25 以上；构建前端需要 Node.js 22.12 以上及 npm。
+
+```bash
 cd web
 npm ci
 npm run build
 cd ..
-
-# 2. 编译 Go 二进制文件
 go build -trimpath -ldflags="-s -w" -o cline-pass-switcher ./cmd/cline-pass-switcher
-
-# 3. 运行服务
 ./cline-pass-switcher
 ```
 
-> 源码直接运行时默认读取当前目录下的 `config.json`（若不存在则自动初始化），并监听 `127.0.0.1:3123`。
+默认监听 `127.0.0.1:3123`，数据保存在当前目录。可以用环境变量 `DATA_DIR` 指定数据目录，`PORT` 和 `BIND_HOST` 修改监听端口和地址。
 
----
+## 接入客户端
 
-## 🔌 客户端接入指南
+| 项 | 值 |
+|---|---|
+| Base URL | `http://127.0.0.1:3123/v1`；对外部署时为 `PUBLIC_BASE_URL` 加 `/v1` |
+| API Key | 代理主密钥 `PROXY_KEY` 或签发的代理密钥。都没有设置时只能从本机访问，可以填任意非空字符串 |
+| 模型 | `cline-pass/` 开头的模型 ID，例如 `cline-pass/deepseek-v4.1-flash`。完整列表见控制台或 `GET /v1/models` |
 
-### 1. Cline (VS Code 扩展)
+### Cline
 
-在 VS Code 的 Cline 插件设置中配置自定义 Provider：
+在 Cline 设置中选择 API Provider 为 **OpenAI Compatible**，填入上表中的 Base URL、API Key 和模型 ID。
 
-- **API Provider**：`OpenAI Compatible`
-- **Base URL**：`http://127.0.0.1:3123/v1`
-- **API Key**：若控制台设置了代理密钥，则填入该密钥；若未设置则可任意填写占位符（如 `sk-local`）
-- **Model ID**：输入已订阅的模型名称，例如：
-  - `cline-pass/deepseek-v4.1-flash`
-  - `cline-pass/glm-5.3-flash`
-  - `cline-pass/qwen3.8-max`
+### Codex CLI / Codex 桌面版
 
----
-
-### 2. Codex CLI / ChatGPT Desktop
-
-编辑 Codex 配置文件（位于 `~/.codex/config.toml`）：
+编辑 `~/.codex/config.toml`：
 
 ```toml
 model_provider = "cline-pass"
@@ -169,231 +82,112 @@ requires_openai_auth = false
 env_key = "CLINE_PROXY_KEY"
 ```
 
-在系统环境变量中设置：
+然后在环境变量 `CLINE_PROXY_KEY` 中设置密钥：
+
 ```bash
-export CLINE_PROXY_KEY="your-proxy-key" # 若未开启代理密钥，可填任意非空字符串
+export CLINE_PROXY_KEY="你的代理密钥"
 ```
 
----
+Codex 只对 OpenAI 和 Azure 形态的 provider 使用远端上下文压缩，其他名称的 provider 会退回客户端本地摘要。想让 Codex 的 `/compact` 和自动压缩交给网关处理（摘要之外还会原样保留最近几轮对话），把上面的 `name` 改成 `"azure"`，详见 [Responses 协议兼容 · 上下文压缩](docs/protocol-compatibility.md#上下文压缩)。
 
-### 3. 通用客户端（Continue / Roo Code / Python SDK / Curl）
+### 其他客户端
 
-**标准路由路径一览**：
-| 协议类型 | 路由端点 | 说明 |
-|---|---|---|
-| **Chat Completions** | `POST /v1/chat/completions` (或 `/chat/completions`) | 兼容标准 OpenAI 客户端 |
-| **Responses** | `POST /v1/responses` (或 `/responses`) | Codex / ChatGPT 协议 |
-| **Responses Compact** | `POST /v1/responses/compact` | 独立压缩端点（脚本 / 自定义客户端） |
-| **Responses 远端压缩 v2** | `POST /v1/responses` + `{"type":"compaction_trigger"}` 输入项 | Codex 的远端压缩协议，返回恰好一个 `compaction` item |
-| **Models 列表** | `GET /v1/models` (或 `/models`) | 返回已订阅的模型，与控制台「模型与上游」列表一致 |
-| **健康检查** | `GET /healthz` | 服务健康探针 |
+任何支持 OpenAI Chat Completions 的客户端或 SDK 都可以直接使用：
 
-**Curl 快速验证**：
 ```bash
-curl -X POST http://127.0.0.1:3123/v1/chat/completions \
+curl http://127.0.0.1:3123/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_PROXY_KEY" \
-  -d '{
-    "model": "cline-pass/deepseek-v4.1-flash",
-    "messages": [{"role": "user", "content": "你好"}],
-    "stream": false
-  }'
+  -H "Authorization: Bearer 你的代理密钥" \
+  -d '{"model": "cline-pass/deepseek-v4.1-flash", "messages": [{"role": "user", "content": "你好"}]}'
 ```
 
-**响应头诊断信息（Response Headers）**：
-网关在每次响应头中注入了丰富的链路追踪元数据：
-- `X-Cline-Account`：最终命中调用的账号名称。
-- `X-Cline-Target-Upstream`：计划尝试的渠道（多个以 `>` 连接，自动路由为 `auto`）。
-- `X-Cline-Actual-Upstream`：上游网关实际落到的渠道 slug。
-- `X-Cline-Canonical-Model`：网关背后的底层规范模型标识。
-- `X-Cline-Attempts`：本次请求向真实上游发起调用的总次数。
-- `X-Cline-Reasoning-Effort`：实际转发给上游的思考强度参数。
+响应头 `X-Cline-Account`、`X-Cline-Actual-Upstream`、`X-Cline-Attempts` 等给出实际使用的账号、渠道和上游调用次数，见[账号与渠道调度 · 响应头](docs/routing.md#响应头)。
 
----
+## 控制台
 
-## 🖥️ Web 管理控制台
+打开 `http://127.0.0.1:3123/`。设置了管理密钥时需要先登录；勾选「在这台设备上记住密钥」会保存在浏览器本地，否则关闭页面后失效。
 
-访问 `http://127.0.0.1:3123/` 即可进入全功能可视化面板：
-
-| 面板 | 功能说明 |
+| 页面 | 用途 |
 |---|---|
-| 📋 **模型与上游** | 查看已订阅模型列表。对支持钉选的模型可配置优先渠道与排除渠道；支持按 **成本**、**首字延迟（TTFT）** 或 **吞吐速率（TPS）** 一键测速排序并探测渠道健康度。 |
-| 👥 **账号池** | 添加、停用、测试 Cline Pass 密钥；在 **固定模式** 和 **轮询模式** 间切换；实时监控 5 小时、7 天、30 天用量百分比及重置倒计时。 |
-| 🛡️ **访问与安全** | 设置管理密钥（`adminKey`）、统一代理访问密钥（`proxyKey`）与对外公开基准 URL（`publicBaseUrl`），并查看各运行参数的当前生效值及来源。 |
-| 🧪 **测试台** | 在线向指定模型发送真实测试请求，实时查看流式输出、命中的账号与渠道、推理耗时及完整调用链诊断。 |
-| 📜 **请求历史** | 实时查看最近 500 条请求的完整流水，展示耗时、TTFT、Prompt/Completion/Reasoning Token 明细、费用及错误原因；支持关键字搜索与只看失败。 |
+| 模型与上游 | 订阅模型列表，也就是客户端从 `/v1/models` 看到的内容。可以拉取官方模型、批量探测、移除模型；展开一个模型可以设置钉住模式、排序方式、优先渠道和排除渠道。 |
+| 账号池 | 添加、启用、停用、删除账号，选择单账号或账号池轮询模式，测试账号，查看 5 小时、7 天、30 天的套餐用量。 |
+| 代理密钥 | 签发客户端密钥，设置名称、绑定账号、额度上限和备注，查看每个密钥的累计消费并清零。 |
+| 访问与安全 | 设置管理密钥、代理主密钥和公网访问地址；查看运行参数的当前生效值及来源；复制客户端接入地址。 |
+| 测试台 | 向指定模型、指定渠道发送一条测试请求，查看实际命中的渠道、账号、耗时和尝试序列。 |
+| 请求历史 | 最近 500 条请求，可按关键字筛选、只看失败、自动刷新或清空。 |
 
----
+探测渠道、校验渠道、测试请求和测试账号都会向上游发出真实请求，会产生少量费用，见[账号与渠道调度 · 探测和校验会产生费用](docs/routing.md#探测和校验会产生费用)。
 
-## ⚙️ 核心调度机制深入解析
+## 对外部署
 
-### 1. 账号状态机与自适应冷却
-- **可用性条件**：账号必须同时满足已启用且包含非空 API Key。
-- **调度策略**：
-  - **固定账号**：优先使用标为活跃的账号。当其触发冷却或配额用满被暂时跳过时，按列表顺序尝试后续第一个可用账号（不轮循剩余账号）。
-  - **轮询模式**：在当前所有可用的健康账号之间以 Round-Robin 算法均匀分发。
-- **自动冷却策略（内存记录，重启复位）**：
-  - **401 / 403 凭据失效**：账号自动进入 **10 分钟** 冷却期，请求在同一渠道上改用下一个健康账号重试。
-  - **429 请求超限**：账号进入 **2 分钟** 冷却期。
-  - 账号下一次请求成功或用户更新密钥后，旧冷却记录自动清除。
-- **配额过载防护（5h / 7d / 30d 窗口）**：
-  - 用量按需读取，无后台轮询：仅在控制台点击「查询配额」或转发前选号时请求 Cline 官方用量监控接口（`GET /users/me/plan`、`GET /users/me/plan/usage-limits`，只读且不计入模型 token 消耗）。同一账号 60 秒内最多查询一次，已满的账号保留至 `resetsAt` 不再重复查询；
-  - 任一周期达到 100% 时，该账号被标记为耗尽，避让至该周期的 `resetsAt` 重置时间；
-  - 若所有账号皆满额，网关不会拦截请求，仍会尝试发出以保障最大可用性。
+默认配置只允许本机访问。要让其他机器通过域名使用，请逐项确认：
 
-### 2. 会话粘性（Session Stickiness）
-Codex 等桌面客户端每次交互都会附带固定的会话标识 `prompt_cache_key`。网关捕获该 key 后：
-- 在 30 分钟生命周期内，后续对话持续固定在同一账号及相同渠道上；
-- 每次收到新请求自动续期 30 分钟；
-- 仅当该账号触发限流、配额耗尽或被禁用时才释放粘性，重新落到健康账号后再度粘合。
+1. **设置密钥。** 在 `.env` 中设置 `ADMIN_KEY`（控制台）和 `PROXY_KEY`（客户端），或者只签发代理密钥给客户端。没有密钥的接口只接受本机访问。
+2. **设置 `PUBLIC_BASE_URL`**，例如 `https://cline.example.com`。放在 HTTPS 反向代理后面时不设置它，控制台的保存操作会被拒绝。
+3. **配置反向代理。** 关闭响应缓冲，读取超时不少于 600 秒，转发 `X-Real-IP` 和 `X-Forwarded-For`。
+4. **设置 `TRUSTED_PROXIES`** 为反代连到网关时使用的地址。Docker 部署时通常是容器网络的网关地址，例如 `172.18.0.1`。不设置时，一个客户端反复用错密钥会让同一反代后面的所有人一起被暂时拒绝。
+5. **保持 Compose 的端口绑定在 `127.0.0.1`**，只让反向代理访问网关。
 
-### 3. 上游渠道重试与回退预算
-为防止在上游故障时请求无限放大，网关内置了严格的尝试预算：
-- 单个渠道单次最多尝试 4 个账号；
-- 一次客户端请求向真实上游最多重试 16 次（`maxChainAttempts = 16`）；
-- 若请求为流式且已开始向客户端返回内容（首包已交付），网关将锁定连接，不再执行破坏性的中途切换。
+Nginx 配置示例、`TRUSTED_PROXIES` 的查法和各种部署方式的区别，见[运维说明 · 反向代理](docs/operations.md#反向代理)。
 
-### 4. Responses 兼容桥与工具历史归一化
-ChatGPT Desktop / Codex 客户端常出现孤儿工具调用记录（例如由后台任务委派引发的没有前置 `call` 的工具结果）。Chat Completions 上游通常会直接返回协议错误。
-本代理内置智能历史归一化状态机：
-- 识别 `create_thread`、`codex_app` 及 `<codex_delegation>` 委派前缀，安全解包转换为标准用户上下文；
-- 其余孤儿结果自动加上 `[tool result without a recorded call <name>]` 前缀转为安全用户消息，确保上下文对话流严格保持 `assistant -> tool... -> user` 规范。若需要旧版严格校验，可设置 `strictToolHistory: true`。
+## 分发代理密钥
 
----
+在「代理密钥」页签发密钥，每个密钥可以单独设置：
 
-## 🛠️ 配置参数与环境变量
+- **绑定账号**：只使用这个账号，出错时不会改用其他账号的额度。
+- **额度上限（美元）**：按上游报告的费用累计，达到上限后拒绝请求（HTTP 429）。有请求正在进行时，网关会按历史平均费用为它们预留额度，防止并发请求一起超出上限。
 
-可以通过修改 `config.json` 或设置系统环境变量来进行配置。环境变量优先级高于配置文件。
+额度统计只计入上游报告的费用。客户端中途取消的流式请求拿不到最终费用，按 0 计，但上游仍会扣费，所以统计值可能比实际偏低。
 
-> **Docker Compose 部署**：`docker-compose.yml` 已将下列开关全部透传（`${VAR:-}` 形式），因此只需在项目目录的 `.env` 中配置，无需修改编排文件，本地配置也不会与 `git pull` 冲突。`.env` 修改后须重建容器方可生效：`docker compose up -d`（或在面板中执行「重建」）。变量留空或删除该行时，服务使用内置默认值。
->
-> 不确定改动是否生效时，看控制台「访问与安全 → 运行参数（当前生效值）」：每一行都列出**实际生效的值**及其**来源**（环境变量 / config.json / 内置默认），同一份数据也可通过 `GET /api/settings` 读取。
+分发密钥时建议同时设置 `ADMIN_KEY`，这样客户端密钥无法打开控制台，也就看不到账号池里的 API Key。详见 [HTTP 接口 · 代理密钥与额度](docs/api.md#代理密钥与额度)。
 
-| 环境变量 | 对应 config.json | 默认值 | 作用与详细说明 |
-|---|---|---|---|
-| `PORT` | `port` | `3123` | 服务监听端口。 |
-| `BIND_HOST` | - | `127.0.0.1` | 监听地址（源码运行默认 `127.0.0.1`，容器中设为 `0.0.0.0`）。 |
-| `DATA_DIR` | - | `.` (容器为 `/data`) | 运行数据、配置和日志的存储目录。 |
-| `PROXY_KEY` | `proxyKey` | 留空 | **代理主密钥（客户端）**。设置后，模型接口需携带 `Bearer <key>`；未设置 `ADMIN_KEY` 时，该密钥同时用于登录控制台（保持单机部署的既有行为）。 |
-| `ADMIN_KEY` | `adminKey` | 留空 | **管理密钥（控制台）**。留空时沿用 `PROXY_KEY`；设置后，控制台与管理接口仅接受该密钥，`PROXY_KEY` 及下发的代理密钥只能调用模型，无法读取账号或修改配置。 |
-| `PUBLIC_BASE_URL` | `publicBaseUrl` | 留空 | 服务对外访问的基准 URL（如放在反代后设为 `https://api.example.com`）。 |
-| `CLINE_PASS_KEY` | - | 留空 | 启动时默认注入账号池的初始 Cline Pass API Key。 |
-| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | Compose: `exa` / 源码: 留空 | 客户端声明 `web_search` 时映射的服务端搜索工具：`exa` / `tako` / `perplexity`；`off` 或留空表示关闭。该工具由上游网关执行并按次计费，仅在模型实际调用搜索时产生费用；Compose 默认开启，如需关闭可在 `.env` 中置为空值。 |
-| `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | Compose: `browserbase_fetch` / 源码: 留空 | 用户消息中出现 HTTP(S) 链接时声明的网页抓取工具：`browserbase_fetch`；留空或 `off` 表示关闭。同样由网关执行并按次计费。 |
-| `SHELL_COMPAT` | `shellCompat` | 留空 | 客户端工具兼容模式。在 Windows 客户端下推荐设为 `powershell`，强制模型在工具调用中声明 shell 参数。 |
-| `SHELL_COMPAT_ENFORCE`| `shellCompatEnforce`| `false` | 是否强制把模型输出中的实际 `shell` 参数改写为 `SHELL_COMPAT`。 |
-| `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 是否开启严格工具历史校验。开启后，未配对的孤儿工具结果将直接报错拒绝。 |
-| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 压缩时逐字保留的最近对话预算（估算 token）。摘要只覆盖更早的部分，最近几轮原文随 compaction item 一同回放，避免路径、命令与报错文本被摘要改写。设为 `0` 关闭该行为。 |
-| `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | 压缩轮次使用的推理档位（须为模型声明的档位之一，或 `auto`＝取最接近 high 的档）。默认 `max`：较低档位容易把输出预算全部用于隐藏思考，导致网关返回 `empty response content` 并额外消耗一轮重试；如需降低开销可设为 `high`。 |
-| `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `16384` | 压缩轮次的输出预算下限（上限 32768）。隐藏思考与摘要正文共用该预算，摘要通常需要 5~6k 可见 token，8192 时常在首轮即被截断并触发升档重试，因此默认取两档（16384）；升档重试时再翻倍至上限 32768。 |
-| `TRUSTED_PROXIES` | `trustedProxies` | `[]` | 信任的反向代理 IP 或 CIDR 列表（逗号分隔）。来自这些地址（以及本机回环）的 `X-Forwarded-For` / `X-Real-IP` 会被采信，用于两件事：未设置密钥时判断请求是否来自本机；认证失败限流按真实客户端 IP 分别计数，避免一个用错密钥的客户端连累同一反代后面的所有人。Docker 部署并由宿主机反代时，请填宿主机在容器网络中的网关地址（可用 `docker network inspect` 查看，一般形如 `172.18.0.1`），不要填整段私网网段，否则同网络的其他容器也能伪造来源。 |
-| `TRUST_LOCAL_PORT_FORWARD`| `trustLocalPortForward` | Compose: `1` | 信任本地端口映射（容器内将宿主机回环端口视作本机安全请求）。暴露公网时必须清除此项并配置 `PROXY_KEY`。 |
+## 升级与备份
 
----
-
-## 🌐 生产部署与反向代理
-
-当挂载在 Nginx、Traefik、Caddy 等反向代理后面时，请确保开启流式长连接并关闭响应缓冲。
-
-### Nginx 配置示例
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name cline.example.com;
-
-    ssl_certificate     /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3123;
-        proxy_http_version 1.1;
-
-        # 核心设置：支持长思考模型的长连接与 SSE 流式推送
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+```bash
+git pull
+docker compose up -d --build
 ```
 
-> **安全提示**：对外开放网络访问时，**务必在控制台或环境变量中设置强密码 `PROXY_KEY`**！未设置密钥且暴露端口将导致控制台管理权限完全失窃。
+备份时先停止服务，再复制整个 `data` 目录。数据目录里有账号的 API Key，请注意保管。详见[运维说明](docs/operations.md)。
 
-<details>
-<summary><strong>Q: 如何把代理分发给其他人，并限制其可用额度？</strong></summary>
+## 常见问题
 
-在控制台「代理密钥」页新增客户端密钥（「随机生成」会生成一个 <code>sk-</code> 前缀的随机串），再按需配置两项限制：
-<ul>
-  <li><b>绑定账号</b>：该密钥仅使用所绑定的账号，不参与故障转移；绑定账号不可用时请求直接失败，不会改用其他账号的额度。</li>
-  <li><b>额度上限（USD）</b>：按上游返回的实际费用累计，达到上限后该密钥的请求被拒绝（HTTP 429，<code>code=key_spend_limit</code>），主密钥不受影响。累计值持久化于 <code>data/metadata.json</code>，重启不清零，可在控制台或通过 <code>POST /api/keys/reset</code> 清零。</li>
-</ul>
-建议同时设置 <code>ADMIN_KEY</code>：客户端密钥无法打开控制台，也就无法读取账号池与上游密钥。<br>
-说明：额度以上游返回的费用为准；上游未返回费用的请求按 0 计，不做估算。客户端中途取消的流式请求拿不到上游返回的费用，也按 0 计，但上游仍会照常扣费，因此额度统计可能偏低。<br>
-<b>并发预留</b>：准入时把进行中的请求按该密钥的历史平均单次费用预留。「已用 + 预留」达到上限时，新请求返回 HTTP 429（响应头 <code>X-Cline-Key-Limit: reserved</code>），等进行中的请求结束后即可重试。<br>
-在反向代理后面分发密钥时，请配置 <code>TRUSTED_PROXIES</code>（见上文配置表），否则所有客户端共用反代地址的认证失败计数：某个客户端连续用错密钥，会让同一反代后的其他人一起被短暂拒绝。
-</details>
+**启动日志提示「尚未配置上游 API Key」。**
+服务已经正常启动，打开控制台在「账号池」页添加账号并保存即可。
 
----
+**在 `.env` 里把 `WEB_SEARCH_UPSTREAM` 设为空，联网搜索还是开着。**
+控制台每次保存都会把当前生效的配置写进 `data/config.json`，之前的 `exa` 已经留在文件里，空的环境变量不会覆盖它。请写成 `WEB_SEARCH_UPSTREAM=off`。其他开关同理，见[配置参考](docs/configuration.md#配置从哪里来)。
 
-## 💾 数据存储与持久化
+**改了 `.env` 没有生效。**
+环境变量只在启动时读取，改完要执行 `docker compose up -d`。Compose 只会把特定的几个变量传进容器，`PORT`、`CLINE_PASS_KEY`、`STRICT_TOOL_HISTORY` 写在 `.env` 里无效。可以在「访问与安全 → 运行参数」中确认当前生效值和来源。
 
-数据目录（`./data`）中核心包含以下文件：
+**控制台里保存设置时提示 403。**
+网关放在 HTTPS 反向代理后面，但没有设置 `PUBLIC_BASE_URL`。
 
-| 文件 | 描述与维护说明 |
+**有些模型不能钉住渠道。**
+这类模型在上游由网关自动选择渠道，渠道参数会被忽略（例如 DeepSeek 系列），或者只有一个渠道。探测后控制台会标出原因并禁用相关设置，请求仍然正常发送。
+
+**请求历史里的 token 数和客户端显示的不一样。**
+网关在一次请求内部执行多轮搜索或工具调用时，上游会把每一轮的输入 token 累加。请求历史记录上游的原始用量和费用；返回给 Codex 的用量按轮次折算过，避免它误以为上下文暴涨而提前压缩。
+
+**请求了订阅列表里没有的模型。**
+网关照样转发。如果是 `cline-pass/` 开头的模型并且请求成功，它会被自动加入订阅。
+
+**用错几次密钥后，正确的密钥也被拒绝。**
+同一来源 1 分钟内用错 5 次会被暂时拒绝，从 30 秒开始，每次翻倍，最长 15 分钟，期间正确的密钥也会被拒绝。等待响应头 `Retry-After` 给出的时间，或者重启服务清空计数。
+
+## 文档
+
+| 文档 | 内容 |
 |---|---|
-| `config.json` | 核心配置快照：包含账号列表、密钥、模型偏好与路由钉选设置。 |
-| `metadata.json` | 运行时快照：包含渠道测速结果、模型能力信息、最近 500 条请求历史，以及各代理密钥的累计用量（`keyUsage`，用于额度上限）。 |
-| `store.journal` | WAL（Write-Ahead Log）操作日志：每次配置修改与请求记录均先追加至该日志并批量 fsync，定期合并入上述 JSON 快照中。 |
+| [配置参考](docs/configuration.md) | 全部配置项、默认值、环境变量与 `config.json` 的优先级、Compose 的默认值 |
+| [账号与渠道调度](docs/routing.md) | 账号选择、冷却、配额、会话粘性、渠道钉住、重试与超时、响应头 |
+| [HTTP 接口](docs/api.md) | 模型接口、管理接口、密钥与额度、认证失败限流、错误格式 |
+| [Responses 协议兼容](docs/protocol-compatibility.md) | 支持与不支持的功能、工具处理、联网搜索、结构化输出、上下文压缩 |
+| [运维说明](docs/operations.md) | 数据目录、访问控制、反向代理、流共享的资源上限、启动与退出、升级 |
+| [开发说明](docs/development.md) | 目录结构、构建、测试、CI |
 
-> **数据备份**：备份或迁移时，先停止容器或服务进程，直接复制整个 `./data` 目录即可。
+## 致谢与许可
 
----
-
-## ❓ 常见问题 (FAQ)
-
-<details>
-<summary><strong>Q: 启动后提示 <code>尚未配置上游 API Key</code>？</strong></summary>
-正常现象。服务已成功启动，只需打开浏览器访问 <code>http://127.0.0.1:3123/</code>，在「账号池」中添加你的 Cline Pass 密钥并保存即可。
-</details>
-
-<details>
-<summary><strong>Q: 为什么 DeepSeek 模型无法钉选渠道？</strong></summary>
-当前 Cline Pass 上游网关对 DeepSeek 系列实行全自动动态网关路由，显式指定渠道会被网关直接拒绝。控制台探测到此特性后会自动锁定该模型为自动路由模式，并避免做无谓的渠道遍历尝试。
-</details>
-
-<details>
-<summary><strong>Q: 遇到 429 限流时，代理会怎么处理？</strong></summary>
-如果账号池中有多个可用账号，网关会将遭遇 429 的账号放入 2 分钟冷却池，并在当前请求中自动切换至下一个可用账号继续尝试，对客户端完全透明。
-</details>
-
-<details>
-<summary><strong>Q: 为什么请求历史里的 Token 数和客户端统计的不同？</strong></summary>
-网关在执行内置搜索或多轮工具调用时，上游账单会将各个内部轮次的 Prompt 累加统计（控制台历史展示的是上游真实收费明细）；但为了防止 Codex 误以为上下文暴增而提前触发本地截断压缩，网关发回给客户端的 <code>usage</code> 经过了轮次归一化折算。
-</details>
-
-<details>
-<summary><strong>Q: Codex 的 <code>/compact</code> 为什么走的是本地摘要？怎么让它走远端压缩？</strong></summary>
-Codex 客户端只为 OpenAI 官方与 Azure-OpenAI 形状的 provider 开启远端压缩（内部判定 <code>RemoteCompactionSupport::V2</code>），其它自定义 provider 一律回退成"本地摘要"——客户端自己发一次普通 Responses 请求让模型总结。代理已经支持远端压缩 v2 协议：<code>POST /v1/responses</code> 携带 <code>{"type":"compaction_trigger"}</code> 输入项时，会返回恰好一个 <code>compaction</code> item，并用 <code>response.output_item.done</code> + <code>response.completed</code> 的正常生命周期下发。<br>
-启用方式：将 provider 的 <code>name</code> 设为 <code>azure</code>（精确匹配、大小写不敏感；<code>OpenAI</code> 亦可命中，但 <code>azure</code> 只参与这一处能力判定，影响面最小）：
-<pre><code>[model_providers.custom]
-name = "azure"
-base_url = "http://127.0.0.1:3123/v1"
-</code></pre>
-之后手动 <code>/compact</code> 和自动压缩都会走远端，摘要用 <code>ocx1:</code> 信封保存、下次请求带回时代理解码回放；这类请求会以 <code>kind=compact</code> 记录在请求历史里。<br>
-压缩按其结构分两部分：<b>四段式摘要</b>（Objective / Work State / Next Move / Relevant Files）覆盖较早的对话，<b>最近几轮原文</b>（默认约 16000 token，见 <code>COMPACTION_RECENT_TOKENS</code>）逐字保留在同一个信封里，回放顺序是「摘要 → 最近原文 → 本轮新输入」。<br>
-摘要生成失败（含升档重试后仍失败）时不返回错误，而是返回<b>降级</b>的 compaction item：其中包含失败原因、已产出的部分摘要与最近的用户请求，会话因此可以继续，代价是较早的上下文丢失；该记录在请求历史中标记为「压缩降级」。<br>
-另一种情况不触发重试，但会在历史中标注：摘要正常结束却缺少锚定段落（例如仅有 Objective 与 Work State）。压缩照常生效，历史记录的模型列会显示琥珀色徽章 <code>摘要缺 …</code>，列出缺失的段落名称。
-</details>
-
----
-
-## 🤝 致谢与开源协议
-
-- 感谢原作者 [@munmunjaklin458-afk](https://github.com/munmunjaklin458-afk) 开源 [cline-pass-switcher](https://github.com/munmunjaklin458-afk/cline-pass-switcher)。
-- 本项目遵循 [MIT License](LICENSE) 开源协议。
+- 感谢 [@munmunjaklin458-afk](https://github.com/munmunjaklin458-afk) 开源的 [cline-pass-switcher](https://github.com/munmunjaklin458-afk/cline-pass-switcher)。
+- 本项目基于 [MIT License](LICENSE) 开源。

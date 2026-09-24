@@ -83,9 +83,9 @@ type Config struct {
 	ProxyKeys     []ProxyKeyGrant `json:"proxyKeys,omitempty"`
 	PublicBaseURL string          `json:"publicBaseUrl"`
 	// TrustedProxies lists IP addresses or CIDR blocks whose forwarded client
-	// address headers (X-Forwarded-For / X-Real-IP) may be trusted. It only
-	// matters while ProxyKey is empty, when every unauthenticated request has
-	// to prove it came from this machine.
+	// address headers (X-Forwarded-For / X-Real-IP) may be trusted. They decide
+	// whether a request to a surface without a key came from this machine, and
+	// which client a failed credential is charged to by the auth throttle.
 	TrustedProxies []string `json:"trustedProxies,omitempty"`
 	// TrustLocalPortForward declares that a non-loopback peer only reaches
 	// this listener through a host port mapping bound to the host loopback

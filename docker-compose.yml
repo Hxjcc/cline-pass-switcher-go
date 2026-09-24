@@ -22,7 +22,8 @@ services:
       # 宿主机反代时填宿主机在容器网络中的网关地址（docker network inspect
       # 可查），让认证限流按真实客户端 IP 计数；不要填整段私网网段。
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
-      # 上游网关的联网能力，由网关执行并按次计费；如需关闭，在 .env 中置为空值
+      # 上游网关的联网能力，由网关执行并按次计费；如需关闭，在 .env 中写 off。
+      # 不要留空：控制台保存过的值会留在 config.json 里，空值不会覆盖它。
       - WEB_SEARCH_UPSTREAM=${WEB_SEARCH_UPSTREAM-exa}
       - WEB_FETCH_UPSTREAM=${WEB_FETCH_UPSTREAM-browserbase_fetch}
       # Windows 客户端兼容：把工具的 shell 参数收窄成必填的 powershell，

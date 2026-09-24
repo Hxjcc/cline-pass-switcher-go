@@ -1,101 +1,188 @@
-# Responses 协议边界与验收
+# Responses 协议兼容
 
-该代理使用 Chat Completions 上游，提供无服务端会话存储的 Responses 兼容接口。
+Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的是 OpenAI 的 Responses 协议，网关在 `/v1/responses` 上把请求转换成 Chat Completions，再把上游的结果（包括流式事件）转换回 Responses 格式。
 
-## 本轮修复
+网关不在服务端保存会话：每个请求都要带上完整的对话历史，响应中的 `store` 恒为 `false`。
 
-- namespace 下的 custom 工具在 added、done 和最终 output 中保留 namespace，多轮回放仍映射到同一个 Chat 工具名。
-- 上游 `refusal` 字段以及内容数组中的 refusal 块生成 `response.refusal.delta/done`，最终内容保留 `type=refusal`。同一条消息混合文本与 refusal 时，content_index 连续、顺序不变。回放时使用 Chat 的 refusal 字段。
-- 无法实现的能力在发送上游前返回 HTTP 400，错误包含 `type=invalid_request_error`、`code=unsupported_feature` 和具体 `param`。
+## 请求转换
 
-明确不支持的能力包括：conversation 引用、后台响应、文件与音频内容、没有 URL/内联数据的图片引用、强制执行 web/file search 等服务端工具、强制执行 server 模式的 tool search、未知输入 item、不可读的外部压缩包和没有可读内容的外部加密思考。`previous_response_id` 继续要求客户端改为发送完整历史。
+### 输入项
 
-客户端会在普通问候请求里自动附带 `web_search` 等工具清单，因此“声明可用工具”不能视为“强制执行工具”。默认/auto/none 时，代理跳过已知不支持的服务端工具声明，并继续转发普通输入和支持的客户端工具；不据此宣称已提供搜索能力。显式 tool_choice 强制选中服务端工具，或者 required 且筛选后没有任何客户端工具时，仍返回 400。回归测试覆盖 tools[14]=web_search + 你好，并分别验证流式与非流式。
+| 输入项 `type` | 处理方式 |
+|---|---|
+| `message`（或带 `role`、省略 `type` 的项）、纯字符串 | 转成对应角色的 Chat 消息。字符串视为用户消息。 |
+| `reasoning` | 可读的思考内容作为上一条助手消息的 `reasoning_content` 回传给上游。Kimi / Moonshot 模型不回传。 |
+| `function_call`、`custom_tool_call`、`tool_search_call` | 转成助手消息里的 `tool_calls`。 |
+| `function_call_output`、`custom_tool_call_output`、`tool_search_output` | 转成 `tool` 消息；找不到对应调用时见[工具历史归一化](#工具历史归一化)。工具结果里的图片移到紧随其后的用户消息中。 |
+| `compaction` | 解开网关生成的压缩内容，放回对话开头，见[上下文压缩](#上下文压缩)。 |
+| `compaction_trigger` | 表示这一轮是 Codex 的远端压缩请求，见[上下文压缩](#上下文压缩)。 |
+| `additional_tools` | 只读取其中的工具声明。 |
 
-普通工具返回字符串是原始业务数据，不会因为字符串内部含有 `type=input_file` 等 JSON 字段就被当作协议拒绝。可读思考回放、普通图片/data URL、客户端 tool search 和本代理生成的压缩包仍受支持。custom grammar 仍通过工具描述交给 Chat 模型，未提供原生 grammar 约束采样。
+角色的处理：`developer` 转成 `system`。对话开始以后出现的 `system` 消息（Codex 会在历史中间插入环境提示）转成 `user`，因为不少上游会拒绝或丢弃位置靠后的系统消息。
 
-协议参考：[OpenAI Responses 类型与事件](https://developers.openai.com/api/reference/cli/resources/responses)。
+### 内容类型
+
+| 内容 | 处理方式 |
+|---|---|
+| `input_text`、`output_text`、`text` | 文本。 |
+| `input_image` 等图片 | 支持 URL、`data:` URL，以及 base64 数据加 MIME 类型。`detail: "original"` 按 `high` 处理。 |
+| `refusal` | 作为助手消息的 `refusal` 回传。 |
+
+### 工具
+
+| 客户端工具 | 发给上游的形式 |
+|---|---|
+| `function` | 普通函数工具，保留参数 Schema 和 `strict`。 |
+| `custom` | 函数工具，只有一个字符串参数 `input`；原始定义（包括 grammar）附在工具描述里，上游不会按 grammar 约束采样。 |
+| `namespace` 下的工具 | 函数工具，名称为 `命名空间__工具名`，超长时截断到 64 个字符；返回给客户端时还原成原来的命名空间和名称。 |
+| 客户端执行的 `tool_search` | 名为 `tool_search` 的函数工具。 |
+| `web_search`、`web_search_preview` 等 | 按 `WEB_SEARCH_UPSTREAM` 映射为网关执行的搜索工具，未配置时忽略，见[联网搜索与网页抓取](#联网搜索与网页抓取)。 |
+| `file_search`、`code_interpreter`、`image_generation`、`computer*`、`mcp`、服务端执行的 `tool_search` | 忽略。 |
+
+客户端经常在普通对话里也附带整份工具清单，所以"声明了"不等于"要求使用"：被忽略的工具不会导致请求失败。只有用 `tool_choice` **强制**选择一个无法转发的工具，或者 `tool_choice` 为 `required` 但过滤后没有任何可用工具时，才返回 400。
+
+`tool_choice` 支持 `auto`、`none`、`required`，以及指定一个 `function`、`custom` 或 `tool_search` 工具。请求里没有可用工具时，`tool_choice` 和 `parallel_tool_calls` 会被去掉。
+
+### 推理与缓存
+
+- `reasoning.effort` 映射到模型支持的推理档位：档位名完全匹配时直接使用；`xhigh`、`max` 这类更高的档位映射到模型支持的最接近档位。实际使用的档位记在响应头 `X-Cline-Reasoning-Effort` 和请求历史里。
+- `prompt_cache_key` 原样转发，同时用于[会话粘性](routing.md#会话粘性)。
+
+### 不支持的功能
+
+以下请求在发给上游之前就返回 HTTP 400：
+
+- `conversation` 引用、`background: true`。
+- 消息或工具结果中的文件和音频内容（`input_file`、`input_audio` 等），以及只有 `file_id`、没有 URL 或内联数据的图片。
+- 只有加密内容、没有可读文本的思考项；不是本网关生成、无法解读的压缩项。
+- 未知的输入项类型、内容类型或工具类型（上面工具表以外的类型）；嵌套超过 16 层的工具命名空间。
+- 强制使用无法转发的工具（见上文）。
+
+错误格式：
+
+```json
+{
+  "error": {
+    "message": "background response execution is not supported by this Chat-backed proxy",
+    "type": "invalid_request_error",
+    "code": "unsupported_feature",
+    "param": "background"
+  }
+}
+```
+
+`previous_response_id` 也会被拒绝（400，没有 `code` 和 `param`）：网关不保存历史响应，客户端需要改为每次发送完整历史。
+
+## 响应转换
+
+- 响应里的 `model` 始终是客户端请求的模型名，而不是上游返回的名称。
+- 思考内容以 reasoning 输出项和 `response.reasoning_summary_text.*` 事件返回。DeepSeek 等提供可读思考过程的模型，另外发送 `response.reasoning_text.*` 事件。正文里夹带的 `<think>…</think>` 会被拆出来作为思考内容。
+- 上游的 `refusal` 生成 `response.refusal.delta` / `response.refusal.done` 事件，最终输出里保留 `type: "refusal"` 的内容块。
+- 网关自己执行的工具调用（联网搜索、网页抓取）不会出现在返回给客户端的输出里。
+
+### 用量
+
+返回给客户端的 `usage` 会按轮次折算：当网关在一次请求内部执行了多轮搜索或工具调用时，上游账单会把每一轮的输入 token 累加起来。网关把输入 token 和缓存 token 除以内部轮次数，并且不超过模型的上下文长度，避免 Codex 误以为上下文暴涨而提前压缩。输出 token 不折算。
+
+请求历史里记录的是上游的原始用量和费用，所以两边的数字可能不同。
 
 ## 工具历史归一化
 
-Chat Completions 要求每条 tool 消息都紧跟对应的 assistant tool_calls，而 ChatGPT Desktop 会把「没有对应调用」的工具结果写进会话历史，例如跨任务委派、历史裁剪或宿主侧工具的执行结果。默认行为是把这些孤儿结果转成用户消息继续转发，而不是让整轮请求失败：
+Chat Completions 要求每条工具结果紧跟在对应的工具调用之后。ChatGPT 桌面版和 Codex 的历史里经常有找不到调用的工具结果，例如跨任务委派、历史裁剪后留下的结果。默认情况下，网关把这类结果转成用户消息继续发送，而不是让整轮请求失败：
 
-- `create_thread` / `codex_app` 命名空间 / `<codex_delegation>` 开头的输出视为委派提示词，解包 `<input>` 后作为普通用户消息；
-- 其它孤儿结果保留原文，并加上 `[tool result without a recorded call <name>]` 前缀，避免模型误当成用户发言；
-- 若孤儿结果出现在同一批工具调用之间，会先缓冲、等这批调用全部有结果后再追加，保证 assistant → tool… → user 的顺序不被破坏；
-- `strictToolHistory` 配置或 `STRICT_TOOL_HISTORY=true` 可以恢复旧的严格行为（返回 `orphan tool output` 错误）。
+- 工具名为 `create_thread`、命名空间为 `codex_app`，或者内容以 `<codex_delegation>` 开头的结果，视为委派任务的提示词：取出其中 `<input>…</input>` 的内容，作为普通用户消息。
+- 其他结果保留原文，前面加上 `[tool result without a recorded call <工具名>]`，避免模型误以为是用户说的话。
+- 如果这样的结果夹在同一批工具调用之间，会等这批调用的结果都到齐后再追加，保证"助手调用 → 工具结果 → 用户"的顺序。
+- 空的工具结果替换为 `(no output)`，因为有些上游不接受内容为空的工具消息。
 
-回归覆盖：`TestToChatToleratesOrphanToolOutputs`、`TestToChatStrictToolHistoryStillRejectsOrphans`、`TestOrphanToolOutputDoesNotSplitToolGroup`，以及端到端的 `TestDelegatedThreadHistoryReachesUpstream`。
+设置 `STRICT_TOOL_HISTORY=true` 可以关闭这项处理，此时这类请求返回错误。
 
-## Web 搜索转发
+## 联网搜索与网页抓取
 
-ChatGPT Desktop 的 `web_search` 是托管工具：搜索由后端执行，客户端只负责声明。Chat Completions 上游没有这个概念，默认会被跳过。配置 `webSearchUpstream`（或环境变量 `WEB_SEARCH_UPSTREAM`）后，代理会把该声明替换成上游网关自己执行的服务端工具：
+Responses 的 `web_search` 是由服务端执行的托管工具，Chat Completions 上游没有对应概念。配置 `WEB_SEARCH_UPSTREAM` 后，网关把客户端的 `web_search` 声明替换成 Cline 网关自己执行的搜索工具：
 
-| 配置值 | 实际声明 |
+| 配置值 | 声明给上游的工具 |
 |---|---|
-| `exa` | `{"type":"vercel:exa_search"}` |
-| `tako` | `{"type":"vercel:tako_search"}` |
-| `perplexity` | `{"type":"vercel:perplexity_search"}` |
-| `browserbase_fetch` | `{"type":"vercel:browserbase_fetch"}`（抓取指定 URL，不是搜索） |
-| 留空 / `off` | 不映射（默认） |
+| `exa` | `vercel:exa_search` |
+| `tako` | `vercel:tako_search` |
+| `perplexity` | `vercel:perplexity_search` |
+| `vercel:` 开头的任意 ID | 原样使用 |
+| 空、`off`、`none`、`false`、`disabled` | 不映射 |
 
-另有 `webFetchUpstream`（环境变量 `WEB_FETCH_UPSTREAM`）：当用户消息里出现 http(s) 链接时，代理会额外声明 `{"type":"vercel:browserbase_fetch"}`，让模型能读取该链接的内容（实测可把 GitHub API 的字段原样读回，约 5 秒）。它只在检测到链接时声明，避免每轮请求都携带这类按次计费的工具；链接出现在工具输出而不是用户消息里时不会触发。
+启用搜索时，网关会在系统提示中附加一段搜索约束：每轮尽量只搜一次、最多取 3 条结果、不并行搜索。
 
-行为说明：搜索在网关侧执行，客户端只会看到最终答案；`url_citation` 之类的结构化引用不会出现，来源以正文 URL 的形式给出。显式 `tool_choice` 强选 `web_search` 仍然返回 400，因为无法强制一个网关工具。这些 provider 工具按次计费，按需开启；`web_search_preview` 及其带日期的变体走同一条映射。
+`WEB_FETCH_UPSTREAM`（可选值 `browserbase_fetch`）控制网页抓取：只有当**用户消息**里出现 http(s) 链接时，网关才额外声明 `vercel:browserbase_fetch`，让模型读取链接内容。链接只出现在工具输出里时不会触发。
 
-## 可重复验证
+需要注意：
 
-普通检查：
+- 这些工具由上游按次计费，只在模型实际调用时产生费用。
+- 搜索在上游执行，客户端只看到最终回答，不会收到 `url_citation` 之类的结构化引用；来源会以正文中的链接给出。
+- 用 `tool_choice` 强制使用 `web_search` 仍然返回 400，因为无法强制一个由网关执行的工具。
 
-```sh
-go test ./... -count=1
-go vet ./...
-go test -race ./... -count=1
+## Windows shell 兼容
+
+Codex 的命令执行工具带有一个 `shell` 参数。模型漏填时，Windows 上的客户端会回退到 `cmd.exe`。
+
+- `SHELL_COMPAT=powershell`：在发给模型的工具定义里，把 `shell` 参数限定为 `powershell` 并设为必填。只影响本身带 `shell` 参数的工具。
+- `SHELL_COMPAT_ENFORCE=true`：再进一步，在模型输出的工具调用参数完整之后，把其中的 `shell` 改写（或补上）为 `powershell`。流式请求会先缓冲这类工具调用的参数，完整后再发出。只在 `SHELL_COMPAT` 开启时生效。
+
+## 结构化输出校验
+
+请求使用 `text.format.type = "json_schema"` 且 `strict` 为 `true`（省略时视为 `true`）时，网关除了把 Schema 转发给上游，还会在本地校验最终输出。
+
+- 校验器为 `github.com/santhosh-tekuri/jsonschema/v6`，按 JSON Schema draft 2020-12 并开启 format 校验，支持 Schema 内部的 `$defs` / `$ref`，不加载任何外部引用。
+- Schema 本身无效：返回 400（`invalid_json_schema`），`param` 指出字段，不调用上游。
+- 最终输出不符合 Schema：非流式返回 502（`upstream_schema_validation_failed`）；流式以 `response.failed` 事件结束，错误码相同。这类失败不会自动重试。
+- 流式请求的增量内容照常实时发送，校验只在结束时进行，不会撤回已经发出的内容。调用方必须等到 `response.completed` 才能把结果当作合格的结构化数据。
+- 网关不会修正输出：不去掉 Markdown 代码块、不改字段名、不转换类型。合格的输出保留原文。
+- 工具调用、拒答、因长度或内容过滤而不完整的输出不参与校验，保留原来的状态。
+- `strict: false` 时只转发 Schema，不在本地校验。
+
+## 上下文压缩
+
+对话接近上下文上限时，Codex 会让服务端把较早的历史压缩成一段摘要。网关提供两个入口：
+
+| 入口 | 返回 |
+|---|---|
+| `POST /v1/responses`，输入中带 `{"type": "compaction_trigger"}` | 远端压缩 v2：正常的 Response，输出里恰好有一个 `compaction` 项。Codex 的 `/compact` 和自动压缩走这条路。 |
+| `POST /v1/responses/compact` | 独立接口，返回 `response.compaction` 对象，供脚本和自定义客户端使用。 |
+
+两者都以非流式方式请求上游；客户端要求流式时，网关在本地生成对应的事件序列。请求历史里的类型为 `compact`。
+
+### 让 Codex 使用远端压缩
+
+Codex 只对 OpenAI 和 Azure OpenAI 形态的 provider 启用远端压缩，其他自定义 provider 会退回"本地摘要"：客户端自己发一次普通请求让模型总结。要让 Codex 使用网关的远端压缩，把 provider 的 `name` 设为 `azure`（大小写不敏感）：
+
+```toml
+[model_providers.cline-pass]
+name = "azure"
+base_url = "http://127.0.0.1:3123/v1"
+wire_api = "responses"
 ```
 
-Windows 上的 race 检测需要 CGO 与兼容的 C 编译器。本轮使用临时目录中的 w64devkit 2.10.0（GCC 16.2.0），仅在测试进程设置 `CGO_ENABLED=1` 和 `CC`，未修改全局 Go 配置或系统 PATH。下载文件的 SHA-256 与发布元数据一致：`18d0a4c71a166f8401ab6305781bec5882b40b5e06ba9807c61cb5f3b3c6325e`。[Go race 检测要求](https://go.dev/doc/articles/race_detector)
+### 压缩内容
 
-长流与共享流压测在本地生成数据，不调用真实模型：
+压缩结果由两部分组成：
 
-```powershell
-$env:CLINE_MANUAL_LONG_STREAM = '1'
-$env:CLINE_STRESS_SECONDS = '60'
-go test -race ./internal/httpapi -run 'Test(SharedStreamSoak|ManualStreamPastLegacy120sDeadline)$' -v -count=1 -timeout 4m
-```
+1. **摘要**，覆盖较早的对话。网关要求模型按四个固定段落输出：`## Objective`、`## Work State`、`## Next Move`、`## Relevant Files`。
+2. **最近的原文**，默认约 16000 token（`COMPACTION_RECENT_TOKENS`），只包含用户和助手的文字，单条最多 2000 字符、总计最多 32000 字符。这样最近的路径、命令和报错不会在摘要中被改写。
 
-真实验收脚本接受 `--config`、`--codex`、`--workdir`、`--base-url` 和 `--model`。建议使用独立代理进程与配置副本，避免把测试请求混入常用实例。CLI 使用 `--ignore-user-config --ephemeral --sandbox workspace-write`，只操作验收目录内生成的固定文本和图片；随后独立通过 HTTP 验证 compact 与摘要回放。
+两部分一起放在 `compaction` 项的 `encrypted_content` 中，以 `ocx1:` 开头、base64 编码。客户端下一轮把它带回来时，网关按「摘要 → 最近原文 → 本轮新输入」的顺序放回对话。
 
-CLI 文件/工具链路、CLI 自行压缩和 HTTP `/responses/compact` 是三个不同验收步骤。脚本记录真实请求中的工具名和图片块，并结合 CLI 的成功 `file_change` 与回读事件判断工具执行。`--auto-compact-limit` 可降低测试阈值以触发压缩；结果分别记录远端 compact 调用数和 CLI 本地压缩提示数，不能把两者混为一谈。
+### 预算与重试
 
-`--reuse-cli-evidence` 可以重新解析同一隔离目录下的既有 CLI 日志，再独立运行 HTTP compact/replay，报告明确标记证据复用。普通运行要求新目录，避免旧文件导致误判成功。
+- 压缩请求使用 `COMPACTION_REASONING_EFFORT` 指定的推理档位（默认 `max`），输出预算不低于 `COMPACTION_MIN_OUTPUT_TOKENS`（默认 16384）。
+- 推理模型有时把预算全部用在隐藏的思考上，最后没有输出摘要（上游返回 `empty response content`）。遇到这种情况，网关改用模型的最高推理档位、把输出预算加倍（最多 32768）重试一次。两次尝试都记在请求历史里。
+- 其他失败已经经过正常的账号和渠道重试，不再额外重试。
 
-## 2026-09-18 验证记录
+### 降级与提示
 
-- `go test ./... -count=1`、`go vet ./...` 和 `go test -race ./... -count=1` 通过。
-- 130 秒长流在 race 检测下正常结束，没有触发旧的 120 秒整体超时。
-- 60 秒、8 worker 的共享流压测完成 31,368 轮，每轮覆盖断线重连、多个订阅、落盘和释放；结束时回放预算、文件、任务均为零，goroutine 从 2 回到 2。强制 GC 后堆保留量增加 411,816 字节，未见持续累积迹象。这是短时压力验收，不代替生产环境长期监控。
-- 使用独立配置副本启动本轮编译的代理，在隔离目录中调用 Codex CLI 0.154.0 与 `cline-pass/glm-5.3-flash`。首次文件验收约 70 秒完成，得到 `COBALT-742 red` 并回读确认；独立 HTTP compact 后成功回忆标识、颜色和待办。
-- 加入请求形状记录并把自动压缩阈值降到 18,500 后，CLI 用约 213 秒完成验收。请求中确认 `view_image` 和实际图片回传，CLI 日志确认成功文件变更和回读。该轮出现 9 次本地压缩提示，但没有调用远端 `/responses/compact`；自定义 provider 下使用普通 Responses 请求生成摘要后继续工具工作。因此这项通过的是 CLI 本地压缩后的工具链路，不是 CLI 自动调用本代理 compact 端点。
-- 该低阈值测试多次重复摘要与工具尝试，耗时明显增加，不建议把测试阈值直接用作生产配置。模型也先尝试了不正确的 PowerShell 补丁命令，后来成功产生文件变更；这些失败保留在原始验收日志中。
+- **压缩降级。** 摘要最终没能生成时，网关不返回错误，而是返回一个降级的 `compaction` 项，其中包含失败原因、已经产生的部分摘要和最近的用户请求。会话可以继续，代价是较早的上下文丢失。请求历史中这条记录标为「压缩降级」。
+- **摘要缺段。** 摘要正常结束但缺少某些段落时（例如只有 Objective 和 Work State），压缩照常生效，不重试；请求历史的模型列会显示「摘要缺 …」，列出缺少的段落。
 
-真实模型输出仍可能不严格遵循指令。首次普通文本回忆测试中，上游除了回忆信息，还额外声称已经完成待办；没有实际工具调用支持这一说法，因此未把它计为文件操作通过。
+## 流式输出
 
-后续独立 HTTP 验收请求了严格 JSON Schema。compact 成功且回放仍包含正确标识、颜色和待办，但真实上游返回 Markdown JSON 代码块，使用 `image_color` 替代要求的 `color`，并多出 `status` 字段。该次严格结构化输出验收未通过，不能据此声称该模型/渠道提供严格 schema 保证。当时代理只将 `text.format` 映射到 Chat 的 `response_format`。后续已增加下面的本地校验，使同类违规输出明确失败；历史验收记录保留原结果。
-
-脱敏后的机器可读结果保存在本地 `docs/acceptance-2026-09-18.json`；`docs/acceptance-*.json` 按 `.gitignore` 不入库，该文件只存在于运行过验收的机器上。验收结束已停止隔离代理进程并删除包含账号密钥的临时配置副本，原始项目配置未修改。
-
-## 严格 JSON Schema 结果校验
-
-适用范围为 `/v1/responses`（以及 `/responses`、`/api/v1/responses`）上的 `text.format.type=json_schema`，并且有效 strict 设置为 true。沿用原有转换规则：省略 strict 时默认 true，显式 `strict:false` 不启用本地校验。普通文本、`json_object` 模式及 Chat Completions 透传接口不受此项调整影响。
-
-schema 在发送上游前编译一次。使用固定版本 `github.com/santhosh-tekuri/jsonschema/v6 v6.0.3`，默认 JSON Schema draft 2020-12，并开启 format 校验。支持嵌套对象/数组、required、additionalProperties、类型、枚举、数值/字符串约束、anyOf，以及 schema 内的 `$defs/$ref` 和递归引用。schema 的网络/本地文件加载全部禁用；所需定义应随请求提供。
-
-- schema 本身无效或引用不可用：HTTP 400，`error.code=invalid_json_schema`，`param` 指明请求字段，不调用上游。
-- 完整最终文本不符合 schema：非流式 HTTP 502；流式 `response.failed`；错误码统一为 `upstream_schema_validation_failed`，历史记录失败。
-- SSE 增量仍实时发送，最终校验不会撤回已经发送的 delta。调用方必须等到 `response.completed` 才将结构化结果视为成功；失败时不得把之前的内容当作已验证数据。
-- `refusal`、工具调用中间轮、length/content_filter 导致的 incomplete、网络错误和截断错误保留原有状态，不被 schema 错误覆盖。
-- 本代理 compact 生成纯文本摘要，已清除结构化输出校验，避免把摘要当作 JSON。
-
-校验不会去除 Markdown 代码块、重命名字段、删字段、转换值类型或重新生成答案。合规输出保留原始文本，包括空白和数字表示；大整数的比较不经 float64 舍入。
-
-新增回归覆盖上述行为，并检查流式/非流式/普通 JSON 转 SSE 的终态、HTTP 状态、错误码、历史记录及“不自动重试”。依赖版本与校验和记录于 go.mod/go.sum，Docker 构建同步下载这些固定依赖。
+- 等待上游数据期间，网关每 10 秒向客户端发送一次 `: ping` 注释行保活。
+- 单个 SSE 事件最大 8 MiB，超过时流以错误结束（`stream_event_too_large`）。整条流的总时长和总长度不设上限。
+- 上游的流不完整时，网关以 `response.failed` 结束并记录原因，而不是报告成功。常见的错误码：`stream_truncated`（没有结束标记就断开）、`upstream_final_output_missing`（结束了但没有正文或工具调用）、`upstream_tool_call_dropped` / `upstream_tool_call_missing`（工具调用不完整）。
+- 一个 Responses 流式请求的上游流还没结束时，又来了内容完全相同的请求（例如客户端断线后立即重连），新请求会接入同一个上游流、从头回放，而不是再请求一次上游，见[运维说明 · 流共享与回放](operations.md#流共享与回放)。
