@@ -240,6 +240,43 @@ func TestToChatSkipsReasoningReplayForMoonshotModels(t *testing.T) {
 	}
 }
 
+func TestToChatReplaysAgentMessagesAsUserTurns(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/deepseek-v4.1-flash",
+		"input": []any{
+			map[string]any{
+				"type":      "agent_message",
+				"id":        "amsg_1",
+				"author":    "/root",
+				"recipient": "/root/count_go_files",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: /root/count_go_files"},
+					map[string]any{"type": "encrypted_content", "encrypted_content": "统计仓库里的 Go 文件"},
+				},
+			},
+		},
+	}
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	if len(messages) != 1 {
+		raw, _ := json.Marshal(messages)
+		t.Fatalf("expected a single user turn, got %s", raw)
+	}
+	message := jsonx.Map(messages[0])
+	if message["role"] != "user" {
+		t.Fatalf("agent message must replay as a user turn: %#v", message)
+	}
+	content := jsonx.String(message["content"])
+	for _, want := range []string{"/root", "/root/count_go_files", "NEW_TASK", "统计仓库里的 Go 文件"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("agent message lost %q: %q", want, content)
+		}
+	}
+}
+
 func TestToChatRestoresCompactionEnvelopeAndIgnoresAdditionalTools(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/qwen3.8-max",

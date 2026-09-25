@@ -261,6 +261,41 @@ func parseToolOutput(value any) outputParts {
 	return parts
 }
 
+// agentMessageText flattens a remote multi-agent v2 envelope (task handoff,
+// teammate reply, error report) into one plain text block. The Chat backend has
+// no teammate concept, so the author and recipient travel as a readable header
+// and the payload is replayed verbatim.
+func agentMessageText(item map[string]any) string {
+	author := strings.TrimSpace(jsonx.String(item["author"]))
+	recipient := strings.TrimSpace(jsonx.String(item["recipient"]))
+	sections := make([]string, 0, 3)
+	switch {
+	case author != "" && recipient != "":
+		sections = append(sections, "Agent message from "+author+" to "+recipient+":")
+	case author != "":
+		sections = append(sections, "Agent message from "+author+":")
+	case recipient != "":
+		sections = append(sections, "Agent message to "+recipient+":")
+	}
+	for _, raw := range jsonx.Slice(item["content"]) {
+		part := jsonx.Map(raw)
+		if part == nil {
+			continue
+		}
+		text := strings.TrimSpace(jsonx.String(part["text"]))
+		if jsonx.String(part["type"]) == "encrypted_content" {
+			text = strings.TrimSpace(jsonx.String(part["encrypted_content"]))
+		}
+		if text != "" {
+			sections = append(sections, text)
+		}
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n")
+}
+
 func messageFromResponseItem(item map[string]any) map[string]any {
 	role := jsonx.String(item["role"])
 	if role == "developer" {

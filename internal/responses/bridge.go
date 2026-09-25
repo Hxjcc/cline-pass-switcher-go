@@ -469,6 +469,13 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			// Remote compaction v2 marker: the request itself is handled by the
 			// compaction path, and the marker must never reach the model as a
 			// message.
+		case "agent_message":
+			// Remote multi-agent v2 envelope between teammates. The team
+			// protocol runs in the client; the model only needs the payload,
+			// so it replays as a plain user turn.
+			if text := agentMessageText(item); text != "" {
+				queueOrAppend(map[string]any{"role": "user", "content": text})
+			}
 		default:
 			if item["role"] != nil || jsonx.String(item["type"]) == "message" || item["type"] == nil {
 				queueOrAppend(messageFromResponseItem(item))

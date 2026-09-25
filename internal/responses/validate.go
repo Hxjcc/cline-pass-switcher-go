@@ -72,6 +72,10 @@ func validateRequestCapabilities(body map[string]any) error {
 			if jsonx.String(item["encrypted_content"]) != "" && reasoningTextFromItem(item) == "" {
 				return unsupported(path+".encrypted_content", "encrypted-only reasoning from another provider")
 			}
+		case "agent_message":
+			// Remote multi-agent v2 envelope (task assignment, teammate
+			// reply, error report). Its content mixes readable text with
+			// payload blobs; the bridge folds it into a single user turn.
 		default:
 			return unsupported(path+".type", "input item type "+kind)
 		}
