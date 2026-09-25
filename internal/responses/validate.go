@@ -33,6 +33,10 @@ func validateRequestCapabilities(body map[string]any) error {
 	if choice := jsonx.Map(body["tool_choice"]); choice != nil {
 		switch kind := jsonx.String(choice["type"]); kind {
 		case "function", "custom", "tool_search":
+		case "web_search", "web_search_preview", "web_search_preview_2025_03_11":
+			// A forced hosted search is honoured only when the request also
+			// declared the tool and the proxy mapped it onto a gateway search
+			// tool; the bridge refuses the request otherwise.
 		default:
 			return unsupported("tool_choice.type", "tool choice type "+kind)
 		}

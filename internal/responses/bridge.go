@@ -515,6 +515,12 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	if len(context.chatTools) > 0 {
 		chat["tools"] = context.chatTools
 	}
+	// A client-pinned hosted search can only be honoured when the request also
+	// declared web_search and the proxy mapped it onto a gateway tool;
+	// otherwise the forced choice would silently degrade.
+	if context.forcedHostedSearch() && !context.isProviderTool(context.webSearchTool) {
+		return nil, nil, unsupported("tool_choice.type", "forced hosted web search without a configured search upstream")
+	}
 	if choice := context.toolChoiceToChat(context.ResponseToolChoice); choice != nil {
 		chat["tool_choice"] = choice
 	}

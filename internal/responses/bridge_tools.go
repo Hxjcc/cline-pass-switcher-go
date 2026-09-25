@@ -389,6 +389,10 @@ func normaliseWebSearchTool(value string) string {
 		return "vercel:tako_search"
 	case "perplexity", "perplexity_search":
 		return "vercel:perplexity_search"
+	case "parallel", "parallel_search":
+		return "vercel:parallel_search"
+	case "browserbase_search":
+		return "vercel:browserbase_search"
 	case "browserbase", "browserbase_fetch", "fetch":
 		return "vercel:browserbase_fetch"
 	default:
@@ -407,6 +411,12 @@ func (context *Context) isProviderTool(name string) bool {
 	}
 	_, found := context.providerTools[name]
 	return found
+}
+
+// forcedHostedSearch reports whether the client pinned this turn to the hosted
+// web search tool instead of letting the model decide.
+func (context *Context) forcedHostedSearch() bool {
+	return isWebSearchToolType(jsonx.String(jsonx.Map(context.ResponseToolChoice)["type"]))
 }
 
 func (context *Context) webSearchPolicy() string {

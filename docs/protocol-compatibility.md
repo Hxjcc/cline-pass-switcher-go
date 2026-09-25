@@ -36,10 +36,10 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 | `custom` | 函数工具，只有一个字符串参数 `input`；原始定义（包括 grammar）附在工具描述里，上游不会按 grammar 约束采样。 |
 | `namespace` 下的工具 | 函数工具，名称为 `命名空间__工具名`，超长时截断到 64 个字符；返回给客户端时还原成原来的命名空间和名称。 |
 | 客户端执行的 `tool_search` | 名为 `tool_search` 的函数工具。 |
-| `web_search`、`web_search_preview` 等 | 按 `WEB_SEARCH_UPSTREAM` 映射为网关执行的搜索工具，未配置时忽略，见[联网搜索与网页抓取](#联网搜索与网页抓取)。 |
+| `web_search`、`web_search_preview` 等 | 按 `WEB_SEARCH_UPSTREAM` 映射为网关执行的搜索工具，未配置时忽略；客户端用 `tool_choice` 强制选择它时翻译成 `tool_choice:"required"`（未配置搜索工具则返回 400），见[联网搜索与网页抓取](#联网搜索与网页抓取)。 |
 | `file_search`、`code_interpreter`、`image_generation`、`computer*`、`mcp`、服务端执行的 `tool_search` | 忽略。 |
 
-客户端经常在普通对话里也附带整份工具清单，所以"声明了"不等于"要求使用"：被忽略的工具不会导致请求失败。只有用 `tool_choice` **强制**选择一个无法转发的工具，或者 `tool_choice` 为 `required` 但过滤后没有任何可用工具时，才返回 400。
+客户端经常在普通对话里也附带整份工具清单，所以"声明了"不等于"要求使用"：被忽略的工具不会导致请求失败。只有用 `tool_choice` **强制**选择一个无法转发的工具（可映射的 `web_search` 会转成 `tool_choice:"required"`），或者 `tool_choice` 为 `required` 但过滤后没有任何可用工具时，才返回 400。
 
 `tool_choice` 支持 `auto`、`none`、`required`，以及指定一个 `function`、`custom` 或 `tool_search` 工具。请求里没有可用工具时，`tool_choice` 和 `parallel_tool_calls` 会被去掉。
 

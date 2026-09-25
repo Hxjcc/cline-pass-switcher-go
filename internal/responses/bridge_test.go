@@ -277,6 +277,63 @@ func TestToChatReplaysAgentMessagesAsUserTurns(t *testing.T) {
 	}
 }
 
+func TestToChatMapsForcedHostedSearchToRequired(t *testing.T) {
+	body := map[string]any{
+		"model":       "cline-pass/qwen3.8-max",
+		"input":       "今天有什么新闻",
+		"tools":       []any{map[string]any{"type": "web_search", "external_web_access": true}},
+		"tool_choice": map[string]any{"type": "web_search"},
+	}
+	chat, context, err := ToChatWithOptions(body, Options{WebSearchUpstream: "parallel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jsonx.String(chat["tool_choice"]) != "required" {
+		t.Fatalf("forced hosted search must become required: %#v", chat["tool_choice"])
+	}
+	if !context.isProviderTool("vercel:parallel_search") {
+		t.Fatalf("parallel must map onto the gateway search tool: %#v", context.providerTools)
+	}
+	mapped := false
+	for _, raw := range jsonx.Slice(chat["tools"]) {
+		if jsonx.String(jsonx.Map(raw)["type"]) == "vercel:parallel_search" {
+			mapped = true
+		}
+	}
+	if !mapped {
+		t.Fatalf("gateway search tool missing from the Chat tools: %#v", chat["tools"])
+	}
+}
+
+func TestToChatRefusesForcedHostedSearchWithoutMapping(t *testing.T) {
+	body := map[string]any{
+		"model":       "cline-pass/qwen3.8-max",
+		"input":       "hi",
+		"tools":       []any{map[string]any{"type": "web_search"}},
+		"tool_choice": map[string]any{"type": "web_search"},
+	}
+	if _, _, err := ToChat(body); err == nil || !strings.Contains(err.Error(), "web search") {
+		t.Fatalf("forced hosted search without a search upstream must be refused: %v", err)
+	}
+}
+
+func TestNormaliseWebSearchToolAliases(t *testing.T) {
+	cases := map[string]string{
+		"exa":                "vercel:exa_search",
+		"parallel":           "vercel:parallel_search",
+		"parallel_search":    "vercel:parallel_search",
+		"browserbase_search": "vercel:browserbase_search",
+		"browserbase_fetch":  "vercel:browserbase_fetch",
+		"vercel:custom_tool": "vercel:custom_tool",
+		"off":                "",
+	}
+	for input, want := range cases {
+		if got := normaliseWebSearchTool(input); got != want {
+			t.Fatalf("normaliseWebSearchTool(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestToChatRestoresCompactionEnvelopeAndIgnoresAdditionalTools(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/qwen3.8-max",

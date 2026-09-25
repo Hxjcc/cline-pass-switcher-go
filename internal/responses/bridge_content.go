@@ -439,6 +439,11 @@ func (context *Context) toolChoiceToChat(value any) any {
 	if choice == nil {
 		return nil
 	}
+	if isWebSearchToolType(jsonx.String(choice["type"])) {
+		// The hosted declaration is re-declared as a gateway tool, so the
+		// forced choice becomes "the model must call a tool" upstream.
+		return "required"
+	}
 	name := jsonx.String(choice["name"])
 	if name == "" {
 		return nil
