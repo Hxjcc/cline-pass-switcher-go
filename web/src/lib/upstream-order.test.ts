@@ -9,7 +9,6 @@ function model(config: Partial<ModelConfig>, meta: ModelMeta | null): Subscripti
       upstreams: [],
       exclude: [],
       pinMode: "strict",
-      sort: null,
       ...config,
     },
     meta,

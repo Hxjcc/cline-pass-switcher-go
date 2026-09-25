@@ -183,6 +183,5 @@ export function normalizeModelConfig(
     upstreams: config?.upstreams ?? [],
     exclude: config?.exclude ?? [],
     pinMode: config?.pinMode === "preferred" ? "preferred" : "strict",
-    sort: config?.sort ?? null,
   }
 }

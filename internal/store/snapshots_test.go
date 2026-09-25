@@ -9,7 +9,6 @@ import (
 )
 
 func TestRequestSnapshotsAreDetached(t *testing.T) {
-	sort := "cost"
 	original := model.ModelMeta{
 		ReasoningEfforts: []string{"high"}, InputModalities: []string{"text"}, OutputModalities: []string{"text"},
 		AvailableProviders: []string{"a"}, Upstreams: []string{"a"}, Tier0: []string{"a"},
@@ -18,7 +17,7 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 	}
 	s := &Store{meta: model.Metadata{Models: map[string]model.ModelMeta{"test": original}},
 		config: model.Config{ProxyKey: "key", UpstreamBase: "https://example.test", PerModel: map[string]model.PerModelConfig{
-			"test": {Upstreams: []string{"a"}, Exclude: []string{"b"}, Sort: &sort},
+			"test": {Upstreams: []string{"a"}, Exclude: []string{"b"}},
 		}}}
 	snapshot := s.ModelMeta("test")
 	for _, slice := range [][]string{snapshot.ReasoningEfforts, snapshot.InputModalities, snapshot.OutputModalities, snapshot.AvailableProviders, snapshot.Upstreams, snapshot.Tier0} {
@@ -30,9 +29,9 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 		t.Fatal("model snapshot aliases the store")
 	}
 	cfg := s.ModelConfig("test")
-	cfg.Upstreams[0], cfg.Exclude[0], *cfg.Sort = "x", "y", "z"
+	cfg.Upstreams[0], cfg.Exclude[0] = "x", "y"
 	stored := s.ModelConfig("test")
-	if stored.Upstreams[0] != "a" || stored.Exclude[0] != "b" || *stored.Sort != "cost" {
+	if stored.Upstreams[0] != "a" || stored.Exclude[0] != "b" {
 		t.Fatal("configuration snapshot aliases the store")
 	}
 	if !reflect.DeepEqual(s.ModelMeta("missing"), model.ModelMeta{}) || !reflect.DeepEqual(s.ModelConfig("missing"), model.PerModelConfig{}) {

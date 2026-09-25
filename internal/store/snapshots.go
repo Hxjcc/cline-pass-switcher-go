@@ -40,10 +40,6 @@ func (s *Store) ModelConfig(modelID string) model.PerModelConfig {
 	cfg := s.config.PerModel[modelID]
 	cfg.Upstreams = slices.Clone(cfg.Upstreams)
 	cfg.Exclude = slices.Clone(cfg.Exclude)
-	if cfg.Sort != nil {
-		value := *cfg.Sort
-		cfg.Sort = &value
-	}
 	return cfg
 }
 

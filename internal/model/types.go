@@ -64,7 +64,6 @@ type PerModelConfig struct {
 	Upstreams []string `json:"upstreams"`
 	Exclude   []string `json:"exclude"`
 	PinMode   string   `json:"pinMode"`
-	Sort      *string  `json:"sort"`
 }
 
 type Config struct {

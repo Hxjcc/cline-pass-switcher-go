@@ -54,14 +54,12 @@ test("normalizeModelConfig fills in the missing halves", () => {
     upstreams: [],
     exclude: [],
     pinMode: "strict",
-    sort: null,
   })
   expect(normalizeModelConfig({ upstreams: ["a"], pinMode: "preferred" })).toEqual({
     upstream: undefined,
     upstreams: ["a"],
     exclude: [],
     pinMode: "preferred",
-    sort: null,
   })
   // Anything that is not "preferred" means the channel is pinned strictly.
   expect(normalizeModelConfig({ pinMode: "other" as never }).pinMode).toBe("strict")

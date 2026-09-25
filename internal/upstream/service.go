@@ -694,11 +694,7 @@ func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Atte
 		}
 	}
 	strict := cfg.PinMode != "preferred"
-	sortMode := ""
-	if cfg.Sort != nil {
-		sortMode = *cfg.Sort
-	}
-	base := Attempt{ExcludeList: cfg.Exclude, Strict: strict, Sort: sortMode}
+	base := Attempt{ExcludeList: cfg.Exclude, Strict: strict}
 	if len(wanted) == 0 {
 		return []Attempt{base}
 	}
@@ -792,7 +788,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 	}
 	// No exclusion rules means no constraint; an empty allow list while rules
 	// exist is a conflict the attempt layer rejects before reaching here.
-	if attempt.Upstream == "" && attempt.Sort == "" && len(attempt.ExcludeList) == 0 {
+	if attempt.Upstream == "" && len(attempt.ExcludeList) == 0 {
 		return cloned
 	}
 	pipeline := modelMeta.Pipeline
@@ -819,9 +815,6 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 		} else if len(allowList) > 0 {
 			gateway["only"] = allowList
 		}
-		if attempt.Sort != "" {
-			gateway["sort"] = attempt.Sort
-		}
 		providerOptions["gateway"] = gateway
 		cloned["providerOptions"] = providerOptions
 	}
@@ -841,18 +834,6 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			}
 		} else if len(allowList) > 0 {
 			provider["only"] = allowList
-		}
-		if attempt.Sort != "" {
-			sortValue := attempt.Sort
-			switch attempt.Sort {
-			case "cost":
-				sortValue = "price"
-			case "ttft":
-				sortValue = "latency"
-			case "tps":
-				sortValue = "throughput"
-			}
-			provider["sort"] = sortValue
 		}
 		cloned["provider"] = provider
 	}

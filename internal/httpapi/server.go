@@ -568,13 +568,6 @@ func (s *Server) handleSaveConfig(writer http.ResponseWriter, request *http.Requ
 			if value.PinMode != "preferred" {
 				value.PinMode = "strict"
 			}
-			if value.Sort != nil {
-				switch *value.Sort {
-				case "cost", "ttft", "tps":
-				default:
-					value.Sort = nil
-				}
-			}
 			cfg.PerModel[modelID] = value
 		}
 	}); err != nil {

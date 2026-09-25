@@ -36,7 +36,6 @@ type Attempt struct {
 	OrderRest   []string
 	ExcludeList []string
 	Strict      bool
-	Sort        string
 }
 
 type AttemptResult struct {

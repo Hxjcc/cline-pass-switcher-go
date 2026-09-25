@@ -1,5 +1,4 @@
 export type PinMode = "strict" | "preferred"
-export type SortMode = "cost" | "ttft" | "tps"
 export type UpstreamState = "ok" | "limited" | "bad" | "auth" | "unknown"
 
 export interface Account {
@@ -17,7 +16,6 @@ export interface ModelConfig {
   upstreams: string[]
   exclude: string[]
   pinMode: PinMode
-  sort: SortMode | null
 }
 
 export interface UpstreamDetail {

@@ -13,7 +13,6 @@ const models: SubscriptionModel[] = [
       upstreams: ["fireworks"],
       exclude: [],
       pinMode: "strict",
-      sort: null,
     },
     meta: {
       pipeline: "planner",

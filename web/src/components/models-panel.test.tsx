@@ -21,7 +21,6 @@ const data: ModelsResponse = {
         upstreams: ["fireworks"],
         exclude: [],
         pinMode: "strict",
-        sort: null,
       },
       meta: {
         pipeline: "planner",

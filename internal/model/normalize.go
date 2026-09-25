@@ -225,13 +225,6 @@ func NormalizeConfig(cfg *Config) {
 		if modelConfig.PinMode != "preferred" {
 			modelConfig.PinMode = "strict"
 		}
-		if modelConfig.Sort != nil {
-			switch *modelConfig.Sort {
-			case "cost", "ttft", "tps":
-			default:
-				modelConfig.Sort = nil
-			}
-		}
 		modelConfig.Upstream = ""
 		if len(modelConfig.Upstreams) > 0 {
 			modelConfig.Upstream = modelConfig.Upstreams[0]

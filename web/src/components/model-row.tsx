@@ -99,13 +99,6 @@ const pinModeItems: Record<ModelConfig["pinMode"], string> = {
   preferred: "优先 + 回退",
 }
 
-const sortItems: Record<string, string> = {
-  auto: "网关默认",
-  cost: "最低成本",
-  ttft: "最快首字",
-  tps: "最高吞吐",
-}
-
 /**
  * One row of the subscription table plus the panel it expands into. State that
  * belongs to a single model - which action it is running, its last test result,
@@ -407,7 +400,7 @@ export function ModelRow({
                   <AlertDescription>
                     {model.meta?.pinReason === "single_provider"
                       ? "该模型仅有一个候选渠道，没有其他渠道可供钉住或校验。"
-                      : "请求仍会正常发送，但实际渠道由 Cline 网关决定；以下钉住、排除、排序与校验设置均不会生效。"}
+                      : "请求仍会正常发送，但实际渠道由 Cline 网关决定；以下钉住、排除与校验设置均不会生效。"}
                   </AlertDescription>
                 </Alert>
               )}
@@ -429,31 +422,6 @@ export function ModelRow({
                     </SelectTrigger>
                     <SelectContent>
                       {Object.entries(pinModeItems).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="排序方式" labelId={controlId("sort")}>
-                  <Select
-                    value={config.sort ?? "auto"}
-                    items={sortItems}
-                    onValueChange={(value) =>
-                      void save({ ...config, sort: value === "auto" ? null : (value as ModelConfig["sort"]) })
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="bg-background w-36"
-                      disabled={pinDisabled}
-                      aria-labelledby={controlId("sort")}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(sortItems).map(([value, label]) => (
                         <SelectItem key={value} value={value}>
                           {label}
                         </SelectItem>

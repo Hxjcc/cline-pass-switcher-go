@@ -79,13 +79,11 @@ func TestNormalizeConfigAssignsStableAccountIDs(t *testing.T) {
 	}
 }
 func TestNormalizeConfigExcludeWins(t *testing.T) {
-	sortMode := "tps"
 	config := DefaultConfig()
 	config.PerModel["model"] = PerModelConfig{
 		Upstreams: []string{"a", "b", "a"},
 		Exclude:   []string{"b"},
 		PinMode:   "unknown",
-		Sort:      &sortMode,
 	}
 	NormalizeConfig(&config)
 	value := config.PerModel["model"]
