@@ -9,6 +9,33 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 )
 
+func TestUsageFromValuePrefersBilledTotal(t *testing.T) {
+	usage := usageFromValue(map[string]any{
+		"prompt_tokens":     100.0,
+		"completion_tokens": 20.0,
+		"total_tokens":      120.0,
+		"cost":              0.0009,
+		"market_cost":       0.0149,
+		"gateway_cost":      0.0149,
+	})
+	if usage == nil || usage.Cost == nil || *usage.Cost != 0.0149 {
+		t.Fatalf("billed total must win over the model-only cost: %#v", usage)
+	}
+	fallback := usageFromValue(map[string]any{
+		"prompt_tokens":     1.0,
+		"completion_tokens": 1.0,
+		"total_tokens":      2.0,
+		"cost":              0.0002,
+	})
+	if fallback == nil || fallback.Cost == nil || *fallback.Cost != 0.0002 {
+		t.Fatalf("model-only cost fallback failed: %#v", fallback)
+	}
+	gatewayOnly := usageFromValue(map[string]any{"total_tokens": 3.0, "gateway_cost": 0.05})
+	if gatewayOnly == nil || gatewayOnly.Cost == nil || *gatewayOnly.Cost != 0.05 {
+		t.Fatalf("gateway_cost fallback failed: %#v", gatewayOnly)
+	}
+}
+
 func TestUsageFromChatAndResponsesShapes(t *testing.T) {
 	chat := usageFromValue(map[string]any{
 		"prompt_tokens":     25.0,
