@@ -391,8 +391,6 @@ func normaliseWebSearchTool(value string) string {
 		return "vercel:perplexity_search"
 	case "parallel", "parallel_search":
 		return "vercel:parallel_search"
-	case "browserbase_search":
-		return "vercel:browserbase_search"
 	case "browserbase", "browserbase_fetch", "fetch":
 		return "vercel:browserbase_fetch"
 	default:

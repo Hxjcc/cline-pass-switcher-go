@@ -319,10 +319,12 @@ func TestToChatRefusesForcedHostedSearchWithoutMapping(t *testing.T) {
 
 func TestNormaliseWebSearchToolAliases(t *testing.T) {
 	cases := map[string]string{
-		"exa":                "vercel:exa_search",
-		"parallel":           "vercel:parallel_search",
-		"parallel_search":    "vercel:parallel_search",
-		"browserbase_search": "vercel:browserbase_search",
+		"exa":             "vercel:exa_search",
+		"parallel":        "vercel:parallel_search",
+		"parallel_search": "vercel:parallel_search",
+		// Removed on purpose: the tool is expensive and not worth an alias;
+		// `vercel:browserbase_search` still works through the raw-id escape.
+		"browserbase_search": "",
 		"browserbase_fetch":  "vercel:browserbase_fetch",
 		"vercel:custom_tool": "vercel:custom_tool",
 		"off":                "",

@@ -65,7 +65,7 @@
 | 环境变量 | `config.json` 字段 | 默认值 | 说明 |
 |---|---|---|---|
 | `STRICT_TOOL_HISTORY` | `strictToolHistory` | `false` | 开启后，历史里找不到对应调用的工具结果会直接报错，而不是转成用户消息继续发送。 |
-| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | 空（Compose 中为 `exa`） | 客户端声明 `web_search` 工具时，改为声明 Cline 网关执行的搜索工具。可选 `exa`、`parallel`、`tako`、`perplexity`、`browserbase_search`，也可以直接写 `vercel:` 开头的网关工具 ID；`off`、`none`、`false`、`disabled` 或空值表示关闭。客户端用 `tool_choice` 强制选择 `web_search` 时翻译成上游的 `tool_choice:"required"`；没有配置搜索工具则返回 400。由上游按次计费。 |
+| `WEB_SEARCH_UPSTREAM` | `webSearchUpstream` | 空（Compose 中为 `exa`） | 客户端声明 `web_search` 工具时，改为声明 Cline 网关执行的搜索工具。可选 `exa`、`parallel`、`tako`、`perplexity`，也可以直接写 `vercel:` 开头的网关工具 ID（例如实测偏贵的 `vercel:browserbase_search`）；`off`、`none`、`false`、`disabled` 或空值表示关闭。客户端用 `tool_choice` 强制选择 `web_search` 时翻译成上游的 `tool_choice:"required"`；没有配置搜索工具则返回 400。由上游按次计费。 |
 | `WEB_FETCH_UPSTREAM` | `webFetchUpstream` | 空（Compose 中为 `browserbase_fetch`） | 用户消息里出现 http(s) 链接时，额外声明网关的网页抓取工具。可选 `browserbase_fetch`（`browserbase`、`fetch`、`on`、`true` 等价），也可以写 `vercel:` 开头的 ID；关闭方式同上。由上游按次计费。 |
 | `SHELL_COMPAT` | `shellCompat` | 空 | 把转发给模型的工具定义里的 `shell` 参数限定为这个值并设为必填，例如 Windows 客户端设为 `powershell`。`off` 等值或空值表示关闭。 |
 | `SHELL_COMPAT_ENFORCE` | `shellCompatEnforce` | `false` | 在 `SHELL_COMPAT` 开启时，把模型实际输出的工具调用参数里的 `shell` 也改写为该值。 |
