@@ -159,18 +159,18 @@ export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: 
     const reason = pinReasonLabel(pinReason)
     switch (pipeline) {
       case "direct":
-        return `Cline 经 OpenRouter 路由，但${reason}；钉住、排除、排序与校验不会生效。`
+        return `Cline 经 OpenRouter 路由，但${reason}；钉住、排除与校验不会生效。`
       case "planner":
-        return `Cline 经 Vercel AI Gateway 路由，但${reason}；钉住、排除、排序与校验不会生效。`
+        return `Cline 经 Vercel AI Gateway 路由，但${reason}；钉住、排除与校验不会生效。`
       default:
-        return `${reason}；无法确认钉住、排除、排序与校验是否生效。`
+        return `${reason}；无法确认钉住、排除与校验是否生效。`
     }
   }
   if (pipeline === "direct") {
-    return "Cline 网关经 OpenRouter 路由到各渠道，钉住与排序通过 provider 字段下发。"
+    return "Cline 网关经 OpenRouter 路由到各渠道，钉住通过 provider 字段下发。"
   }
   if (pipeline === "planner") {
-    return "Cline 网关经 Vercel AI Gateway 路由到各渠道，钉住与排序通过 providerOptions.gateway 字段下发。"
+    return "Cline 网关经 Vercel AI Gateway 路由到各渠道，钉住通过 providerOptions.gateway 字段下发。"
   }
   return "响应里没有可识别的路由信息，无法区分渠道，也无法钉住。"
 }

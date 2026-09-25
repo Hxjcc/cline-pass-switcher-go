@@ -153,8 +153,7 @@ func TestConfigEndpointNormalizesExclude(t *testing.T) {
 	    "cline-pass/test":{
 	      "upstreams":["a","b","a"],
 	      "exclude":["b"],
-	      "pinMode":"preferred",
-	      "sort":"cost"
+	      "pinMode":"preferred"
 	    }
 	  }
 	}`)
@@ -168,6 +167,34 @@ func TestConfigEndpointNormalizesExclude(t *testing.T) {
 	if len(config.Upstreams) != 1 || config.Upstreams[0] != "a" {
 		raw, _ := json.Marshal(config)
 		t.Fatalf("unexpected normalized config: %s", raw)
+	}
+}
+
+// Legacy config files carry a sort key the gateway never honoured; it must
+// keep loading and must not be written back.
+func TestConfigEndpointIgnoresLegacySortKey(t *testing.T) {
+	st, server := newTestServer(t)
+	body := strings.NewReader(`{
+	  "perModel":{
+	    "cline-pass/test":{
+	      "upstreams":["a"],
+	      "pinMode":"strict",
+	      "sort":"cost"
+	    }
+	  }
+	}`)
+	request := localRequest(http.MethodPost, "/api/config", body)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("legacy sort key must be accepted: %d %s", response.Code, response.Body.String())
+	}
+	raw, err := json.Marshal(st.Config().PerModel["cline-pass/test"])
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if strings.Contains(string(raw), "sort") {
+		t.Fatalf("legacy sort key must not be persisted: %s", raw)
 	}
 }
 
