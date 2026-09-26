@@ -115,9 +115,9 @@ Responses 的 `web_search` 是由服务端执行的托管工具，Chat Completio
 
 需要注意：
 
-- 这些工具由上游按次计费，只在模型实际调用时产生费用。
+- 只有模型实际调用这些工具时才产生费用。上游返回的 `gateway_cost` 包含工具的按次费用，但实测 Cline Pass 账单只按 `cost`（模型费用）扣费；搜索结果会作为输入 token 进入模型，一次搜索可能带来上万输入 token，这部分按模型价格计费。
 - 搜索在上游执行，客户端只看到最终回答，不会收到 `url_citation` 之类的结构化引用；来源会以正文中的链接给出。
-- 用 `tool_choice` 强制使用 `web_search` 仍然返回 400，因为无法强制一个由网关执行的工具。
+- 用 `tool_choice` 强制使用 `web_search` 时，网关把它翻译成上游的 `tool_choice: "required"`，让这一轮必须调用搜索；没有配置搜索工具（`WEB_SEARCH_UPSTREAM=off` 等）则返回 400。
 
 ## Windows shell 兼容
 

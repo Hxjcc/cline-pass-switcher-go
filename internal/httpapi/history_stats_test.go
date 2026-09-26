@@ -9,30 +9,23 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 )
 
-func TestUsageFromValuePrefersBilledTotal(t *testing.T) {
+// The numbers are one live web-search turn: the ledger charged exactly "cost",
+// while "gateway_cost"/"market_cost" also carried the search tool fee.
+func TestUsageFromValueCountsTheLedgerCost(t *testing.T) {
 	usage := usageFromValue(map[string]any{
-		"prompt_tokens":     100.0,
-		"completion_tokens": 20.0,
-		"total_tokens":      120.0,
-		"cost":              0.0009,
-		"market_cost":       0.0149,
-		"gateway_cost":      0.0149,
+		"prompt_tokens":     11528.0,
+		"completion_tokens": 220.0,
+		"total_tokens":      11748.0,
+		"cost":              0.001748304,
+		"gateway_cost":      0.00851504,
+		"market_cost":       0.00851504,
 	})
-	if usage == nil || usage.Cost == nil || *usage.Cost != 0.0149 {
-		t.Fatalf("billed total must win over the model-only cost: %#v", usage)
-	}
-	fallback := usageFromValue(map[string]any{
-		"prompt_tokens":     1.0,
-		"completion_tokens": 1.0,
-		"total_tokens":      2.0,
-		"cost":              0.0002,
-	})
-	if fallback == nil || fallback.Cost == nil || *fallback.Cost != 0.0002 {
-		t.Fatalf("model-only cost fallback failed: %#v", fallback)
+	if usage == nil || usage.Cost == nil || *usage.Cost != 0.001748304 {
+		t.Fatalf("spend must follow the ledger cost, not the gateway total: %#v", usage)
 	}
 	gatewayOnly := usageFromValue(map[string]any{"total_tokens": 3.0, "gateway_cost": 0.05})
-	if gatewayOnly == nil || gatewayOnly.Cost == nil || *gatewayOnly.Cost != 0.05 {
-		t.Fatalf("gateway_cost fallback failed: %#v", gatewayOnly)
+	if gatewayOnly == nil || gatewayOnly.Cost != nil {
+		t.Fatalf("a gateway total without a ledger cost must not be counted: %#v", gatewayOnly)
 	}
 }
 

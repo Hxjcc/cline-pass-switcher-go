@@ -36,7 +36,7 @@ docker compose up -d --build
 - 端口只绑定在宿主机的 `127.0.0.1:3123`，数据保存在 `./data` 目录。
 - 容器以 UID/GID `10001` 运行，启动时会自动修正 `./data` 的属主。需要其他用户时，在 `.env` 中设置 `PUID` 和 `PGID`。
 - 本地配置写在同目录的 `.env` 文件里，不要修改 `docker-compose.yml`。可用的变量见[配置参考](docs/configuration.md#docker-compose-的默认值)。
-- Compose 默认开启了联网搜索（`exa`）和网页抓取（`browserbase_fetch`），它们由上游按次计费，只在模型实际调用时产生费用。不需要时在 `.env` 中写 `WEB_SEARCH_UPSTREAM=off` 和 `WEB_FETCH_UPSTREAM=off`。
+- Compose 默认开启了联网搜索（`exa`）和网页抓取（`browserbase_fetch`）。模型调用它们时，搜索结果和网页内容会作为输入 token 计费，一次搜索可能带来上万输入 token。不需要时在 `.env` 中写 `WEB_SEARCH_UPSTREAM=off` 和 `WEB_FETCH_UPSTREAM=off`。
 
 ### 源码编译运行
 

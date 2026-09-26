@@ -303,15 +303,11 @@ func usageFromValue(value any) *model.UsageStats {
 		CachedTokens:     cached,
 		TotalTokens:      total,
 	}
-	// The gateway splits the bill: "cost" covers the model legs only, while
-	// "market_cost"/"gateway_cost" also include per-call tool fees such as web
-	// search. Prefer the billed total so history and key spend limits count the
-	// search fee too; fall back to the model-only cost when no total is given.
-	for _, key := range []string{"market_cost", "gateway_cost", "cost"} {
-		if cost, ok := floatValue(usage[key]); ok {
-			stats.Cost = &cost
-			break
-		}
+	// Only "cost" is what the Cline Pass ledger charges. "gateway_cost" and
+	// "market_cost" add gateway tool fees such as web search, which the ledger
+	// does not bill, so counting them would exhaust key spend limits early.
+	if cost, ok := floatValue(usage["cost"]); ok {
+		stats.Cost = &cost
 	}
 	if stats.PromptTokens == 0 && stats.CompletionTokens == 0 && stats.TotalTokens == 0 &&
 		stats.ReasoningTokens == 0 && stats.CachedTokens == 0 && stats.Cost == nil {
