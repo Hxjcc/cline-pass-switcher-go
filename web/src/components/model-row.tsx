@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleDot,
   FlaskConical,
+  Gauge,
   ImageIcon,
   ListPlus,
   Radar,
@@ -40,6 +41,7 @@ import { errorMessage } from "@/lib/api"
 import { chipClass, modelColumnClass } from "@/lib/console-styles"
 import {
   formatTime,
+  formatWindow,
   isPinDisabled,
   normalizeModelConfig,
   pinReasonLabel,
@@ -288,6 +290,25 @@ export function ModelRow({
                 视觉
               </Badge>
             )}
+            {model.meta?.contextWindow ? (
+              <Badge
+                variant="outline"
+                className={chipClass}
+                title={`上下文窗口 ${model.meta.contextWindow.toLocaleString("zh-CN")} tokens`}
+              >
+                <Gauge data-icon="inline-start" />
+                上下文 {formatWindow(model.meta.contextWindow)}
+              </Badge>
+            ) : null}
+            {model.meta?.outputLimit ? (
+              <Badge
+                variant="outline"
+                className={chipClass}
+                title={`单次输出上限 ${model.meta.outputLimit.toLocaleString("zh-CN")} tokens`}
+              >
+                输出 {formatWindow(model.meta.outputLimit)}
+              </Badge>
+            ) : null}
           </div>
         </TableCell>
         <TableCell className={modelColumnClass.pipeline}>

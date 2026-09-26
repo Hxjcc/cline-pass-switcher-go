@@ -39,6 +39,19 @@ export function formatTokenCount(value?: number): string {
   return value.toLocaleString("zh-CN")
 }
 
+// formatWindow renders a model's token window compactly: 1_000_000 -> "1M",
+// 384_000 -> "384k", 524288 -> "524k". formatTokenCount is for measured token
+// counts and would print a million as "1000.0k".
+export function formatWindow(value?: number): string {
+  if (!value || value <= 0) return ""
+  if (value >= 1_000_000) {
+    const millions = value / 1_000_000
+    return `${millions >= 10 ? millions.toFixed(0) : millions.toFixed(1).replace(/\.0$/, "")}M`
+  }
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`
+  return String(value)
+}
+
 export function formatCost(value?: number): string {
   if (value === undefined || value === null) return ""
   if (value >= 0.01) return `$${value.toFixed(3)}`

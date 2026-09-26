@@ -28,6 +28,8 @@ const data: ModelsResponse = {
         upstreams: ["deepseek", "fireworks"],
         lastProvider: "deepseek",
         lastMs: 120,
+        contextWindow: 1_000_000,
+        outputLimit: 384_000,
       },
     },
   ],
@@ -87,4 +89,12 @@ test("flags an unpinnable planner and disables channel validation", () => {
   expect(validate.disabled).toBe(true)
   fireEvent.click(validate)
   expect(onValidate).not.toHaveBeenCalled()
+})
+
+// models.dev publishes the window and output ceiling; the row shows them so the
+// operator does not have to open the metadata file to see a model's limits.
+test("shows the context window and output limit", () => {
+  renderPanel()
+  expect(screen.getByText("上下文 1M")).toBeTruthy()
+  expect(screen.getByText("输出 384k")).toBeTruthy()
 })

@@ -151,6 +151,14 @@ type UpstreamStatus struct {
 	MS int64 `json:"ms,omitempty"`
 }
 
+// ModelMeta carries what is known about one model. The capability fields at the
+// top mirror the models.dev row for it, so they are kept whole even when only
+// part of the row has a reader: ContextWindow caps the input tokens reported to
+// the client and ReasoningEfforts picks the upstream effort, the console renders
+// Reasoning, ReasoningEfforts, InputModalities, ContextWindow and OutputLimit,
+// and DisplayName, Description, Family, Attachment, ToolCall, StructuredOutput,
+// Temperature, OutputModalities, CapabilitiesKnown and CapabilityUpdatedAt are
+// stored for later use.
 type ModelMeta struct {
 	OK                  bool                      `json:"ok,omitempty"`
 	DisplayName         string                    `json:"displayName,omitempty"`
