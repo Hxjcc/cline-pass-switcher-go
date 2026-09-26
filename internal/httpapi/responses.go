@@ -13,11 +13,12 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
 func setResponsesHeaders(writer http.ResponseWriter, targets []string, result chainResult, effort string) {
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.FinalProvider, "unknown"))
+	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))
 	writer.Header().Set("X-Cline-Canonical-Model", result.Routing.CanonicalSlug)
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(result.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
@@ -105,7 +106,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	entry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID, Provider: result.Routing.FinalProvider,
+		TS: time.Now().UnixMilli(), Model: modelID, Provider: firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 		Stream: false, Kind: "responses",
 		Error: nil, Account: result.Account.Name, AccountID: result.Account.ID,
@@ -113,6 +114,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)
+	applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	s.record(request.Context(), entry)
 	writeJSON(writer, http.StatusOK, response)
 }
@@ -267,7 +269,7 @@ func compactionEntry(
 ) model.HistoryEntry {
 	entry := model.HistoryEntry{
 		TS: time.Now().UnixMilli(), Model: modelID,
-		Provider: result.Routing.FinalProvider, Canonical: result.Routing.CanonicalSlug,
+		Provider: firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider), Canonical: result.Routing.CanonicalSlug,
 		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
 		Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,

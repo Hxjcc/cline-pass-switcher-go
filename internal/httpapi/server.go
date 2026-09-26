@@ -497,7 +497,7 @@ func filterHistory(entries []model.HistoryEntry, term, result string) []model.Hi
 }
 
 func historyMatches(entry model.HistoryEntry, needle string) bool {
-	fields := []string{entry.Model, entry.Provider, entry.Canonical, entry.Account, entry.Kind, entry.Effort}
+	fields := []string{entry.Model, entry.Provider, entry.Resolved, entry.Canonical, entry.Account, entry.Kind, entry.Effort, entry.GenerationID}
 	if entry.Error != nil {
 		fields = append(fields, *entry.Error)
 	}
@@ -643,7 +643,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 	entry := model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     body.Model,
-		Provider:  routing.FinalProvider,
+		Provider:  firstNonEmpty(routing.ResolvedProvider, routing.FinalProvider),
 		Canonical: routing.CanonicalSlug,
 		MS:        time.Since(started).Milliseconds(),
 		Stream:    false,
@@ -655,6 +655,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 		Trace:     result.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
+	applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	s.record(request.Context(), entry)
 	modelMeta := s.store.ModelMeta(body.Model)
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -831,7 +832,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	entry := model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     modelID,
-		Provider:  result.Routing.FinalProvider,
+		Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug,
 		MS:        time.Since(result.Started).Milliseconds(),
 		Stream:    false,
@@ -845,13 +846,14 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	}
 	if result.Status == http.StatusOK {
 		applyChatStats(&entry, result.Out, entry.MS)
+		applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	}
 	s.record(request.Context(), entry)
 
 	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, body))
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.FinalProvider, "unknown"))
+	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))
 	writer.Header().Set("X-Cline-Canonical-Model", result.Routing.CanonicalSlug)
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(result.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))

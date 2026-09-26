@@ -9,6 +9,7 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
 // streamStats is fed by the goroutine pumping the upstream stream and read
@@ -19,6 +20,7 @@ type streamStats struct {
 	parser       sse.Parser
 	firstTokenAt time.Time
 	usage        *model.UsageStats
+	gateway      upstream.GatewayMeta
 	finishReason string
 	done         bool
 	streamError  string
@@ -77,6 +79,18 @@ func (stats *streamStats) Usage() *model.UsageStats {
 	stats.mu.Lock()
 	defer stats.mu.Unlock()
 	return stats.usage
+}
+
+// Gateway returns the routing metadata the upstream attached to the stream.
+// Later chunks win only when they actually carry metadata, so the single
+// metadata delta a gateway sends is enough.
+func (stats *streamStats) Gateway() upstream.GatewayMeta {
+	if stats == nil {
+		return upstream.GatewayMeta{}
+	}
+	stats.mu.Lock()
+	defer stats.mu.Unlock()
+	return stats.gateway
 }
 
 func (stats *streamStats) FinishReason() string {
@@ -142,6 +156,9 @@ func (stats *streamStats) consumeChunk(chunk map[string]any) {
 		if usage := usageFromValue(nested["usage"]); usage != nil {
 			stats.usage = usage
 		}
+	}
+	if meta := upstream.ParseMeta(chunk); !meta.Empty() {
+		stats.gateway = meta
 	}
 	if stats.firstTokenAt.IsZero() && chatChunkHasToken(chunk) {
 		stats.firstTokenAt = time.Now()

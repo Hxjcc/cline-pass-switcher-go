@@ -27,8 +27,225 @@ type Routing struct {
 	CanonicalSlug     string
 	FinalProvider     string
 	FinalProviderName string
+	ResolvedProvider  string
+	AffinityPinned    string
 	Fallbacks         []string
 	Plan              string
+}
+
+// GatewayMeta is the routing and billing metadata the Cline gateway attaches
+// to a chat response under provider_metadata.gateway. A completion carries it
+// on the message, a stream carries it in one delta, and a direct-pipeline
+// completion only names the serving provider in a top-level field; ParseMeta
+// accepts all of those shapes.
+type GatewayMeta struct {
+	// Provider is the top-level provider field of a direct-pipeline
+	// completion, used when no routing metadata is present.
+	Provider         string
+	FinalProvider    string
+	ResolvedProvider string
+	AffinityPinned   string
+	CanonicalSlug    string
+	Plan             string
+	Fallbacks        []string
+	GenerationID     string
+	Attempts         []model.GatewayAttempt
+	// InputCost / OutputCost / SurchargeCost split the model legs, MarketCost
+	// is the gateway's billed total (which also carries per-call tool fees).
+	// None of them feed spend limits; only usage.cost does.
+	InputCost       *float64
+	OutputCost      *float64
+	SurchargeCost   *float64
+	MarketCost      *float64
+	CacheHitTokens  int64
+	CacheMissTokens int64
+}
+
+// Empty reports whether nothing usable was found; callers keep the previous
+// metadata when a later chunk does not carry any.
+func (meta GatewayMeta) Empty() bool {
+	return meta.Provider == "" && meta.FinalProvider == "" && meta.ResolvedProvider == "" &&
+		meta.CanonicalSlug == "" && meta.GenerationID == "" && len(meta.Attempts) == 0 &&
+		meta.InputCost == nil && meta.OutputCost == nil && meta.SurchargeCost == nil &&
+		meta.MarketCost == nil && meta.CacheHitTokens == 0 && meta.CacheMissTokens == 0
+}
+
+// ParseMeta reads the gateway metadata out of a chat completion or chunk.
+func ParseMeta(root map[string]any) GatewayMeta {
+	if root == nil {
+		return GatewayMeta{}
+	}
+	if meta := metaFromProviderMetadata(getMap(root, "provider_metadata")); !meta.Empty() {
+		return meta
+	}
+	for _, raw := range getSlice(root, "choices") {
+		choice := jsonx.Map(raw)
+		if choice == nil {
+			continue
+		}
+		for _, holder := range []string{"delta", "message"} {
+			if meta := metaFromProviderMetadata(getMap(getMap(choice, holder), "provider_metadata")); !meta.Empty() {
+				return meta
+			}
+		}
+	}
+	if response := jsonx.Map(root["response"]); response != nil {
+		if meta := metaFromProviderMetadata(getMap(response, "provider_metadata")); !meta.Empty() {
+			return meta
+		}
+	}
+	if provider := getString(root, "provider"); provider != "" {
+		return GatewayMeta{Provider: slugify(provider), CanonicalSlug: getString(root, "model")}
+	}
+	return GatewayMeta{}
+}
+
+func metaFromProviderMetadata(metadata map[string]any) GatewayMeta {
+	gateway := getMap(metadata, "gateway")
+	if gateway == nil {
+		return GatewayMeta{}
+	}
+	routing := getMap(gateway, "routing")
+	meta := GatewayMeta{
+		FinalProvider:    getString(routing, "finalProvider"),
+		ResolvedProvider: getString(routing, "resolvedProvider"),
+		AffinityPinned:   getString(getMap(routing, "affinity"), "pinnedProvider"),
+		CanonicalSlug:    getString(routing, "canonicalSlug"),
+		Plan:             getString(routing, "planningReasoning"),
+		Fallbacks:        getStringSlice(routing, "fallbacksAvailable"),
+		GenerationID:     getString(gateway, "generationId"),
+		Attempts:         gatewayAttempts(routing),
+		InputCost:        floatField(gateway, "inputInferenceCost"),
+		OutputCost:       floatField(gateway, "outputInferenceCost"),
+		SurchargeCost:    floatField(gateway, "surchargeCost"),
+		MarketCost:       firstFloatField(gateway, "marketCost", "gatewayCost"),
+	}
+	meta.CacheHitTokens, meta.CacheMissTokens = cacheTokens(metadata, firstNonEmptyString(meta.ResolvedProvider, meta.FinalProvider))
+	return meta
+}
+
+func gatewayAttempts(routing map[string]any) []model.GatewayAttempt {
+	var attempts []model.GatewayAttempt
+	for _, rawModel := range getSlice(routing, "modelAttempts") {
+		modelAttempt := jsonx.Map(rawModel)
+		for _, rawProvider := range getSlice(modelAttempt, "providerAttempts") {
+			provider := jsonx.Map(rawProvider)
+			if provider == nil {
+				continue
+			}
+			attempt := model.GatewayAttempt{
+				Provider:   getString(provider, "provider"),
+				Status:     int(intField(provider, "statusCode")),
+				Success:    getBool(provider, "success"),
+				RequestID:  getString(provider, "providerRequestId"),
+				ResponseID: getString(provider, "providerResponseId"),
+			}
+			if start, end := intField(provider, "startTime"), intField(provider, "endTime"); end > start && start > 0 {
+				attempt.MS = end - start
+			}
+			if attempt.Provider == "" && attempt.Status == 0 {
+				continue
+			}
+			attempts = append(attempts, attempt)
+		}
+	}
+	return attempts
+}
+
+// cacheTokens reads the provider's own prompt-cache counters. The metadata
+// keys them by provider ("deepseek", "baseten", ...), so the provider that
+// actually ran wins and any other entry is only a fallback.
+func cacheTokens(metadata map[string]any, provider string) (int64, int64) {
+	want := providerKey(provider)
+	var fallbackHit, fallbackMiss int64
+	found := false
+	for key, value := range metadata {
+		if key == "gateway" {
+			continue
+		}
+		entry := jsonx.Map(value)
+		if entry == nil {
+			continue
+		}
+		_, hasHit := entry["promptCacheHitTokens"]
+		_, hasMiss := entry["promptCacheMissTokens"]
+		if !hasHit && !hasMiss {
+			continue
+		}
+		hit, miss := intField(entry, "promptCacheHitTokens"), intField(entry, "promptCacheMissTokens")
+		if want != "" && providerKey(key) == want {
+			return hit, miss
+		}
+		if !found {
+			fallbackHit, fallbackMiss, found = hit, miss, true
+		}
+	}
+	return fallbackHit, fallbackMiss
+}
+
+func numberFromAny(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return 0, false
+		}
+		parsed, err := strconv.ParseFloat(text, 64)
+		return parsed, err == nil
+	}
+	return 0, false
+}
+
+func floatField(value map[string]any, key string) *float64 {
+	if value == nil {
+		return nil
+	}
+	number, ok := numberFromAny(value[key])
+	if !ok {
+		return nil
+	}
+	return &number
+}
+
+func firstFloatField(value map[string]any, keys ...string) *float64 {
+	for _, key := range keys {
+		if number := floatField(value, key); number != nil {
+			return number
+		}
+	}
+	return nil
+}
+
+func intField(value map[string]any, key string) int64 {
+	if value == nil {
+		return 0
+	}
+	number, ok := numberFromAny(value[key])
+	if !ok {
+		return 0
+	}
+	return int64(number)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// SameProvider folds two provider slugs or display names to the same key so
+// "z.ai", "z-ai" and "Z.AI" compare equal.
+func SameProvider(first, second string) bool {
+	key := providerKey(first)
+	return key != "" && key == providerKey(second)
 }
 
 type Attempt struct {
@@ -280,6 +497,8 @@ func ParseRouting(root map[string]any) Routing {
 		CanonicalSlug:     getString(routing, "canonicalSlug"),
 		FinalProvider:     getString(routing, "finalProvider"),
 		FinalProviderName: getString(routing, "finalProvider"),
+		ResolvedProvider:  getString(routing, "resolvedProvider"),
+		AffinityPinned:    getString(getMap(routing, "affinity"), "pinnedProvider"),
 		Fallbacks:         getStringSlice(routing, "fallbacksAvailable"),
 		Plan:              getString(routing, "planningReasoning"),
 	}

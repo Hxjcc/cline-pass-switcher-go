@@ -205,6 +205,16 @@ export interface TraceAttempt {
   note?: string
 }
 
+/** One provider attempt the Cline gateway reports it made internally. */
+export interface GatewayAttempt {
+  provider?: string
+  status?: number
+  ms?: number
+  success?: boolean
+  requestId?: string
+  responseId?: string
+}
+
 export interface UsageStats {
   promptTokens?: number
   completionTokens?: number
@@ -212,6 +222,14 @@ export interface UsageStats {
   cachedTokens?: number
   totalTokens?: number
   cost?: number
+  /** Gateway cost split; display-only, spend limits use cost. */
+  inputCost?: number
+  outputCost?: number
+  surchargeCost?: number
+  gatewayCost?: number
+  /** The provider's own prompt-cache counters. */
+  cacheHitTokens?: number
+  cacheMissTokens?: number
 }
 
 export interface HistoryItem {
@@ -219,6 +237,12 @@ export interface HistoryItem {
   model: string
   provider?: string
   canonical?: string
+  /** Provider the gateway reports it actually ran. */
+  resolved?: string
+  /** The request did not land on the pinned/affinity provider. */
+  fallback?: boolean
+  gatewayAttempts?: GatewayAttempt[]
+  generationId?: string
   ms: number
   ttftMs?: number
   stream: boolean

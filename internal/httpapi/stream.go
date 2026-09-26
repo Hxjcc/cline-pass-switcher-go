@@ -137,14 +137,17 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			}
 			_ = result.Body.Close()
 
-			provider, canonical := parseStreamRouting(tap.tailText())
-			provider = s.upstream.CanonicalProvider(modelID, provider)
+			meta := stats.Gateway()
+			if meta.Empty() {
+				meta = parseStreamRoutingMeta(tap.tailText())
+			}
+			provider := s.upstream.CanonicalProvider(modelID, firstNonEmpty(meta.ResolvedProvider, meta.FinalProvider, meta.Provider))
 			errorMessage := chatStreamFailure(copyErr, stats)
 			entry := model.HistoryEntry{
 				TS:        time.Now().UnixMilli(),
 				Model:     modelID,
 				Provider:  provider,
-				Canonical: canonical,
+				Canonical: meta.CanonicalSlug,
 				MS:        time.Since(last.Started).Milliseconds(),
 				Stream:    true,
 				Kind:      "chat",
@@ -156,6 +159,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 				Trace:     last.Trace,
 			}
 			applyStreamStats(&entry, stats)
+			applyGatewayMeta(&entry, meta, modelConfig)
 			s.record(ctx, entry)
 			streamed = true
 			break
@@ -241,6 +245,7 @@ func (s *Server) writeBufferedChatStream(
 ) {
 	defer clearStreamDeadline(writer)
 	routing := s.upstream.RoutingFor(modelID, result.Out)
+	meta := upstream.ParseMeta(result.Out)
 	responsesbridge.AliasChatReasoning(result.Out)
 	raw, err := json.Marshal(responsesbridge.ChatCompletionAsChunk(result.Out))
 	if err != nil {
@@ -253,7 +258,7 @@ func (s *Server) writeBufferedChatStream(
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("Connection", "keep-alive")
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(routing.FinalProvider, "unknown"))
+	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(routing.ResolvedProvider, routing.FinalProvider, "unknown"))
 	writer.Header().Set("X-Cline-Canonical-Model", routing.CanonicalSlug)
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(last.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
@@ -268,7 +273,7 @@ func (s *Server) writeBufferedChatStream(
 	entry := model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     modelID,
-		Provider:  routing.FinalProvider,
+		Provider:  firstNonEmpty(routing.ResolvedProvider, routing.FinalProvider),
 		Canonical: routing.CanonicalSlug,
 		MS:        time.Since(last.Started).Milliseconds(),
 		Stream:    true,
@@ -281,6 +286,7 @@ func (s *Server) writeBufferedChatStream(
 		Trace:     last.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
+	s.applyGatewayMetaForModel(&entry, meta, modelID)
 	s.record(ctx, entry)
 }
 
@@ -302,31 +308,35 @@ func (writer *streamTapWriter) tailText() string {
 	return string(writer.tail)
 }
 
-func parseStreamRouting(text string) (string, string) {
+// parseStreamRoutingMeta reads the gateway routing metadata out of the tail of
+// an upstream stream. The gateway attaches it to a single delta near the end,
+// so scanning the last few events is enough; the plain-field regexes stay as a
+// fallback for upstreams that only name the provider and model.
+func parseStreamRoutingMeta(text string) upstream.GatewayMeta {
 	lines := strings.Split(text, "\n")
-	for index := len(lines) - 1; index >= 0 && index >= len(lines)-20; index-- {
+	seen := 0
+	for index := len(lines) - 1; index >= 0 && seen < 40; index-- {
 		line := strings.TrimSpace(lines[index])
 		if !strings.HasPrefix(line, "data:") || strings.Contains(line, "[DONE]") {
 			continue
 		}
+		seen++
 		var chunk map[string]any
 		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &chunk); err != nil {
 			continue
 		}
-		if provider, ok := chunk["provider"].(string); ok && provider != "" {
-			canonical, _ := chunk["model"].(string)
-			return strings.ToLower(strings.ReplaceAll(provider, " ", "-")), canonical
+		if meta := upstream.ParseMeta(chunk); !meta.Empty() {
+			return meta
 		}
 	}
-	provider := ""
-	canonical := ""
+	meta := upstream.GatewayMeta{}
 	if match := streamProviderRE.FindStringSubmatch(text); len(match) > 1 {
-		provider = match[1]
+		meta.FinalProvider = match[1]
 	}
 	if match := streamCanonicalRE.FindStringSubmatch(text); len(match) > 1 {
-		canonical = match[1]
+		meta.CanonicalSlug = match[1]
 	}
-	return provider, canonical
+	return meta
 }
 
 type sseJSONRewriter struct {

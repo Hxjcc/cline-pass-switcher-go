@@ -191,6 +191,19 @@ type Trace struct {
 	Note     string `json:"note,omitempty"`
 }
 
+// GatewayAttempt is one provider attempt the Cline gateway reports it made,
+// read from provider_metadata.gateway.routing.modelAttempts. The proxy's own
+// Trace covers the attempts it drove; this one covers what happened inside
+// the gateway after the request was accepted.
+type GatewayAttempt struct {
+	Provider   string `json:"provider,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	MS         int64  `json:"ms,omitempty"`
+	Success    bool   `json:"success,omitempty"`
+	RequestID  string `json:"requestId,omitempty"`
+	ResponseID string `json:"responseId,omitempty"`
+}
+
 type UsageStats struct {
 	PromptTokens     int64    `json:"promptTokens,omitempty"`
 	CompletionTokens int64    `json:"completionTokens,omitempty"`
@@ -198,13 +211,31 @@ type UsageStats struct {
 	CachedTokens     int64    `json:"cachedTokens,omitempty"`
 	TotalTokens      int64    `json:"totalTokens,omitempty"`
 	Cost             *float64 `json:"cost,omitempty"`
+	// The gateway splits its own bill per model leg; Cost above stays the
+	// ledger number (the only one spend limits use), while these describe
+	// where that number and any tool fees came from. CacheHitTokens and
+	// CacheMissTokens are the provider's own prompt-cache counters, which are
+	// more precise than the cached_tokens detail on CachedTokens.
+	InputCost       *float64 `json:"inputCost,omitempty"`
+	OutputCost      *float64 `json:"outputCost,omitempty"`
+	SurchargeCost   *float64 `json:"surchargeCost,omitempty"`
+	GatewayCost     *float64 `json:"gatewayCost,omitempty"`
+	CacheHitTokens  int64    `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens int64    `json:"cacheMissTokens,omitempty"`
 }
 
 type HistoryEntry struct {
-	TS              int64       `json:"ts"`
-	Model           string      `json:"model"`
-	Provider        string      `json:"provider,omitempty"`
-	Canonical       string      `json:"canonical,omitempty"`
+	TS        int64  `json:"ts"`
+	Model     string `json:"model"`
+	Provider  string `json:"provider,omitempty"`
+	Canonical string `json:"canonical,omitempty"`
+	// Resolved is the provider the Cline gateway reports it actually ran
+	// (routing.resolvedProvider). It matches Provider except when the gateway
+	// quietly rerouted a request away from the requested channel.
+	Resolved string `json:"resolved,omitempty"`
+	// Fallback marks a request that did not land on the channel the session
+	// affinity or the model's pin asked for.
+	Fallback        bool        `json:"fallback,omitempty"`
 	MS              int64       `json:"ms"`
 	TTFTMs          int64       `json:"ttftMs,omitempty"`
 	Stream          bool        `json:"stream"`
@@ -225,6 +256,10 @@ type HistoryEntry struct {
 	KeyName  string   `json:"keyName,omitempty"`
 	Attempts []string `json:"attempts,omitempty"`
 	Trace    []Trace  `json:"trace,omitempty"`
+	// GatewayAttempts and GenerationID come from the gateway's routing
+	// metadata and describe the work done inside the gateway for this request.
+	GatewayAttempts []GatewayAttempt `json:"gatewayAttempts,omitempty"`
+	GenerationID    string           `json:"generationId,omitempty"`
 	// MissingSummarySections names the anchored summary sections a completed
 	// compaction left out. The compaction still succeeded, so this is an
 	// advisory note for the console rather than an error.

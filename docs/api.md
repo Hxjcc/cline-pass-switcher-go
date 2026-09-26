@@ -140,6 +140,14 @@
 
 记录按时间从新到旧排列，最多保留 500 条。每条记录包含时间、模型、实际渠道、耗时、首字延迟、token 用量与费用、错误信息、账号、使用的代理密钥，以及每次上游尝试的渠道、状态码和耗时。`kind` 字段表示请求类型：`chat`、`responses`、`compact`（上下文压缩）或 `test`（控制台测试）。客户端中途断开的请求，错误信息记为「客户端取消」。
 
+上游网关会在响应里报告它是如何完成这次请求的，这些字段也会存进历史：
+
+- `resolved`：网关实际运行的渠道（`routing.resolvedProvider`），与 `provider` 一致，除非网关悄悄改道；`fallback: true` 表示实际渠道既不是会话亲和指定的渠道，也不是为该模型钉选的渠道。
+- `gatewayAttempts`：网关内部每次渠道尝试的 `provider`、`status`、`ms`、`success`、`requestId`、`responseId`。
+- `generationId`：网关给这次生成的编号，用于和账单对账。
+- `usage.gatewayCost` / `inputCost` / `outputCost` / `surchargeCost`：网关口径的费用拆分，仅供展示；计入密钥限额的始终是 `usage.cost`（账本费用）。
+- `usage.cacheHitTokens` / `cacheMissTokens`：上游自己报告的缓存命中与未命中 token 数，控制台用它们显示缓存命中率。
+
 ## 其他
 
 | 方法 | 路径 | 说明 |

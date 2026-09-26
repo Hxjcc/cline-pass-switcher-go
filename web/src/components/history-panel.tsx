@@ -29,7 +29,7 @@ import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCost, formatTime, formatTokenCount, shortDuration } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { HistoryItem, UsageStats } from "@/types"
+import type { GatewayAttempt, HistoryItem, UsageStats } from "@/types"
 
 const AUTO_REFRESH_STORAGE = "cline-pass-switcher-history-auto-refresh"
 const AUTO_REFRESH_MS = 5000
@@ -80,6 +80,12 @@ function hasFailover(item: HistoryItem) {
   return (item.attempts?.length ?? 0) > 1
 }
 
+// actualProvider prefers the provider the gateway reports it really ran; that
+// is the one that generated (and billed) the response.
+function actualProvider(item: HistoryItem) {
+  return item.resolved || item.provider
+}
+
 function usageTitle(usage?: UsageStats, finishReason?: string) {
   if (!usage && !finishReason) return undefined
   const parts: string[] = []
@@ -87,10 +93,24 @@ function usageTitle(usage?: UsageStats, finishReason?: string) {
   if (usage?.completionTokens) parts.push(`输出 ${formatTokenCount(usage.completionTokens)}`)
   if (usage?.reasoningTokens) parts.push(`思考 ${formatTokenCount(usage.reasoningTokens)}`)
   if (usage?.cachedTokens) parts.push(`缓存 ${formatTokenCount(usage.cachedTokens)}`)
+  if (usage?.cacheHitTokens !== undefined || usage?.cacheMissTokens !== undefined) {
+    parts.push(`命中 ${formatTokenCount(usage.cacheHitTokens ?? 0)} / 未命中 ${formatTokenCount(usage.cacheMissTokens ?? 0)}`)
+  }
   if (usage?.totalTokens) parts.push(`合计 ${formatTokenCount(usage.totalTokens)}`)
   if (usage?.cost !== undefined) parts.push(`费用 ${formatCost(usage.cost)}`)
   if (finishReason) parts.push(finishLabel(finishReason))
   return parts.join(" · ")
+}
+
+// cacheRate renders the provider's own hit/miss counters as a percentage.
+function cacheRate(usage?: UsageStats) {
+  if (!usage) return ""
+  const hit = usage.cacheHitTokens ?? 0
+  const miss = usage.cacheMissTokens ?? 0
+  if (hit === 0 && miss === 0) return ""
+  const total = hit + miss
+  if (total === 0) return ""
+  return `缓存 ${((hit / total) * 100).toFixed(hit === total ? 0 : 1)}%`
 }
 
 function UsageCell({ item }: { item: HistoryItem }) {
@@ -100,7 +120,7 @@ function UsageCell({ item }: { item: HistoryItem }) {
   }
   const extras = [
     usage.reasoningTokens ? `思考 ${formatTokenCount(usage.reasoningTokens)}` : "",
-    usage.cachedTokens ? `缓存 ${formatTokenCount(usage.cachedTokens)}` : "",
+    cacheRate(usage) || (usage.cachedTokens ? `缓存 ${formatTokenCount(usage.cachedTokens)}` : ""),
   ].filter(Boolean)
 
   // Two short lines keep the column narrow enough for the table to fit at
@@ -117,11 +137,61 @@ function UsageCell({ item }: { item: HistoryItem }) {
   )
 }
 
+// costTitle spells out where a request's money went. The ledger number is the
+// only one spend limits use; the gateway total additionally carries per-call
+// tool fees such as web search.
+function costTitle(usage: UsageStats) {
+  const parts = [`账本 ${formatCost(usage.cost)}（计入密钥限额）`]
+  if (usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - (usage.cost ?? 0)) > 1e-9) {
+    const fees = Math.max(usage.gatewayCost - (usage.cost ?? 0), 0)
+    parts.push(`网关 ${formatCost(usage.gatewayCost)}（含工具费 ${formatCost(fees)}）`)
+  }
+  const split = [
+    usage.inputCost !== undefined ? `输入 ${formatCost(usage.inputCost)}` : "",
+    usage.outputCost !== undefined ? `输出 ${formatCost(usage.outputCost)}` : "",
+    usage.surchargeCost ? `附加 ${formatCost(usage.surchargeCost)}` : "",
+  ].filter(Boolean)
+  if (split.length > 0) parts.push(split.join(" · "))
+  return parts.join("\n")
+}
+
 function CostCell({ usage }: { usage?: UsageStats }) {
   if (usage?.cost === undefined) {
     return <Dash />
   }
-  return <span className="font-mono text-xs tabular-nums">{formatCost(usage.cost)}</span>
+  const gatewayDiffers = usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - usage.cost) > 1e-9
+  return (
+    <div className="font-mono text-xs tabular-nums" title={costTitle(usage)}>
+      <div>{formatCost(usage.cost)}</div>
+      {gatewayDiffers && (
+        <div className="text-muted-foreground text-2xs">↳ 网关 {formatCost(usage.gatewayCost)}</div>
+      )}
+    </div>
+  )
+}
+
+// gatewayAttemptsBadge surfaces the retries that happened inside the gateway,
+// which the proxy's own trace cannot see.
+function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
+  if (!attempts || attempts.length === 0) return null
+  const failed = attempts.filter((attempt) => attempt.success === false || (attempt.status ?? 0) >= 400)
+  if (attempts.length === 1 && failed.length === 0) return null
+  const title = attempts
+    .map((attempt) => {
+      const status = attempt.success === false || (attempt.status ?? 0) >= 400 ? "失败" : "成功"
+      const ms = attempt.ms ? ` ${shortDuration(attempt.ms)}` : ""
+      return `${attempt.provider ?? "未知渠道"} ${status}${ms}`
+    })
+    .join(" → ")
+  return (
+    <Badge
+      variant="outline"
+      className={cn(chipClass, failed.length > 0 && warningChipClass)}
+      title={`网关内部尝试：${title}`}
+    >
+      网关 {attempts.length} 次
+    </Badge>
+  )
 }
 
 // Cells mix text-sm, text-xs and badges with different line heights; only
@@ -334,15 +404,27 @@ export function HistoryPanel({
                     </TableCell>
                     <TableCell className={cell}>{item.account || <Dash />}</TableCell>
                     <TableCell className={cn(cell, "whitespace-normal")}>
-                      {item.provider && (
-                        <Badge variant="outline" className={chipClass}>
-                          <ProviderName slug={item.provider} />
-                        </Badge>
+                      {actualProvider(item) && (
+                        <span className="inline-flex flex-wrap items-center gap-1">
+                          <Badge variant="outline" className={chipClass}>
+                            <ProviderName slug={actualProvider(item)} />
+                          </Badge>
+                          {item.fallback && (
+                            <Badge
+                              variant="outline"
+                              className={cn(chipClass, warningChipClass)}
+                              title="实际渠道与网关会话亲和或首选渠道不一致（网关自动降级）"
+                            >
+                              降级
+                            </Badge>
+                          )}
+                          <GatewayAttemptsBadge attempts={item.gatewayAttempts} />
+                        </span>
                       )}
                       {/* A failed request has no winning provider; the attempt
                           badges already say which upstream was tried. */}
                       {hasFailover(item) ? (
-                        <div className={item.provider ? "mt-1.5" : undefined}>
+                        <div className={actualProvider(item) ? "mt-1.5" : undefined}>
                           {item.trace?.length ? (
                             <TraceList trace={item.trace} compact />
                           ) : (
@@ -352,7 +434,7 @@ export function HistoryPanel({
                           )}
                         </div>
                       ) : (
-                        !item.provider && <Dash />
+                        !actualProvider(item) && <Dash />
                       )}
                     </TableCell>
                     <TableCell className={cn(cell, "text-muted-foreground font-mono text-xs")}>

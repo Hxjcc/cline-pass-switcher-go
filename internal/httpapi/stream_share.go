@@ -348,6 +348,7 @@ func (s *Server) recordSharedRun(
 	modelID string,
 	chatBody map[string]any,
 	bridgeContext *responsesbridge.Context,
+	modelConfig model.PerModelConfig,
 ) {
 	errorMessage := (*string)(nil)
 	switch {
@@ -383,6 +384,7 @@ func (s *Server) recordSharedRun(
 	if job.okSSE {
 		applyStreamStats(&entry, job.stats)
 	}
+	applyGatewayMeta(&entry, job.stats.Gateway(), modelConfig)
 	s.record(job.ctx, entry)
 }
 
@@ -405,7 +407,7 @@ func (s *Server) runSharedResponses(
 	record := func() {
 		if !recorded {
 			recorded = true
-			s.recordSharedRun(job, modelID, chatBody, bridgeContext)
+			s.recordSharedRun(job, modelID, chatBody, bridgeContext, modelConfig)
 		}
 	}
 	defer record()
@@ -494,8 +496,12 @@ func (s *Server) runSharedResponses(
 				// delimiter when cancellation arrived. Finish can still validate it.
 				job.aborted = false
 			}
-			job.provider, job.canonical = parseStreamRouting(string(rawTail))
-			job.provider = s.upstream.CanonicalProvider(modelID, job.provider)
+			meta := job.stats.Gateway()
+			if meta.Empty() {
+				meta = parseStreamRoutingMeta(string(rawTail))
+			}
+			job.provider = s.upstream.CanonicalProvider(modelID, firstNonEmpty(meta.ResolvedProvider, meta.FinalProvider, meta.Provider))
+			job.canonical = meta.CanonicalSlug
 			if readErr != nil && ctx.Err() == nil {
 				job.readError = readErr.Error()
 			}
@@ -544,7 +550,8 @@ func (s *Server) publishBufferedResponses(
 	job.last.NetErr = ""
 	job.last.Out = result.Out
 	job.last.Routing = s.upstream.RoutingFor(modelID, result.Out)
-	job.provider, job.canonical = job.last.Routing.FinalProvider, job.last.Routing.CanonicalSlug
+	job.provider = s.upstream.CanonicalProvider(modelID, firstNonEmpty(job.last.Routing.ResolvedProvider, job.last.Routing.FinalProvider))
+	job.canonical = job.last.Routing.CanonicalSlug
 	job.okSSE = true
 	job.stats = newStreamStats(started)
 	if raw, err := json.Marshal(result.Out); err == nil {

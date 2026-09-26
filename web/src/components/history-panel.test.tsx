@@ -62,3 +62,54 @@ test("does not fetch anything on render", () => {
   expect(fetchSpy).not.toHaveBeenCalled()
   fetchSpy.mockRestore()
 })
+
+// One turn the gateway rerouted to baseten after deepseek answered 429. The
+// numbers are from a live search turn: the ledger charged cost while the
+// gateway total also carried the tool fee.
+const reroutedEntry: HistoryItem = {
+  ts: 1_700_000_000_000,
+  model: "cline-pass/deepseek-v4.1-flash",
+  provider: "baseten",
+  resolved: "baseten",
+  fallback: true,
+  ms: 18_200,
+  ttftMs: 4_200,
+  stream: true,
+  kind: "chat",
+  account: "main",
+  error: null,
+  usage: {
+    promptTokens: 186_300,
+    completionTokens: 3_128,
+    reasoningTokens: 2_979,
+    totalTokens: 189_428,
+    cost: 0.0017,
+    gatewayCost: 0.0085,
+    inputCost: 0.0006,
+    outputCost: 0.0011,
+    surchargeCost: 0.0068,
+    cacheHitTokens: 186_100,
+    cacheMissTokens: 200,
+  },
+  gatewayAttempts: [
+    { provider: "deepseek", status: 429, success: false, ms: 500 },
+    { provider: "baseten", status: 200, success: true, ms: 1_000 },
+  ],
+}
+
+test("flags a request the gateway rerouted", () => {
+  renderPanel([reroutedEntry])
+  expect(screen.getByText("降级")).toBeTruthy()
+  expect(screen.getByText("网关 2 次")).toBeTruthy()
+})
+
+test("shows the gateway total next to the ledger cost", () => {
+  renderPanel([reroutedEntry])
+  expect(screen.getByText("$0.0017")).toBeTruthy()
+  expect(screen.getByText(/网关 \$0\.0085/)).toBeTruthy()
+})
+
+test("shows the cache hit rate when the provider reports hit and miss", () => {
+  renderPanel([reroutedEntry])
+  expect(screen.getByText(/缓存 99\.9%/)).toBeTruthy()
+})
