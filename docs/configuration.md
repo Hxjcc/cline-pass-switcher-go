@@ -92,7 +92,7 @@
 | `accounts` | `[]` | 账号池 | 账号列表，每项包含 `id`、`name`、`key`、`enabled`。`enabled` 缺省为 `true`；缺少 `id` 时自动生成。 |
 | `accountMode` | `single` | 账号池 | `single`（单账号）或 `roundrobin`（账号池轮询），其他值按 `single` 处理。 |
 | `activeAccount` | `0` | 账号池 | 单账号模式下「当前账号」在列表中的下标，超出范围时自动收回到有效范围。 |
-| `knownModels` | 内置的 15 个模型 | 模型与上游 | 订阅模型列表，也就是 `/v1/models` 返回的内容。 |
+| `knownModels` | 空 | 模型与上游 | 订阅模型列表，也就是 `/v1/models` 返回的内容。新装实例先为空：控制台的「拉取模型目录」从 models.dev 填充，客户端成功调用过的模型也会自动加入。 |
 | `removedModels` | `[]` | 模型与上游 | 手动移除过的模型。「拉取官方模型」不会把它们加回来。 |
 | `perModel` | `{}` | 模型与上游（展开模型行） | 每个模型的渠道偏好，见下文。 |
 | `proxyKeys` | `[]` | 代理密钥 | 签发的客户端密钥，见下文。 |

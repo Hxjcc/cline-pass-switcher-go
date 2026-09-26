@@ -157,23 +157,14 @@ func TestTestAccountCanAddressStoredKeyByIdentity(t *testing.T) {
 func TestFetchOfficialModelsAlwaysReturnsAddedArray(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/cline":
-			_, _ = io.WriteString(writer, `{"clinePass":[{"id":"cline-pass/known"},{"id":"cline-pass/also-known"}]}`)
-		case "/models-dev":
-			_, _ = io.WriteString(writer, `{"providers":{"cline-pass":{"models":{}}}}`)
-		default:
-			_, _ = io.WriteString(writer, "no models here")
-		}
+		_, _ = io.WriteString(writer, `{"providers":{"cline-pass":{"models":{"cline-pass/known":{},"cline-pass/also-known":{}}}}}`)
 	}))
 	defer upstreamServer.Close()
 
-	previous := []string{officialClineModelsURL, officialModelsDevURL, officialDocsURL}
-	officialClineModelsURL = upstreamServer.URL + "/cline"
+	previous := officialModelsDevURL
 	officialModelsDevURL = upstreamServer.URL + "/models-dev"
-	officialDocsURL = upstreamServer.URL + "/docs"
 	t.Cleanup(func() {
-		officialClineModelsURL, officialModelsDevURL, officialDocsURL = previous[0], previous[1], previous[2]
+		officialModelsDevURL = previous
 	})
 
 	st, err := store.Open(t.TempDir())
@@ -203,5 +194,30 @@ func TestFetchOfficialModelsAlwaysReturnsAddedArray(t *testing.T) {
 	}
 	if string(raw) != "[]" {
 		t.Fatalf("added should marshal as [], got %s", raw)
+	}
+}
+
+// models.dev is the only directory source now, so a failed fetch must surface
+// as an error: silently reporting "nothing new" would hide an outage.
+func TestFetchOfficialModelsReportsAFailedDirectory(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "upstream down", http.StatusBadGateway)
+	}))
+	defer upstreamServer.Close()
+
+	previous := officialModelsDevURL
+	officialModelsDevURL = upstreamServer.URL + "/models-dev"
+	t.Cleanup(func() {
+		officialModelsDevURL = previous
+	})
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if _, err := New(st).FetchOfficialModels(t.Context()); err == nil {
+		t.Fatal("a failed directory fetch must be reported, not treated as an empty result")
 	}
 }

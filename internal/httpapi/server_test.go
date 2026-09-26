@@ -281,7 +281,10 @@ func TestClearHistoryKeepsAccountStats(t *testing.T) {
 	}
 }
 
-func TestModelsEndpointDoesNotLimitSubscriptionModels(t *testing.T) {
+// A fresh install has no subscription yet: the console's pull button (or the
+// first successful request) fills it. The endpoint must still answer with the
+// Codex-compatible shape instead of erroring on an empty list.
+func TestModelsEndpointStartsWithAnEmptySubscription(t *testing.T) {
 	_, server := newTestServer(t)
 	request := localRequest(http.MethodGet, "/v1/models", nil)
 	response := httptest.NewRecorder()
@@ -296,8 +299,8 @@ func TestModelsEndpointDoesNotLimitSubscriptionModels(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Data) != len(model.DefaultKnownModels) {
-		t.Fatalf("expected %d default models, got %d", len(model.DefaultKnownModels), len(payload.Data))
+	if len(payload.Data) != 0 {
+		t.Fatalf("a fresh install should advertise no models, got %d", len(payload.Data))
 	}
 	if payload.Models == nil {
 		t.Fatal("expected Codex-compatible models field")
@@ -828,7 +831,12 @@ func TestShippedConsolePolicyAllowsItsBootScripts(t *testing.T) {
 // A model with no saved routing preferences used to serialize upstreams and
 // exclude as null, which forced every consumer to handle two shapes.
 func TestModelsEndpointReportsEmptyListsInsteadOfNull(t *testing.T) {
-	_, server := newTestServer(t)
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.KnownModels = []string{"cline-pass/unpinned"}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, localRequest(http.MethodGet, "/api/models", nil))
 	if response.Code != http.StatusOK {
@@ -847,7 +855,7 @@ func TestModelsEndpointReportsEmptyListsInsteadOfNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(payload.Subscription) == 0 {
-		t.Fatal("expected the default subscription list")
+		t.Fatal("expected the subscription list")
 	}
 	for _, entry := range payload.Subscription {
 		if entry.Config.Upstreams == nil || entry.Config.Exclude == nil {

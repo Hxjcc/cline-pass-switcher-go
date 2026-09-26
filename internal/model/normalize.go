@@ -179,9 +179,6 @@ func NormalizeConfig(cfg *Config) {
 		}
 		seenIDs[account.ID] = struct{}{}
 	}
-	if cfg.KnownModels == nil {
-		cfg.KnownModels = append([]string(nil), DefaultKnownModels...)
-	}
 	cfg.KnownModels = strx.UniqueTrimmed(cfg.KnownModels)
 	// A model that is subscribed again (live request, explicit re-add) wins
 	// over an earlier removal.

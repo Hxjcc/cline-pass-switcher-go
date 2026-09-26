@@ -761,29 +761,6 @@ func (s *Service) fetchJSON(ctx context.Context, method, endpoint string, header
 	return response.StatusCode, decoded, nil
 }
 
-func (s *Service) fetchText(ctx context.Context, endpoint string, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("User-Agent", "cline-pass-switcher-go/1.0")
-	response, err := s.client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("unexpected status %d", response.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func formatInt(value any) int {
 	switch typed := value.(type) {
 	case float64:

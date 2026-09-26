@@ -11,24 +11,6 @@ const DefaultUpstreamBase = "https://api.cline.bot/api/v1"
 // pages through them; the oldest entry beyond this is dropped on write.
 const HistoryLimit = 500
 
-var DefaultKnownModels = []string{
-	"cline-pass/glm-5.3-flash",
-	"cline-pass/kimi-k3",
-	"cline-pass/deepseek-v4-flash",
-	"cline-pass/deepseek-v4.1-flash",
-	"cline-pass/qwen3.8-max",
-	"cline-pass/minimax-m3",
-	"cline-pass/glm-5.3",
-	"cline-pass/glm-5.2",
-	"cline-pass/deepseek-v4-pro",
-	"cline-pass/mimo-v2.5-pro",
-	"cline-pass/mimo-v2.5",
-	"cline-pass/kimi-k2.6",
-	"cline-pass/qwen3.7-plus",
-	"cline-pass/kimi-k2.7-code",
-	"cline-pass/qwen3.7-max",
-}
-
 type Account struct {
 	// ID identifies one account across renames and reordering. It is assigned
 	// on load for configurations written before the field existed.
@@ -337,8 +319,11 @@ func DefaultConfig() Config {
 		Accounts:                  []Account{},
 		AccountMode:               "single",
 		ActiveAccount:             0,
-		KnownModels:               append([]string(nil), DefaultKnownModels...),
-		PerModel:                  map[string]PerModelConfig{},
+		// A fresh install starts with an empty subscription; the console's
+		// 拉取 button fills it from models.dev, and any model a client actually
+		// uses is appended by the store once the request succeeds.
+		KnownModels: []string{},
+		PerModel:    map[string]PerModelConfig{},
 	}
 }
 

@@ -114,7 +114,7 @@
 | `GET` | `/api/meta` | **无需认证。** 返回 `authRequired`（是否设置了管理密钥）和 `configured`（是否有可用账号）；认证通过时还返回 `proxyBase`。 |
 | `GET` | `/api/models` | 订阅模型及其渠道设置、探测信息。 |
 | `POST` | `/api/models/remove` | 移除订阅模型。请求体 `{"model": "..."}`。 |
-| `POST` | `/api/fetch-official-models` | 从公开来源拉取 Cline Pass 模型列表，把新模型加入订阅。 |
+| `POST` | `/api/fetch-official-models` | 从 models.dev 拉取 Cline Pass 模型列表，把新模型加入订阅。拉取失败返回 500，不会伪装成「没有新模型」。 |
 | `POST` | `/api/probe` | 探测模型的渠道与路由方式。请求体 `{"model": "..."}`。**产生费用。** |
 | `POST` | `/api/validate-upstreams` | 逐个校验模型的候选渠道。请求体 `{"model": "..."}`。**产生费用。** |
 | `POST` | `/api/test` | 发送一次测试请求。请求体 `{"model": "...", "upstreams": [...], "exclude": [...]}`，后两项可省略，省略时使用已保存的设置。**产生费用。** |

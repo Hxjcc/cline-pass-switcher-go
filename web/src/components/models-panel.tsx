@@ -148,7 +148,7 @@ export function ModelsPanel({
           )}
           <Button size="sm" onClick={fetchOfficial} disabled={fetchingOfficial}>
             <Download className={fetchingOfficial ? "animate-pulse" : ""} data-icon="inline-start" />
-            拉取官方模型
+            拉取模型目录
           </Button>
         </CardAction>
       </CardHeader>
@@ -173,7 +173,7 @@ export function ModelsPanel({
             </span>
             {official && (
               <span title={official.sources.length ? `来源：${official.sources.join("、")}` : undefined}>
-                官方清单 <span className="text-foreground font-medium tabular-nums">{official.found}</span> 个
+                目录清单 <span className="text-foreground font-medium tabular-nums">{official.found}</span> 个
                 {official.ts ? ` · 同步于 ${formatCompactTime(official.ts)}` : ""}
               </span>
             )}
@@ -184,7 +184,7 @@ export function ModelsPanel({
           <EmptyState
             icon={Boxes}
             title="尚未订阅模型"
-            description="点击「拉取官方模型」同步 Cline Pass 当前提供的模型。"
+            description="点击「拉取模型目录」从 models.dev 同步 Cline Pass 当前提供的模型；客户端用过的模型也会自动加入。"
           />
         ) : (
           <div className="@container/models overflow-hidden rounded-lg ring-1 ring-foreground/10">

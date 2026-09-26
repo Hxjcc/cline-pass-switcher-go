@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,10 +23,8 @@ import (
 // External catalog sources. Variables so tests (and a future self-hosted
 // mirror) can point them at a local server.
 var (
-	openRouterAPI          = "https://openrouter.ai/api/v1"
-	officialClineModelsURL = "https://api.cline.bot/api/v1/ai/cline/recommended-models"
-	officialModelsDevURL   = "https://models.dev/api.json"
-	officialDocsURL        = "https://docs.cline.bot/getting-started/clinepass"
+	openRouterAPI        = "https://openrouter.ai/api/v1"
+	officialModelsDevURL = "https://models.dev/api.json"
 )
 
 type Service struct {
@@ -462,6 +459,11 @@ func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (Valida
 	return ValidationResult{Supported: true, Summary: summary, Results: results}, nil
 }
 
+// FetchOfficialModels adds every cline-pass model models.dev publishes to the
+// subscription. The directory is the only source: it already carries the Cline
+// API's recommended list and the documented models as subsets, plus the
+// capability row (name, context window, reasoning tiers) the console shows.
+// A failed fetch is reported instead of looking like "nothing new".
 func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, error) {
 	found := map[string]struct{}{}
 	capabilities := map[string]model.ModelMeta{}
@@ -479,63 +481,29 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 		return value
 	}
 
-	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, officialClineModelsURL, nil, nil, 30*time.Second); err == nil {
-		root := jsonx.Map(raw)
-		list := getSlice(root, "clinePass")
-		if len(list) == 0 {
-			list = getSlice(getMap(root, "data"), "clinePass")
-		}
-		if len(list) > 0 {
-			for _, item := range list {
-				if id, ok := item.(string); ok {
-					add(id)
-				} else {
-					entry := jsonx.Map(item)
-					id := add(getString(entry, "id"))
-					if id != "" {
-						capability := capabilities[id]
-						if name := getString(entry, "name"); name != "" {
-							capability.DisplayName = name
-						}
-						if description := getString(entry, "description"); description != "" {
-							capability.Description = description
-						}
-						capabilities[id] = capability
-					}
-				}
-			}
-			sources = append(sources, "cline.api")
-		}
+	status, raw, err := s.fetchJSON(ctx, http.MethodGet, officialModelsDevURL, nil, nil, 30*time.Second)
+	if err != nil {
+		return OfficialResult{}, fmt.Errorf("models.dev: %w", err)
 	}
-
-	if _, raw, err := s.fetchJSON(ctx, http.MethodGet, officialModelsDevURL, nil, nil, 30*time.Second); err == nil {
-		root := jsonx.Map(raw)
-		clinePass := getMap(getMap(root, "providers"), "cline-pass")
-		if clinePass == nil {
-			clinePass = getMap(root, "cline-pass")
-		}
-		models := getMap(clinePass, "models")
-		if len(models) > 0 {
-			for rawID, rawModel := range models {
-				id := add(rawID)
-				if id == "" {
-					continue
-				}
-				capability := normalizeModelCapability(id, parseModelCapability(jsonx.Map(rawModel), updatedAt))
-				capabilities[id] = mergeModelCapability(capabilities[id], capability)
-			}
-			sources = append(sources, "models.dev")
-		}
+	if status < 200 || status >= 300 {
+		return OfficialResult{}, fmt.Errorf("models.dev: unexpected status %d", status)
 	}
-
-	if text, err := s.fetchText(ctx, officialDocsURL, 30*time.Second); err == nil {
-		matches := regexp.MustCompile(`(?i)cline-pass/[a-z0-9._-]+`).FindAllString(text, -1)
-		if len(matches) > 0 {
-			for _, match := range matches {
-				found[strings.ToLower(match)] = struct{}{}
+	root := jsonx.Map(raw)
+	clinePass := getMap(getMap(root, "providers"), "cline-pass")
+	if clinePass == nil {
+		clinePass = getMap(root, "cline-pass")
+	}
+	models := getMap(clinePass, "models")
+	if len(models) > 0 {
+		for rawID, rawModel := range models {
+			id := add(rawID)
+			if id == "" {
+				continue
 			}
-			sources = append(sources, "docs.cline.bot")
+			capability := normalizeModelCapability(id, parseModelCapability(jsonx.Map(rawModel), updatedAt))
+			capabilities[id] = mergeModelCapability(capabilities[id], capability)
 		}
+		sources = append(sources, "models.dev")
 	}
 
 	valid := make([]string, 0, len(found))

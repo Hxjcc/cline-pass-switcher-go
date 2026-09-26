@@ -603,7 +603,7 @@ export function ModelRow({
           if (!open) setConfirmRemove(false)
         }}
         title="移除模型"
-        description={`将从订阅列表中移除 ${model.id}，并删除其钉住配置与探测数据。\n「拉取官方模型」不会再将其加回；通过代理再次调用该模型时，它会重新加入订阅。`}
+        description={`将从订阅列表中移除 ${model.id}，并删除其钉住配置与探测数据。\n「拉取模型目录」不会再将其加回；通过代理再次调用该模型时，它会重新加入订阅。`}
         confirmLabel="移除"
         destructive
         onConfirm={removeRow}
