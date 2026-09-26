@@ -14,25 +14,89 @@ import (
 
 func float64Pointer(value float64) *float64 { return &value }
 
-func TestGatewayFallbackFlagsReroutedRequests(t *testing.T) {
+func TestGatewayRerouteClassifiesTheReason(t *testing.T) {
+	deepseekFailed := []model.GatewayAttempt{{Provider: "deepseek", Status: 429}}
+	deepseekServed := []model.GatewayAttempt{{Provider: "deepseek", Status: 200, Success: true}}
+	basetenServed := []model.GatewayAttempt{{Provider: "baseten", Status: 200, Success: true}}
 	cases := []struct {
-		name string
-		meta upstream.GatewayMeta
-		cfg  model.PerModelConfig
-		want bool
+		name       string
+		meta       upstream.GatewayMeta
+		cfg        model.PerModelConfig
+		want       bool
+		wantReason string
 	}{
-		{"affinity mismatch", upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "baseten"}, model.PerModelConfig{}, true},
-		{"affinity match", upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "deepseek"}, model.PerModelConfig{}, false},
-		{"pin mismatch", upstream.GatewayMeta{ResolvedProvider: "baseten"}, model.PerModelConfig{Upstreams: []string{"deepseek"}}, true},
-		{"pin match", upstream.GatewayMeta{ResolvedProvider: "deepseek"}, model.PerModelConfig{Upstreams: []string{"deepseek"}}, false},
-		{"single upstream field", upstream.GatewayMeta{FinalProvider: "baseten"}, model.PerModelConfig{Upstream: "deepseek"}, true},
-		{"unpinned request", upstream.GatewayMeta{FinalProvider: "baseten"}, model.PerModelConfig{}, false},
-		{"no routing at all", upstream.GatewayMeta{}, model.PerModelConfig{Upstreams: []string{"deepseek"}}, false},
+		{
+			"pin failed over",
+			upstream.GatewayMeta{ResolvedProvider: "baseten", Attempts: deepseekFailed},
+			model.PerModelConfig{Upstreams: []string{"deepseek"}},
+			true, model.FallbackRetry,
+		},
+		{
+			"pin ignored",
+			upstream.GatewayMeta{ResolvedProvider: "deepseek", Attempts: deepseekServed},
+			model.PerModelConfig{Upstreams: []string{"baseten"}},
+			true, model.FallbackIgnored,
+		},
+		{
+			"pin honoured",
+			upstream.GatewayMeta{ResolvedProvider: "deepseek", Attempts: deepseekFailed},
+			model.PerModelConfig{Upstreams: []string{"deepseek"}},
+			false, "",
+		},
+		{
+			"user pin outranks affinity",
+			upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "baseten", Attempts: basetenServed},
+			model.PerModelConfig{Upstreams: []string{"baseten"}},
+			false, "",
+		},
+		{
+			"affinity failed over",
+			upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "baseten", Attempts: deepseekFailed},
+			model.PerModelConfig{},
+			true, model.FallbackRetry,
+		},
+		{
+			"affinity ignored",
+			upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "baseten", Attempts: basetenServed},
+			model.PerModelConfig{},
+			true, model.FallbackIgnored,
+		},
+		{
+			"affinity honoured",
+			upstream.GatewayMeta{AffinityPinned: "deepseek", ResolvedProvider: "deepseek"},
+			model.PerModelConfig{},
+			false, "",
+		},
+		{
+			"single upstream field",
+			upstream.GatewayMeta{FinalProvider: "baseten", Attempts: deepseekFailed},
+			model.PerModelConfig{Upstream: "deepseek"},
+			true, model.FallbackRetry,
+		},
+		{
+			"unpinned request",
+			upstream.GatewayMeta{FinalProvider: "baseten", Attempts: basetenServed},
+			model.PerModelConfig{},
+			false, "",
+		},
+		{
+			"no routing at all",
+			upstream.GatewayMeta{},
+			model.PerModelConfig{Upstreams: []string{"deepseek"}},
+			false, "",
+		},
+		{
+			"no attempt detail",
+			upstream.GatewayMeta{ResolvedProvider: "baseten"},
+			model.PerModelConfig{Upstreams: []string{"deepseek"}},
+			true, "",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := gatewayFallback(testCase.meta, testCase.cfg); got != testCase.want {
-				t.Fatalf("gatewayFallback = %v, want %v", got, testCase.want)
+			got, reason := gatewayReroute(testCase.meta, testCase.cfg)
+			if got != testCase.want || reason != testCase.wantReason {
+				t.Fatalf("gatewayReroute = (%v, %q), want (%v, %q)", got, reason, testCase.want, testCase.wantReason)
 			}
 		})
 	}
@@ -62,6 +126,9 @@ func TestApplyGatewayMetaKeepsTheLedgerCost(t *testing.T) {
 	}
 	if !entry.Fallback {
 		t.Fatalf("a rerouted request must be flagged: %#v", entry)
+	}
+	if entry.FallbackReason != model.FallbackRetry {
+		t.Fatalf("a failed-over request should say why: %#v", entry)
 	}
 	if entry.GenerationID != "gen_test" || len(entry.GatewayAttempts) != 2 {
 		t.Fatalf("gateway metadata: %#v", entry)
@@ -128,6 +195,9 @@ func TestStreamingChatRecordsGatewayMetadata(t *testing.T) {
 	}
 	if !entry.Fallback {
 		t.Fatalf("rerouted request must be marked: %#v", entry)
+	}
+	if entry.FallbackReason != model.FallbackRetry {
+		t.Fatalf("failed-over request must carry the reason: %#v", entry)
 	}
 	if entry.GenerationID != "gen_01TEST" {
 		t.Fatalf("generation id missing: %#v", entry)

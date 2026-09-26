@@ -103,6 +103,20 @@ test("flags a request the gateway rerouted", () => {
   expect(screen.getByText("网关 2 次")).toBeTruthy()
 })
 
+// A pinned channel that never shows up in the gateway's attempt list was not
+// failed over — the preference was simply ignored, which is a different badge.
+test("labels an ignored preference instead of a fallback", () => {
+  renderPanel([
+    {
+      ...reroutedEntry,
+      fallbackReason: "ignored",
+      gatewayAttempts: [{ provider: "deepseek", status: 200, success: true, ms: 800 }],
+    },
+  ])
+  expect(screen.getByText("忽略偏好")).toBeTruthy()
+  expect(screen.queryByText("降级")).toBeNull()
+})
+
 test("shows the gateway total next to the ledger cost", () => {
   renderPanel([reroutedEntry])
   expect(screen.getByText("$0.0017")).toBeTruthy()

@@ -241,6 +241,8 @@ export interface HistoryItem {
   resolved?: string
   /** The request did not land on the pinned/affinity provider. */
   fallback?: boolean
+  /** Why: "retry" = the wanted channel failed over, "ignored" = it was never tried. */
+  fallbackReason?: "retry" | "ignored" | string
   gatewayAttempts?: GatewayAttempt[]
   generationId?: string
   ms: number

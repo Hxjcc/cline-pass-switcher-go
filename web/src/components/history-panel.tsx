@@ -86,6 +86,18 @@ function actualProvider(item: HistoryItem) {
   return item.resolved || item.provider
 }
 
+// fallbackIgnored marks the case where the pinned channel never appears in the
+// gateway's attempt list: the preference had no effect rather than failing over.
+function fallbackIgnored(item: HistoryItem) {
+  return item.fallbackReason === "ignored"
+}
+
+function fallbackTitle(item: HistoryItem) {
+  return fallbackIgnored(item)
+    ? "网关从未尝试你钉的渠道：渠道偏好被忽略"
+    : "实际渠道与网关会话亲和或首选渠道不一致（网关自动降级）"
+}
+
 function usageTitle(usage?: UsageStats, finishReason?: string) {
   if (!usage && !finishReason) return undefined
   const parts: string[] = []
@@ -412,10 +424,10 @@ export function HistoryPanel({
                           {item.fallback && (
                             <Badge
                               variant="outline"
-                              className={cn(chipClass, warningChipClass)}
-                              title="实际渠道与网关会话亲和或首选渠道不一致（网关自动降级）"
+                              className={cn(chipClass, fallbackIgnored(item) ? undefined : warningChipClass)}
+                              title={fallbackTitle(item)}
                             >
-                              降级
+                              {fallbackIgnored(item) ? "忽略偏好" : "降级"}
                             </Badge>
                           )}
                           <GatewayAttemptsBadge attempts={item.gatewayAttempts} />

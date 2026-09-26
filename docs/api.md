@@ -142,7 +142,7 @@
 
 上游网关会在响应里报告它是如何完成这次请求的，这些字段也会存进历史：
 
-- `resolved`：网关实际运行的渠道（`routing.resolvedProvider`），与 `provider` 一致，除非网关悄悄改道；`fallback: true` 表示实际渠道既不是会话亲和指定的渠道，也不是为该模型钉选的渠道。
+- `resolved`：网关实际运行的渠道（`routing.resolvedProvider`），与 `provider` 一致，除非网关悄悄改道；`fallback: true` 表示实际渠道既不是会话亲和指定的渠道，也不是为该模型钉选的渠道。`fallbackReason` 区分两种原因：`retry` = 钉的渠道被尝试过但失败（真降级），`ignored` = 它从未出现在网关的尝试列表里（偏好被忽略，例如网关不读渠道偏好）；缺省表示上游没报告足够的细节。
 - `gatewayAttempts`：网关内部每次渠道尝试的 `provider`、`status`、`ms`、`success`、`requestId`、`responseId`。
 - `generationId`：网关给这次生成的编号，用于和账单对账。
 - `usage.gatewayCost` / `inputCost` / `outputCost` / `surchargeCost`：网关口径的费用拆分，仅供展示；计入密钥限额的始终是 `usage.cost`（账本费用）。

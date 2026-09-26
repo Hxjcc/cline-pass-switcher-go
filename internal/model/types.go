@@ -224,6 +224,16 @@ type UsageStats struct {
 	CacheMissTokens int64    `json:"cacheMissTokens,omitempty"`
 }
 
+// FallbackReason values recorded when a request did not run on the channel
+// the pin or the session affinity asked for.
+const (
+	// FallbackRetry: the wanted channel was attempted and failed first.
+	FallbackRetry = "retry"
+	// FallbackIgnored: the wanted channel never appears in the gateway's
+	// attempt list, so the preference was ignored rather than failed over.
+	FallbackIgnored = "ignored"
+)
+
 type HistoryEntry struct {
 	TS        int64  `json:"ts"`
 	Model     string `json:"model"`
@@ -235,7 +245,13 @@ type HistoryEntry struct {
 	Resolved string `json:"resolved,omitempty"`
 	// Fallback marks a request that did not land on the channel the session
 	// affinity or the model's pin asked for.
-	Fallback        bool        `json:"fallback,omitempty"`
+	Fallback bool `json:"fallback,omitempty"`
+	// FallbackReason tells the two cases apart: the wanted channel was tried
+	// and failed (FallbackRetry), or it was never tried at all
+	// (FallbackIgnored), which is what a gateway that does not read channel
+	// preferences looks like. Empty means the upstream reported too little to
+	// decide.
+	FallbackReason  string      `json:"fallbackReason,omitempty"`
 	MS              int64       `json:"ms"`
 	TTFTMs          int64       `json:"ttftMs,omitempty"`
 	Stream          bool        `json:"stream"`
