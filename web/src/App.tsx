@@ -516,8 +516,8 @@ function App() {
   return (
     <div data-app-shell className="min-h-svh">
       <header className="bg-card sticky top-0 z-40 border-b">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3 max-sm:w-full">
             <BrandMark className="size-9 shrink-0" />
             <div className="min-w-0 space-y-1">
               <h1 className="truncate text-base leading-5 font-semibold">Cline Pass 上游控制台</h1>
@@ -573,7 +573,7 @@ function App() {
               </div>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 max-sm:ml-0 max-sm:w-full max-sm:justify-start">
             {meta?.authRequired && (
               <Button variant="outline" size="sm" onClick={() => setLoginOpen(true)}>
                 <KeyRound data-icon="inline-start" />

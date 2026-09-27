@@ -16,7 +16,7 @@ export const successChipClass = cn(
 )
 
 /** Card-level action row: every button in it uses size="sm". */
-export const cardActionClass = "flex flex-wrap items-center justify-end gap-2"
+export const cardActionClass = "flex flex-wrap items-center justify-end gap-2 max-sm:justify-start"
 
 // Secondary columns of the subscription table give way, one at a time, as its
 // container narrows, so the model, its priorities and the row actions always

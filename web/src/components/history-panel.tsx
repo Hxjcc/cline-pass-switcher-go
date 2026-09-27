@@ -28,6 +28,7 @@ import { TraceList } from "@/components/trace-list"
 import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCost, formatTime, formatTokenCount, shortDuration } from "@/lib/format"
+import { useNarrowViewport } from "@/lib/use-media-query"
 import { cn } from "@/lib/utils"
 import type { GatewayAttempt, HistoryItem, UsageStats } from "@/types"
 
@@ -205,6 +206,96 @@ function CostCell({ usage }: { usage?: UsageStats }) {
   )
 }
 
+// HistoryCard is the phone layout of one history row: the same facts as the
+// table, stacked so nothing is clipped off the side of the screen.
+function HistoryCard({ item }: { item: HistoryItem }) {
+  const provider = actualProvider(item)
+  return (
+    <article className="bg-card rounded-lg px-3 py-2.5 ring-1 ring-foreground/10">
+      <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
+        <span>{formatTime(item.ts)}</span>
+        <span className="flex flex-wrap items-center gap-1">
+          {item.kind === "compact" && (
+            <Badge variant="secondary" className={chipClass}>
+              压缩
+            </Badge>
+          )}
+          {item.degraded ? (
+            <Badge variant="outline" className={warningChipClass} title={item.degradeReason}>
+              压缩降级
+            </Badge>
+          ) : null}
+          {item.missingSummarySections?.length ? (
+            <Badge
+              variant="outline"
+              className={warningChipClass}
+              title={`摘要缺少段落：${item.missingSummarySections.join("、")}`}
+            >
+              摘要缺 {item.missingSummarySections.join("、")}
+            </Badge>
+          ) : null}
+          <Badge variant={item.stream ? "secondary" : "outline"} className={chipClass}>
+            {item.stream ? "流式" : "非流式"}
+          </Badge>
+        </span>
+      </div>
+
+      <div className="mt-1 font-mono text-xs wrap-anywhere">{item.model}</div>
+      {item.canonical ? (
+        <div className="text-muted-foreground font-mono text-2xs wrap-anywhere">{item.canonical}</div>
+      ) : null}
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {provider && (
+          <Badge variant="outline" className={chipClass}>
+            <ProviderName slug={provider} />
+          </Badge>
+        )}
+        {item.fallback && (
+          <Badge
+            variant="outline"
+            className={cn(chipClass, fallbackIgnored(item) ? undefined : warningChipClass)}
+            title={fallbackTitle(item)}
+          >
+            {fallbackIgnored(item) ? "忽略偏好" : "降级"}
+          </Badge>
+        )}
+        <GatewayAttemptsBadge attempts={item.gatewayAttempts} />
+        {item.account && (
+          <span className="text-muted-foreground text-2xs">{item.account}</span>
+        )}
+      </div>
+
+      {hasFailover(item) && (
+        <div className="mt-1.5">
+          {item.trace?.length ? (
+            <TraceList trace={item.trace} compact />
+          ) : (
+            <span className="text-muted-foreground font-mono text-2xs">{item.attempts?.join(" → ")}</span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap items-start gap-x-4 gap-y-1">
+        <UsageCell item={item} />
+        <CostCell usage={item.usage} />
+        <EffortCell item={item} />
+      </div>
+
+      <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 text-2xs tabular-nums">
+        <span>首字 {item.ttftMs ? shortDuration(item.ttftMs) : "—"}</span>
+        <span>总耗时 {shortDuration(item.ms)}</span>
+      </div>
+
+      {item.error && (
+        <div className="text-destructive mt-1.5 line-clamp-3 text-2xs wrap-anywhere" title={item.error}>
+          {item.error}
+        </div>
+      )}
+    </article>
+  )
+}
+
 // gatewayAttemptsBadge surfaces the retries that happened inside the gateway,
 // which the proxy's own trace cannot see.
 function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
@@ -260,6 +351,9 @@ export function HistoryPanel({
   const [clearing, setClearing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState(query.q)
+  // Eleven columns cannot fit a phone, so narrow viewports get a card list with
+  // the same facts stacked instead of a sideways-scrolling table.
+  const narrow = useNarrowViewport()
 
   // Typing filters as you go, but only after a pause: every keystroke would
   // otherwise reload the log from the server.
@@ -370,6 +464,12 @@ export function HistoryPanel({
               query.q || query.onlyErrors ? "请调整筛选条件后重试。" : "客户端通过代理发出的请求会记录在此处。"
             }
           />
+        ) : narrow ? (
+          <div className="space-y-2">
+            {history.map((item, index) => (
+              <HistoryCard key={`${item.ts}-${item.model}-${index}`} item={item} />
+            ))}
+          </div>
         ) : (
           <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
             {/* Eleven columns: slightly tighter cell padding keeps failover rows

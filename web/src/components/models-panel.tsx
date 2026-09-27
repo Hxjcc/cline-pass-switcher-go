@@ -187,7 +187,10 @@ export function ModelsPanel({
             description="点击「拉取模型目录」从 models.dev 同步 Cline Pass 当前提供的模型；客户端用过的模型也会自动加入。"
           />
         ) : (
-          <div className="@container/models overflow-hidden rounded-lg ring-1 ring-foreground/10">
+          // On a phone the row actions and the pin column are wider than the
+          // screen, so the table scrolls sideways inside the card instead of
+          // clipping the columns the operator needs.
+          <div className="@container/models overflow-x-auto rounded-lg ring-1 ring-foreground/10">
             <Table>
               <TableHeader>
                 <TableRow>

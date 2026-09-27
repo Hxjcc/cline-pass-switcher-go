@@ -164,3 +164,39 @@ test("marks a pending filter change and blocks paging until it lands", () => {
   const more = screen.getByRole("button", { name: /加载更多/ }) as HTMLButtonElement
   expect(more.disabled).toBe(true)
 })
+
+// A phone cannot show eleven columns: the panel renders cards there instead of
+// clipping the table, and only one of the two layouts is in the DOM.
+test("renders cards instead of the wide table on a narrow viewport", () => {
+  const original = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    matches: true,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+  try {
+    const { container } = render(
+      <TooltipProvider>
+        <HistoryPanel
+          history={[reroutedEntry]}
+          total={1}
+          hasMore={false}
+          query={{ q: "", onlyErrors: false }}
+          onQueryChange={() => {}}
+          onRefresh={noop}
+          onLoadMore={noop}
+          onClear={noop}
+        />
+      </TooltipProvider>,
+    )
+    expect(container.querySelectorAll("article")).toHaveLength(1)
+    expect(container.querySelector("table")).toBeNull()
+  } finally {
+    window.matchMedia = original
+  }
+})
