@@ -272,26 +272,27 @@ export function ModelRow({
         </TableCell>
         <TableCell>
           <div className="font-mono text-xs leading-5 font-medium">{model.id}</div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="mt-0.5">
             <span className="text-muted-foreground font-mono text-2xs">
               {model.meta?.canonicalSlug || "尚未识别背后模型"}
             </span>
-            {model.meta?.reasoning && (
-              <Badge variant="secondary" className={chipClass}>
-                <Brain data-icon="inline-start" />
-                思考
-                {model.meta.reasoningEfforts?.length ? (
-                  <span className="font-mono tabular-nums">{model.meta.reasoningEfforts.join("/")}</span>
-                ) : null}
-              </Badge>
-            )}
           </div>
-          {/* Vision and the limits share one line: inline they wrap away from
-              the slug on long models and the cell looks torn apart. */}
-          {(model.meta?.inputModalities?.includes("image") ||
+          {/* Every capability chip shares one line under the slug: inline they
+              wrap away from it on long models and the cell looks torn apart. */}
+          {(model.meta?.reasoning ||
+            model.meta?.inputModalities?.includes("image") ||
             model.meta?.contextWindow ||
             model.meta?.outputLimit) && (
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {model.meta?.reasoning && (
+                <Badge variant="secondary" className={chipClass}>
+                  <Brain data-icon="inline-start" />
+                  思考
+                  {model.meta.reasoningEfforts?.length ? (
+                    <span className="font-mono tabular-nums">{model.meta.reasoningEfforts.join("/")}</span>
+                  ) : null}
+                </Badge>
+              )}
               {model.meta?.inputModalities?.includes("image") && (
                 <Badge variant="outline" className={chipClass}>
                   <ImageIcon data-icon="inline-start" />
