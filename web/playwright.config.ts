@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -10,6 +10,14 @@ import { defineConfig } from "@playwright/test"
 const PORT = Number(process.env.E2E_PORT ?? 3133)
 const ADMIN_KEY = "sk-e2e-admin"
 const DATA_DIR = mkdtempSync(join(tmpdir(), "cline-pass-e2e-"))
+
+// A fresh data directory starts with an empty subscription (the console's pull
+// button fills it from models.dev), but the routing test drives a model row, so
+// seed that one entry here.
+writeFileSync(
+  join(DATA_DIR, "config.json"),
+  JSON.stringify({ knownModels: ["cline-pass/glm-5.3-flash"] }),
+)
 
 export default defineConfig({
   testDir: "./e2e",
