@@ -27,7 +27,12 @@ func TestGatewayRerouteClassifiesTheReason(t *testing.T) {
 	}{
 		{
 			"pin failed over",
-			upstream.GatewayMeta{ResolvedProvider: "baseten", Attempts: deepseekFailed},
+			upstream.GatewayMeta{
+				// The gateway keeps reporting the planned channel, so only the
+				// attempt list shows that baseten ended up serving.
+				ResolvedProvider: "deepseek",
+				Attempts:         append(deepseekFailed, model.GatewayAttempt{Provider: "baseten", Status: 200, Success: true}),
+			},
 			model.PerModelConfig{Upstreams: []string{"deepseek"}},
 			true, model.FallbackRetry,
 		},
@@ -105,6 +110,7 @@ func TestGatewayRerouteClassifiesTheReason(t *testing.T) {
 func TestApplyGatewayMetaKeepsTheLedgerCost(t *testing.T) {
 	entry := model.HistoryEntry{Usage: &model.UsageStats{Cost: float64Pointer(0.0017)}}
 	meta := upstream.GatewayMeta{
+		// The gateway still names the affinity channel; deepseek answered.
 		ResolvedProvider: "baseten",
 		AffinityPinned:   "deepseek",
 		GenerationID:     "gen_test",
@@ -115,20 +121,17 @@ func TestApplyGatewayMetaKeepsTheLedgerCost(t *testing.T) {
 		CacheHitTokens:   111,
 		CacheMissTokens:  22,
 		Attempts: []model.GatewayAttempt{
-			{Provider: "deepseek", Status: 429},
-			{Provider: "baseten", Status: 200, Success: true},
+			{Provider: "baseten", Status: 429},
+			{Provider: "deepseek", Status: 200, Success: true},
 		},
 	}
 	applyGatewayMeta(&entry, meta, model.PerModelConfig{Upstreams: []string{"deepseek"}})
 
-	if entry.Resolved != "baseten" || entry.Provider != "baseten" {
-		t.Fatalf("resolved provider: %#v", entry)
+	if entry.Resolved != "deepseek" || entry.Provider != "deepseek" {
+		t.Fatalf("the channel that answered must win over the reported one: %#v", entry)
 	}
-	if !entry.Fallback {
-		t.Fatalf("a rerouted request must be flagged: %#v", entry)
-	}
-	if entry.FallbackReason != model.FallbackRetry {
-		t.Fatalf("a failed-over request should say why: %#v", entry)
+	if entry.Fallback {
+		t.Fatalf("deepseek served a request pinned to deepseek: %#v", entry)
 	}
 	if entry.GenerationID != "gen_test" || len(entry.GatewayAttempts) != 2 {
 		t.Fatalf("gateway metadata: %#v", entry)

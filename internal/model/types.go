@@ -229,9 +229,12 @@ type HistoryEntry struct {
 	Model     string `json:"model"`
 	Provider  string `json:"provider,omitempty"`
 	Canonical string `json:"canonical,omitempty"`
-	// Resolved is the provider the Cline gateway reports it actually ran
-	// (routing.resolvedProvider). It matches Provider except when the gateway
-	// quietly rerouted a request away from the requested channel.
+	// Resolved is the channel that actually answered. It comes from the last
+	// successful attempt in the gateway's own attempt list when one is present,
+	// because a retry chain still reports the planned channel in
+	// routing.resolvedProvider; without attempt details it falls back to that
+	// field. It matches Provider except when the gateway quietly rerouted the
+	// request away from the requested channel.
 	Resolved string `json:"resolved,omitempty"`
 	// Fallback marks a request that did not land on the channel the session
 	// affinity or the model's pin asked for.

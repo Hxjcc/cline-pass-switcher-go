@@ -13,7 +13,7 @@ func applyGatewayMeta(entry *model.HistoryEntry, meta upstream.GatewayMeta, cfg 
 	if entry == nil || meta.Empty() {
 		return
 	}
-	actual := firstNonEmpty(meta.ResolvedProvider, meta.FinalProvider, meta.Provider)
+	actual := servedProvider(meta)
 	if entry.Resolved == "" {
 		entry.Resolved = actual
 	}
@@ -57,6 +57,20 @@ func applyGatewayMeta(entry *model.HistoryEntry, meta upstream.GatewayMeta, cfg 
 	}
 }
 
+// servedProvider is the channel that actually answered. In a retry chain the
+// gateway keeps reporting the channel it planned (resolvedProvider follows the
+// session affinity) while the attempt list shows the real outcome, so the last
+// successful attempt wins whenever one is present.
+func servedProvider(meta upstream.GatewayMeta) string {
+	for index := len(meta.Attempts) - 1; index >= 0; index-- {
+		attempt := meta.Attempts[index]
+		if attempt.Success && attempt.Provider != "" {
+			return attempt.Provider
+		}
+	}
+	return firstNonEmpty(meta.ResolvedProvider, meta.FinalProvider, meta.Provider)
+}
+
 // applyGatewayMetaForModel resolves the stored per-model pin itself, for paths
 // that only carry the model id.
 func (s *Server) applyGatewayMetaForModel(entry *model.HistoryEntry, meta upstream.GatewayMeta, modelID string) {
@@ -69,7 +83,7 @@ func (s *Server) applyGatewayMetaForModel(entry *model.HistoryEntry, meta upstre
 // second case: the wanted channel never appears in the attempt list, so the
 // request was not failed over — the preference simply had no effect.
 func gatewayReroute(meta upstream.GatewayMeta, cfg model.PerModelConfig) (bool, string) {
-	actual := firstNonEmpty(meta.ResolvedProvider, meta.FinalProvider, meta.Provider)
+	actual := servedProvider(meta)
 	if actual == "" {
 		return false, ""
 	}
