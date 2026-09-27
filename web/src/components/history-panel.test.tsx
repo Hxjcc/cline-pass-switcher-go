@@ -124,7 +124,9 @@ test("labels an ignored preference instead of a fallback", () => {
 test("shows the gateway total next to the ledger cost", () => {
   renderPanel([reroutedEntry])
   expect(screen.getByText("$0.0017")).toBeTruthy()
-  expect(screen.getByText(/网关 \$0\.0085/)).toBeTruthy()
+  // The multiplier is the honest headline: the gateway total is its own price
+  // list, not a fee the ledger charges.
+  expect(screen.getByText(/网关 \$0\.0085 ×5\.0/)).toBeTruthy()
 })
 
 test("shows the cache hit rate when the provider reports hit and miss", () => {

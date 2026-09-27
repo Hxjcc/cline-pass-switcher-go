@@ -149,14 +149,26 @@ function UsageCell({ item }: { item: HistoryItem }) {
   )
 }
 
+// gatewayMultiple is how much the gateway's own price list exceeds the ledger
+// charge: 2x on a channel Cline Pass discounts, 1x on one it does not, higher
+// when a per-call tool fee is added on top.
+function gatewayMultiple(usage: UsageStats) {
+  if (usage.gatewayCost === undefined || !usage.cost) return ""
+  const multiple = usage.gatewayCost / usage.cost
+  if (Math.abs(multiple - 1) < 0.005) return ""
+  return ` ×${multiple.toFixed(multiple >= 10 ? 0 : 1)}`
+}
+
 // costTitle spells out where a request's money went. The ledger number is the
-// only one spend limits use; the gateway total additionally carries per-call
-// tool fees such as web search.
+// only one spend limits use. The gateway number is the gateway's own price list
+// for the same turn: it is higher whenever the channel is discounted for Cline
+// Pass or a per-call tool ran, so it is informational rather than a fee.
 function costTitle(usage: UsageStats) {
-  const parts = [`账本 ${formatCost(usage.cost)}（计入密钥限额）`]
+  const parts = [`账本 ${formatCost(usage.cost)}（实际扣费，计入密钥限额）`]
   if (usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - (usage.cost ?? 0)) > 1e-9) {
-    const fees = Math.max(usage.gatewayCost - (usage.cost ?? 0), 0)
-    parts.push(`网关 ${formatCost(usage.gatewayCost)}（含工具费 ${formatCost(fees)}）`)
+    parts.push(
+      `网关 ${formatCost(usage.gatewayCost)}（网关市价口径${gatewayMultiple(usage)}：含渠道差价与按次工具费，不影响扣费）`,
+    )
   }
   const split = [
     usage.inputCost !== undefined ? `输入 ${formatCost(usage.inputCost)}` : "",
@@ -176,7 +188,10 @@ function CostCell({ usage }: { usage?: UsageStats }) {
     <div className="font-mono text-xs tabular-nums" title={costTitle(usage)}>
       <div>{formatCost(usage.cost)}</div>
       {gatewayDiffers && (
-        <div className="text-muted-foreground text-2xs">↳ 网关 {formatCost(usage.gatewayCost)}</div>
+        <div className="text-muted-foreground text-2xs">
+          ↳ 网关 {formatCost(usage.gatewayCost)}
+          {gatewayMultiple(usage)}
+        </div>
       )}
     </div>
   )
