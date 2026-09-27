@@ -141,6 +141,13 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		"max_tokens": 256,
 		"stream":     false,
 	}
+	// The probe reproduces the channel preference a real request carries: its
+	// result is what the console shows as 最近命中, and asking without the pin
+	// made every pinned model look like a miss. Channel discovery is unaffected
+	// - that comes from the impossible-provider probe below.
+	if attempts := s.BuildAttempts(modelID, s.store.ModelConfig(modelID)); len(attempts) > 0 {
+		body = s.InjectPrefs(body, modelID, attempts[0])
+	}
 	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
 	if err != nil {
 		return ProbeResult{}, err
