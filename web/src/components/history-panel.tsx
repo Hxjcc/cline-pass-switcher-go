@@ -114,15 +114,23 @@ function usageTitle(usage?: UsageStats, finishReason?: string) {
   return parts.join(" · ")
 }
 
-// cacheRate renders the provider's own hit/miss counters as a percentage.
+// cacheRate renders the prompt-cache hit rate. Only some providers publish their
+// own hit/miss counters; the rest still report the cached token count inside
+// usage, so the rate is derived from that instead of falling back to a raw
+// token count.
 function cacheRate(usage?: UsageStats) {
   if (!usage) return ""
   const hit = usage.cacheHitTokens ?? 0
   const miss = usage.cacheMissTokens ?? 0
-  if (hit === 0 && miss === 0) return ""
-  const total = hit + miss
-  if (total === 0) return ""
-  return `缓存 ${((hit / total) * 100).toFixed(hit === total ? 0 : 1)}%`
+  const counted = hit + miss
+  if (counted > 0) {
+    return `缓存 ${((hit / counted) * 100).toFixed(hit === counted ? 0 : 1)}%`
+  }
+  if (usage.cachedTokens && usage.promptTokens) {
+    const rate = (usage.cachedTokens / usage.promptTokens) * 100
+    return `缓存 ${rate.toFixed(rate === 100 ? 0 : 1)}%`
+  }
+  return ""
 }
 
 function UsageCell({ item }: { item: HistoryItem }) {

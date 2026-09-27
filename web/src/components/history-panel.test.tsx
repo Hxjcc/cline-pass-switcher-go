@@ -134,6 +134,28 @@ test("shows the cache hit rate when the provider reports hit and miss", () => {
   expect(screen.getByText(/缓存 99\.9%/)).toBeTruthy()
 })
 
+// alibaba publishes no per-provider cache counters, but usage still carries the
+// cached token count, so the rate is derived instead of showing a raw count.
+test("derives the cache rate when the provider reports only the cached count", () => {
+  renderPanel([
+    {
+      ...reroutedEntry,
+      provider: "alibaba",
+      resolved: "alibaba",
+      fallback: false,
+      usage: {
+        promptTokens: 139_700,
+        completionTokens: 401,
+        reasoningTokens: 212,
+        cachedTokens: 139_300,
+        cost: 0.0007,
+      },
+      gatewayAttempts: undefined,
+    },
+  ])
+  expect(screen.getByText(/缓存 99\.7%/)).toBeTruthy()
+})
+
 // A filter change still being confirmed by the server keeps the rows visible
 // and only marks itself as pending, so the toggle never looks stuck.
 test("marks a pending filter change and blocks paging until it lands", () => {
