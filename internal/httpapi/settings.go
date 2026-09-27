@@ -71,6 +71,8 @@ func (s *Server) effectiveSettings() []effectiveSettingView {
 		"WEB_SEARCH_UPSTREAM", firstNonEmpty(cfg.WebSearchUpstream, "关闭"))
 	add("webFetchUpstream", "网页抓取工具映射", "webFetchUpstream",
 		"WEB_FETCH_UPSTREAM", firstNonEmpty(cfg.WebFetchUpstream, "关闭"))
+	add("stickTtl", "会话粘性有效期", "stickTtl",
+		"STICK_TTL", firstNonEmpty(cfg.StickTTL, "60m"))
 
 	// Credentials are reported as presence only: the console shows which layer
 	// supplied them without ever echoing the secret.

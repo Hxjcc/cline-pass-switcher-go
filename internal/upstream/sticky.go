@@ -11,12 +11,29 @@ import (
 )
 
 const (
-	sessionStickTTL = 30 * time.Minute
+	// defaultSessionStickTTL should roughly match how long a provider keeps its
+	// prompt cache: a shorter value drops a warm account, a longer one only
+	// costs a few bytes per conversation.
+	defaultSessionStickTTL = 60 * time.Minute
 	// stickSweepInterval bounds how often expired conversations are dropped.
 	// Without a sweep an entry only disappears when that same session comes
 	// back, so threads the user abandoned stay in memory forever.
 	stickSweepInterval = 5 * time.Minute
 )
+
+// stickTTL is the configured conversation lifetime, falling back to the
+// built-in default for an empty or unparseable value.
+func (s *Service) stickTTL() time.Duration {
+	raw := strings.TrimSpace(s.store.Config().StickTTL)
+	if raw == "" {
+		return defaultSessionStickTTL
+	}
+	ttl, err := time.ParseDuration(raw)
+	if err != nil || ttl <= 0 {
+		return defaultSessionStickTTL
+	}
+	return ttl
+}
 
 // sessionStick is the account and pinned channel that last completed a
 // conversation. It lives in memory: losing it only makes the next turn cold.
@@ -125,7 +142,7 @@ func (s *Service) rememberStick(session string, account model.Account, upstream 
 		accountID: account.ID,
 		upstream:  upstream,
 		keyHash:   accountKeyHash(account.Key),
-		until:     now.Add(sessionStickTTL),
+		until:     now.Add(s.stickTTL()),
 	}
 }
 

@@ -88,6 +88,10 @@ type Config struct {
 	// required, for example "powershell" on a Windows client. Empty or "off"
 	// leaves the client's schemas untouched.
 	ShellCompat string `json:"shellCompat,omitempty"`
+	// StickTTL is how long one conversation keeps its account (and channel
+	// order) in memory, as a Go duration ("60m", "2h"). Empty means the
+	// built-in default; it should roughly match the provider cache lifetime.
+	StickTTL string `json:"stickTtl,omitempty"`
 	// ShellCompatEnforce also rewrites the model's actual tool-call arguments
 	// for shell-capable tools. It is off by default and only makes sense when
 	// ShellCompat is set.
@@ -333,6 +337,7 @@ func DefaultConfig() Config {
 		// 拉取 button fills it from models.dev, and any model a client actually
 		// uses is appended by the store once the request succeeds.
 		KnownModels: []string{},
+		StickTTL:    "60m",
 		PerModel:    map[string]PerModelConfig{},
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 )
@@ -103,6 +104,14 @@ func ApplyEnvironment(cfg *Config) {
 	if rawFloor := strings.TrimSpace(os.Getenv("COMPACTION_MIN_OUTPUT_TOKENS")); rawFloor != "" {
 		if tokens, err := strconv.Atoi(rawFloor); err == nil && tokens > 0 {
 			cfg.CompactionMinOutputTokens = tokens
+		}
+	}
+	// How long a conversation keeps its account (and channel order). It should
+	// roughly match the provider's prompt-cache lifetime: a shorter value drops
+	// a warm account, a longer one only costs a few bytes per conversation.
+	if rawTTL := strings.TrimSpace(os.Getenv("STICK_TTL")); rawTTL != "" {
+		if ttl, err := time.ParseDuration(rawTTL); err == nil && ttl > 0 {
+			cfg.StickTTL = rawTTL
 		}
 	}
 }
