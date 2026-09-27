@@ -309,7 +309,8 @@ function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
       // so it belongs in the tooltip that explains a fallback.
       const code = failed && attempt.status ? ` ${attempt.status}` : ""
       const ms = attempt.ms ? ` ${shortDuration(attempt.ms)}` : ""
-      return `${attempt.provider ?? "未知渠道"} ${failed ? `失败${code}` : "成功"}${ms}`
+      const reason = failed && attempt.error ? ` · ${attempt.error}` : ""
+      return `${attempt.provider ?? "未知渠道"} ${failed ? `失败${code}` : "成功"}${ms}${reason}`
     })
     .join(" → ")
   return (

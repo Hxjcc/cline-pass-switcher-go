@@ -213,6 +213,8 @@ export interface GatewayAttempt {
   success?: boolean
   requestId?: string
   responseId?: string
+  /** Whatever the gateway said about a failed attempt. */
+  error?: string
 }
 
 export interface UsageStats {

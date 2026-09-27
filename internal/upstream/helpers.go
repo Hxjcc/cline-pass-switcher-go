@@ -139,6 +139,7 @@ func gatewayAttempts(routing map[string]any) []model.GatewayAttempt {
 				Success:    getBool(provider, "success"),
 				RequestID:  getString(provider, "providerRequestId"),
 				ResponseID: getString(provider, "providerResponseId"),
+				Error:      attemptErrorText(provider),
 			}
 			if start, end := intField(provider, "startTime"), intField(provider, "endTime"); end > start && start > 0 {
 				attempt.MS = end - start
@@ -150,6 +151,26 @@ func gatewayAttempts(routing map[string]any) []model.GatewayAttempt {
 		}
 	}
 	return attempts
+}
+
+// attemptErrorText collects whatever a failed attempt said about itself. The
+// gateway hides the reason under different keys over time, so every plausible
+// one is tried and the first non-empty wins.
+func attemptErrorText(attempt map[string]any) string {
+	if attempt == nil {
+		return ""
+	}
+	if nested := jsonx.Map(attempt["error"]); nested != nil {
+		if message := strings.TrimSpace(getString(nested, "message")); message != "" {
+			return message
+		}
+	}
+	for _, key := range []string{"error", "errorMessage", "message", "failureReason", "reason"} {
+		if text := strings.TrimSpace(getString(attempt, key)); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // cacheTokens reads the provider's own prompt-cache counters. The metadata

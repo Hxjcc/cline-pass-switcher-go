@@ -111,6 +111,27 @@ func TestParseMetaEmptyForPlainChunks(t *testing.T) {
 	}
 }
 
+// A failed attempt carries the reason under one of several keys; the status
+// code alone cannot tell "prompt too long" from "bad parameter".
+func TestParseMetaKeepsAttemptErrors(t *testing.T) {
+	meta := ParseMeta(decodeMetaFixture(t, `{"choices":[{"message":{"provider_metadata":{"gateway":{"routing":{
+	  "finalProvider":"alibaba","resolvedProvider":"alibaba",
+	  "modelAttempts":[{"providerAttempts":[
+	    {"provider":"deepseek","statusCode":400,"success":false,"error":{"message":"prompt is too long"}},
+	    {"provider":"alibaba","statusCode":200,"success":true}
+	  ]}]
+	}}}}}],"model":"cline-pass/test"}`))
+	if len(meta.Attempts) != 2 {
+		t.Fatalf("expected both attempts: %#v", meta.Attempts)
+	}
+	if meta.Attempts[0].Error != "prompt is too long" {
+		t.Fatalf("failed attempt error was dropped: %#v", meta.Attempts[0])
+	}
+	if meta.Attempts[1].Error != "" {
+		t.Fatalf("a successful attempt has no error: %#v", meta.Attempts[1])
+	}
+}
+
 func TestSameProviderFoldsNames(t *testing.T) {
 	if !SameProvider("z.ai", "Z-AI") {
 		t.Fatal("provider names should compare through their folded key")

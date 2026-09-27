@@ -192,6 +192,10 @@ type GatewayAttempt struct {
 	Success    bool   `json:"success,omitempty"`
 	RequestID  string `json:"requestId,omitempty"`
 	ResponseID string `json:"responseId,omitempty"`
+	// Error is whatever the gateway reported for a failed attempt, when it
+	// reported anything: a 400 with "prompt is too long" says far more than the
+	// status code alone.
+	Error string `json:"error,omitempty"`
 }
 
 type UsageStats struct {
