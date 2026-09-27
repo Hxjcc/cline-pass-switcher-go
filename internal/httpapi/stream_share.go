@@ -374,7 +374,8 @@ func (s *Server) recordSharedRun(
 		errorMessage = &message
 	}
 	entry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID, Provider: job.provider, Canonical: job.canonical,
+		TS: time.Now().UnixMilli(), Model: modelID, Session: sessionIDFromBody(chatBody),
+		Provider: job.provider, Canonical: job.canonical,
 		MS: time.Since(job.last.Started).Milliseconds(), Stream: true, Kind: "responses",
 		Error: errorMessage, Account: job.last.Account.Name,
 		AccountID: job.last.Account.ID,

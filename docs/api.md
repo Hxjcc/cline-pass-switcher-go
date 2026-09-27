@@ -145,6 +145,7 @@
 - `resolved`：网关实际运行的渠道（`routing.resolvedProvider`），与 `provider` 一致，除非网关悄悄改道；`fallback: true` 表示实际渠道既不是会话亲和指定的渠道，也不是为该模型钉选的渠道。`fallbackReason` 区分两种原因：`retry` = 钉的渠道被尝试过但失败（真降级），`ignored` = 它从未出现在网关的尝试列表里（偏好被忽略，例如网关不读渠道偏好）；缺省表示上游没报告足够的细节。
 - `gatewayAttempts`：网关内部每次渠道尝试的 `provider`、`status`、`ms`、`success`、`requestId`、`responseId`。
 - `generationId`：网关给这次生成的编号，用于和账单对账。
+- `session`：客户端这一轮的会话 ID（请求里的 `prompt_cache_key`，也就是 Codex 的 thread id）。历史搜索会匹配它，粘进搜索框即可筛出某个会话的全部请求，看它走的是哪个渠道、缓存多少。
 - `usage.gatewayCost` / `inputCost` / `outputCost` / `surchargeCost`：网关自己那份价目表的拆分，仅供展示。实测它与账本的倍数随渠道而变（同一个渠道固定，例如某渠道上市价恰为账本的 2 倍），工具费则叠加在上面。计入密钥限额的始终是 `usage.cost`（账本费用）。
 - `usage.cacheHitTokens` / `cacheMissTokens`：上游自己报告的缓存命中与未命中 token 数，控制台用它们显示缓存命中率。
 

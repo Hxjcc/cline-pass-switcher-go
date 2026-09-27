@@ -245,6 +245,8 @@ export interface HistoryItem {
   fallback?: boolean
   /** Why: "retry" = the wanted channel failed over, "ignored" = it was never tried. */
   fallbackReason?: "retry" | "ignored" | string
+  /** The client's conversation id (prompt_cache_key) that produced this row. */
+  session?: string
   gatewayAttempts?: GatewayAttempt[]
   generationId?: string
   ms: number

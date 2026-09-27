@@ -146,6 +146,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			entry := model.HistoryEntry{
 				TS:        time.Now().UnixMilli(),
 				Model:     modelID,
+				Session:   sessionIDFromBody(body),
 				Provider:  provider,
 				Canonical: meta.CanonicalSlug,
 				MS:        time.Since(last.Started).Milliseconds(),
@@ -273,6 +274,7 @@ func (s *Server) writeBufferedChatStream(
 	entry := model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     modelID,
+		Session:   sessionIDFromBody(body),
 		Provider:  firstNonEmpty(routing.ResolvedProvider, routing.FinalProvider),
 		Canonical: routing.CanonicalSlug,
 		MS:        time.Since(last.Started).Milliseconds(),

@@ -213,7 +213,7 @@ function HistoryCard({ item }: { item: HistoryItem }) {
   return (
     <article className="bg-card rounded-lg px-3 py-2.5 ring-1 ring-foreground/10">
       <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
-        <span>{formatTime(item.ts)}</span>
+        <span title={item.session ? `会话 ${item.session}` : undefined}>{formatTime(item.ts)}</span>
         <span className="flex flex-wrap items-center gap-1">
           {item.kind === "compact" && (
             <Badge variant="secondary" className={chipClass}>
@@ -501,7 +501,12 @@ export function HistoryPanel({
               <TableBody>
                 {history.map((item, index) => (
                   <TableRow key={`${item.ts}-${item.model}-${index}`}>
-                    <TableCell className={cn(cell, "text-muted-foreground text-xs")}>{formatTime(item.ts)}</TableCell>
+                    <TableCell
+                      className={cn(cell, "text-muted-foreground text-xs")}
+                      title={item.session ? `会话 ${item.session}` : undefined}
+                    >
+                      {formatTime(item.ts)}
+                    </TableCell>
                     <TableCell className={cell}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-mono text-xs">{item.model}</span>

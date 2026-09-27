@@ -106,7 +106,8 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	entry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID, Provider: firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
+		TS: time.Now().UnixMilli(), Model: modelID, Session: sessionIDFromBody(chatBody),
+		Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 		Stream: false, Kind: "responses",
 		Error: nil, Account: result.Account.Name, AccountID: result.Account.ID,
@@ -247,7 +248,8 @@ func compactionFailureEntry(
 	message string,
 ) model.HistoryEntry {
 	return model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(started).Milliseconds(),
+		TS: time.Now().UnixMilli(), Model: modelID, Session: sessionIDFromBody(chatBody),
+		MS:     time.Since(started).Milliseconds(),
 		Stream: stream, Kind: "compact", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 		Usage:           result.Usage,
 		RequestedEffort: bridgeContext.RequestedReasoningEffort,
@@ -268,7 +270,7 @@ func compactionEntry(
 	compaction map[string]any,
 ) model.HistoryEntry {
 	entry := model.HistoryEntry{
-		TS: time.Now().UnixMilli(), Model: modelID,
+		TS: time.Now().UnixMilli(), Model: modelID, Session: sessionIDFromBody(chatBody),
 		Provider: firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider), Canonical: result.Routing.CanonicalSlug,
 		MS: time.Since(started).Milliseconds(), Stream: stream, Kind: "compact",
 		Account: result.Account.Name, AccountID: result.Account.ID,

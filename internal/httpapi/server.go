@@ -508,7 +508,7 @@ func filterHistory(entries []model.HistoryEntry, term, result string) []model.Hi
 }
 
 func historyMatches(entry model.HistoryEntry, needle string) bool {
-	fields := []string{entry.Model, entry.Provider, entry.Resolved, entry.Canonical, entry.Account, entry.Kind, entry.Effort, entry.GenerationID}
+	fields := []string{entry.Model, entry.Provider, entry.Resolved, entry.Canonical, entry.Account, entry.Kind, entry.Effort, entry.GenerationID, entry.Session}
 	if entry.Error != nil {
 		fields = append(fields, *entry.Error)
 	}
@@ -681,7 +681,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 func (s *Server) withSessionStick(ctx context.Context, modelID string, body map[string]any) context.Context {
 	session := upstream.SessionKey(modelID, body)
 	accountID, _ := s.upstream.LookupStick(session)
-	return upstream.WithStick(ctx, session, accountID)
+	return withRecordedSession(upstream.WithStick(ctx, session, accountID), body)
 }
 
 func (s *Server) requestAttempts(modelID string, cfg model.PerModelConfig, body map[string]any) []upstream.Attempt {
@@ -843,6 +843,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	entry := model.HistoryEntry{
 		TS:        time.Now().UnixMilli(),
 		Model:     modelID,
+		Session:   sessionIDFromBody(body),
 		Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug,
 		MS:        time.Since(result.Started).Milliseconds(),

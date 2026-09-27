@@ -262,6 +262,9 @@ type HistoryEntry struct {
 	// AccountID is the stable identity behind Account. Per-account counters
 	// are keyed by it so renaming an account keeps its statistics.
 	AccountID string `json:"accountId,omitempty"`
+	// Session is the client's conversation id (prompt_cache_key on the wire),
+	// which makes one thread's requests findable in the history.
+	Session string `json:"session,omitempty"`
 	// KeyID / KeyName identify the issued client key that carried the request.
 	// Both stay empty for console and master-key traffic; the store uses KeyID
 	// to accumulate the spend a shared key is allowed to burn.
