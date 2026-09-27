@@ -304,9 +304,12 @@ function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
   if (attempts.length === 1 && failed.length === 0) return null
   const title = attempts
     .map((attempt) => {
-      const status = attempt.success === false || (attempt.status ?? 0) >= 400 ? "失败" : "成功"
+      const failed = attempt.success === false || (attempt.status ?? 0) >= 400
+      // The status code is what tells a rate limit apart from a server error,
+      // so it belongs in the tooltip that explains a fallback.
+      const code = failed && attempt.status ? ` ${attempt.status}` : ""
       const ms = attempt.ms ? ` ${shortDuration(attempt.ms)}` : ""
-      return `${attempt.provider ?? "未知渠道"} ${status}${ms}`
+      return `${attempt.provider ?? "未知渠道"} ${failed ? `失败${code}` : "成功"}${ms}`
     })
     .join(" → ")
   return (

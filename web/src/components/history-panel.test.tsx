@@ -105,6 +105,10 @@ test("flags a request the gateway rerouted", () => {
   renderPanel([reroutedEntry])
   expect(screen.getByText("降级")).toBeTruthy()
   expect(screen.getByText("网关 2 次")).toBeTruthy()
+  // The tooltip names the failing status so a rate limit is distinguishable
+  // from a server error.
+  const badge = screen.getByText("网关 2 次")
+  expect(badge.getAttribute("title")).toContain("deepseek 失败 429")
 })
 
 // A pinned channel that never shows up in the gateway's attempt list was not
