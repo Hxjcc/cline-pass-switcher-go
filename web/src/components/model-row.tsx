@@ -2,6 +2,7 @@ import { Fragment, useState, type ReactNode } from "react"
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpFromLine,
   Ban,
   Brain,
   ChevronDown,
@@ -284,32 +285,41 @@ export function ModelRow({
                 ) : null}
               </Badge>
             )}
-            {model.meta?.inputModalities?.includes("image") && (
-              <Badge variant="outline" className={chipClass}>
-                <ImageIcon data-icon="inline-start" />
-                视觉
-              </Badge>
-            )}
-            {model.meta?.contextWindow ? (
-              <Badge
-                variant="outline"
-                className={chipClass}
-                title={`上下文窗口 ${model.meta.contextWindow.toLocaleString("zh-CN")} tokens`}
-              >
-                <Gauge data-icon="inline-start" />
-                上下文 {formatWindow(model.meta.contextWindow)}
-              </Badge>
-            ) : null}
-            {model.meta?.outputLimit ? (
-              <Badge
-                variant="outline"
-                className={chipClass}
-                title={`单次输出上限 ${model.meta.outputLimit.toLocaleString("zh-CN")} tokens`}
-              >
-                输出 {formatWindow(model.meta.outputLimit)}
-              </Badge>
-            ) : null}
           </div>
+          {/* Vision and the limits share one line: inline they wrap away from
+              the slug on long models and the cell looks torn apart. */}
+          {(model.meta?.inputModalities?.includes("image") ||
+            model.meta?.contextWindow ||
+            model.meta?.outputLimit) && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {model.meta?.inputModalities?.includes("image") && (
+                <Badge variant="outline" className={chipClass}>
+                  <ImageIcon data-icon="inline-start" />
+                  视觉
+                </Badge>
+              )}
+              {model.meta?.contextWindow ? (
+                <Badge
+                  variant="outline"
+                  className={chipClass}
+                  title={`上下文窗口 ${model.meta.contextWindow.toLocaleString("zh-CN")} tokens`}
+                >
+                  <Gauge data-icon="inline-start" />
+                  上下文 {formatWindow(model.meta.contextWindow)}
+                </Badge>
+              ) : null}
+              {model.meta?.outputLimit ? (
+                <Badge
+                  variant="outline"
+                  className={chipClass}
+                  title={`单次输出上限 ${model.meta.outputLimit.toLocaleString("zh-CN")} tokens`}
+                >
+                  <ArrowUpFromLine data-icon="inline-start" />
+                  输出 {formatWindow(model.meta.outputLimit)}
+                </Badge>
+              ) : null}
+            </div>
+          )}
         </TableCell>
         <TableCell className={modelColumnClass.pipeline}>
           <Tooltip>
