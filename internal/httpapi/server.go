@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -111,6 +112,16 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	// API payloads are JSON with heavily repeated field names - the history
+	// page re-filters and polls the same shape - so compress them when the
+	// client asks for it. Streaming lives under /v1 and is never wrapped.
+	if request.Method != http.MethodOptions && strings.HasPrefix(request.URL.Path, "/api/") && acceptsGzip(request) {
+		writer.Header().Set("Content-Encoding", "gzip")
+		writer.Header().Add("Vary", "Accept-Encoding")
+		compressor := gzip.NewWriter(writer)
+		defer func() { _ = compressor.Close() }()
+		writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
+	}
 	if !s.browserRequestAllowed(request) {
 		writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
 		return
@@ -964,6 +975,35 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+// gzipResponseWriter keeps the header and status methods of the wrapped writer
+// and compresses everything written through it.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	compressor *gzip.Writer
+}
+
+func (writer gzipResponseWriter) Write(data []byte) (int, error) {
+	return writer.compressor.Write(data)
+}
+
+// acceptsGzip reports whether the request advertises gzip with a non-zero
+// quality, which is what browsers send for fetch() by default.
+func acceptsGzip(request *http.Request) bool {
+	for _, part := range strings.Split(request.Header.Get("Accept-Encoding"), ",") {
+		fields := strings.Split(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(fields[0]), "gzip") {
+			continue
+		}
+		for _, parameter := range fields[1:] {
+			if strings.EqualFold(strings.TrimSpace(parameter), "q=0") {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func normalizeList(values []string) []string {

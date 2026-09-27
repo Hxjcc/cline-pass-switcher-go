@@ -214,6 +214,7 @@ export function HistoryPanel({
   history,
   total,
   hasMore,
+  pending,
   query,
   onQueryChange,
   onRefresh,
@@ -223,6 +224,8 @@ export function HistoryPanel({
   history: HistoryItem[]
   total: number
   hasMore: boolean
+  /** A filter change is still being confirmed by the server. */
+  pending?: boolean
   query: { q: string; onlyErrors: boolean }
   onQueryChange: (next: { q: string; onlyErrors: boolean }) => void
   onRefresh: () => Promise<void>
@@ -332,6 +335,7 @@ export function HistoryPanel({
           </ToggleChip>
           <span className="text-muted-foreground ml-auto text-xs tabular-nums">
             已显示 {history.length} / {total} 条
+            {pending && <span className="ml-2">刷新中…</span>}
           </span>
         </div>
 
@@ -485,7 +489,7 @@ export function HistoryPanel({
 
         {hasMore && (
           <div className="flex justify-center">
-            <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+          <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore || pending}>
               {loadingMore ? "加载中…" : `加载更多（还有 ${Math.max(total - history.length, 0)} 条）`}
             </Button>
           </div>

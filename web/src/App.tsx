@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
 import { HISTORY_PAGE_SIZE, fetchSnapshot, readSnapshot, writeSnapshot, type CachedSnapshot } from "@/lib/console-snapshot"
+import { historyEntryMatches, historyQueryKey } from "@/lib/history-filter"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import { cn } from "@/lib/utils"
 import type {
@@ -91,6 +92,14 @@ function App() {
     q: "",
     onlyErrors: false,
   })
+  // The panel re-fetches on every filter change, which reads as "slow" on a
+  // remote console. Responses are cached per filter and a pending change shows
+  // the rows already held that match it, so toggling feels instant.
+  const [historyPending, setHistoryPending] = useState(false)
+  const historyCache = useRef(
+    new Map<string, { history: HistoryResponse["history"]; total: number; hasMore: boolean }>(),
+  )
+  const historyEpoch = useRef(0)
   const [loginOpen, setLoginOpen] = useState(false)
   const [tab, setTab] = useState(initialTab)
   const [refreshing, setRefreshing] = useState(false)
@@ -116,7 +125,7 @@ function App() {
   // currently showing, and appended pages keep the newest-first order.
   const loadHistory = useCallback(
     async (
-      options: { offset?: number; limit?: number; q?: string; onlyErrors?: boolean } = {},
+      options: { offset?: number; limit?: number; q?: string; onlyErrors?: boolean; epoch?: number } = {},
     ) => {
       const offset = options.offset ?? 0
       const limit = Math.min(Math.max(options.limit ?? HISTORY_PAGE_SIZE, 1), 200)
@@ -129,9 +138,19 @@ function App() {
       const response = await api<HistoryResponse>(`/api/history?${params.toString()}`, {
         key: authKey,
       })
-      setHistory((current) => (offset > 0 ? [...current, ...response.history] : response.history))
-      setHistoryTotal(response.total)
-      setHistoryHasMore(response.hasMore)
+      const superseded = options.epoch !== undefined && options.epoch !== historyEpoch.current
+      if (!superseded) {
+        setHistory((current) => (offset > 0 ? [...current, ...response.history] : response.history))
+        setHistoryTotal(response.total)
+        setHistoryHasMore(response.hasMore)
+      }
+      if (offset === 0) {
+        historyCache.current.set(historyQueryKey({ q: options.q ?? "", onlyErrors: options.onlyErrors ?? false }), {
+          history: response.history,
+          total: response.total,
+          hasMore: response.hasMore,
+        })
+      }
       return response
     },
     [authKey],
@@ -140,7 +159,25 @@ function App() {
   const applyHistoryQuery = useCallback(
     (next: { q: string; onlyErrors: boolean }) => {
       setHistoryQuery(next)
-      void loadHistory({ q: next.q, onlyErrors: next.onlyErrors }).catch(handleError)
+      historyEpoch.current += 1
+      const epoch = historyEpoch.current
+      const cached = historyCache.current.get(historyQueryKey(next))
+      if (cached) {
+        setHistory(cached.history)
+        setHistoryTotal(cached.total)
+        setHistoryHasMore(cached.hasMore)
+      } else if (next.onlyErrors) {
+        // Narrowing is exact on the rows already loaded: show the matching ones
+        // now instead of waiting for the round trip. Widening has no local
+        // source, so the previous rows simply stay until the answer arrives.
+        setHistory((current) => current.filter((entry) => historyEntryMatches(entry, next)))
+      }
+      setHistoryPending(true)
+      void loadHistory({ q: next.q, onlyErrors: next.onlyErrors, epoch })
+        .catch(handleError)
+        .finally(() => {
+          if (historyEpoch.current === epoch) setHistoryPending(false)
+        })
     },
     [loadHistory, handleError],
   )
@@ -662,6 +699,7 @@ function App() {
               history={history}
               total={historyTotal}
               hasMore={historyHasMore}
+              pending={historyPending}
               query={historyQuery}
               onQueryChange={applyHistoryQuery}
               onRefresh={async () => {

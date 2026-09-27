@@ -9,13 +9,17 @@ afterEach(cleanup)
 
 const noop = async () => {}
 
-function renderPanel(history: HistoryItem[]) {
+function renderPanel(
+  history: HistoryItem[],
+  options: { pending?: boolean; hasMore?: boolean } = {},
+) {
   render(
     <TooltipProvider>
       <HistoryPanel
         history={history}
         total={history.length}
-        hasMore={false}
+        hasMore={options.hasMore ?? false}
+        pending={options.pending}
         query={{ q: "", onlyErrors: false }}
         onQueryChange={() => {}}
         onRefresh={noop}
@@ -126,4 +130,13 @@ test("shows the gateway total next to the ledger cost", () => {
 test("shows the cache hit rate when the provider reports hit and miss", () => {
   renderPanel([reroutedEntry])
   expect(screen.getByText(/缓存 99\.9%/)).toBeTruthy()
+})
+
+// A filter change still being confirmed by the server keeps the rows visible
+// and only marks itself as pending, so the toggle never looks stuck.
+test("marks a pending filter change and blocks paging until it lands", () => {
+  renderPanel([reroutedEntry], { pending: true, hasMore: true })
+  expect(screen.getByText("刷新中…")).toBeTruthy()
+  const more = screen.getByRole("button", { name: /加载更多/ }) as HTMLButtonElement
+  expect(more.disabled).toBe(true)
 })
