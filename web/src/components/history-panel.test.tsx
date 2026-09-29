@@ -160,6 +160,33 @@ test("derives the cache rate when the provider reports only the cached count", (
   expect(screen.getByText(/缓存 99\.7%/)).toBeTruthy()
 })
 
+// A gateway tool turn runs two model legs: usage sums both, while the provider's
+// hit/miss counters describe one. The rate has to come from the summed counts,
+// and the per-leg split must not be shown next to them.
+test("ignores per-leg cache counters on a multi-leg turn", () => {
+  renderPanel([
+    {
+      ...reroutedEntry,
+      gatewayAttempts: undefined,
+      usage: {
+        promptTokens: 148_300,
+        completionTokens: 6_113,
+        reasoningTokens: 5_740,
+        cachedTokens: 139_400,
+        totalTokens: 154_400,
+        cost: 0.0054,
+        cacheHitTokens: 69_800,
+        cacheMissTokens: 8_728,
+      },
+    },
+  ])
+  expect(screen.getByText(/缓存 94\.0%/)).toBeTruthy()
+  const row = screen.getByText(/缓存 94\.0%/)
+  const title = row.closest("[title]")?.getAttribute("title") ?? ""
+  expect(title).toContain("缓存 139.4k")
+  expect(title).not.toContain("命中")
+})
+
 // A filter change still being confirmed by the server keeps the rows visible
 // and only marks itself as pending, so the toggle never looks stuck.
 test("marks a pending filter change and blocks paging until it lands", () => {

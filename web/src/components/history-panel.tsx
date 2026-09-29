@@ -105,8 +105,14 @@ function usageTitle(usage?: UsageStats, finishReason?: string) {
   if (usage?.promptTokens) parts.push(`输入 ${formatTokenCount(usage.promptTokens)}`)
   if (usage?.completionTokens) parts.push(`输出 ${formatTokenCount(usage.completionTokens)}`)
   if (usage?.reasoningTokens) parts.push(`思考 ${formatTokenCount(usage.reasoningTokens)}`)
-  if (usage?.cachedTokens) parts.push(`缓存 ${formatTokenCount(usage.cachedTokens)}`)
-  if (usage?.cacheHitTokens !== undefined || usage?.cacheMissTokens !== undefined) {
+  if (usage?.cachedTokens) {
+    const rate = cacheRate(usage).replace("缓存 ", "")
+    parts.push(`缓存 ${formatTokenCount(usage.cachedTokens)}${rate ? `（${rate}）` : ""}`)
+  }
+  // The provider's own hit/miss counters describe a single model leg, so they
+  // only line up with the summed usage on a plain one-leg turn. Anything else
+  // would show a rate that contradicts the token counts next to it.
+  if (usage && providerCountersCoverThePrompt(usage) && usage.cacheHitTokens !== undefined) {
     parts.push(`命中 ${formatTokenCount(usage.cacheHitTokens ?? 0)} / 未命中 ${formatTokenCount(usage.cacheMissTokens ?? 0)}`)
   }
   if (usage?.totalTokens) parts.push(`合计 ${formatTokenCount(usage.totalTokens)}`)
@@ -115,21 +121,33 @@ function usageTitle(usage?: UsageStats, finishReason?: string) {
   return parts.join(" · ")
 }
 
-// cacheRate renders the prompt-cache hit rate. Only some providers publish their
-// own hit/miss counters; the rest still report the cached token count inside
-// usage, so the rate is derived from that instead of falling back to a raw
-// token count.
+// providerCountersCoverThePrompt reports whether the provider's hit/miss split
+// accounts for (roughly) the whole prompt. On a multi-leg turn the counters
+// describe one leg while usage sums them all, and comparing the two produces a
+// rate that looks wrong next to the token counts.
+function providerCountersCoverThePrompt(usage?: UsageStats) {
+  if (!usage) return false
+  const counted = (usage.cacheHitTokens ?? 0) + (usage.cacheMissTokens ?? 0)
+  if (counted <= 0) return false
+  const prompt = usage.promptTokens ?? 0
+  return prompt <= 0 || counted >= prompt * 0.9
+}
+
+// cacheRate renders the prompt-cache hit rate from the token counts that the
+// row shows, so the percentage and the counts always agree. The provider's
+// per-leg counters are only a fallback for a response that reports no cached
+// token count at all.
 function cacheRate(usage?: UsageStats) {
   if (!usage) return ""
+  if (usage.cachedTokens && usage.promptTokens) {
+    const rate = (usage.cachedTokens / usage.promptTokens) * 100
+    return `缓存 ${rate.toFixed(rate === 100 ? 0 : 1)}%`
+  }
   const hit = usage.cacheHitTokens ?? 0
   const miss = usage.cacheMissTokens ?? 0
   const counted = hit + miss
   if (counted > 0) {
     return `缓存 ${((hit / counted) * 100).toFixed(hit === counted ? 0 : 1)}%`
-  }
-  if (usage.cachedTokens && usage.promptTokens) {
-    const rate = (usage.cachedTokens / usage.promptTokens) * 100
-    return `缓存 ${rate.toFixed(rate === 100 ? 0 : 1)}%`
   }
   return ""
 }
