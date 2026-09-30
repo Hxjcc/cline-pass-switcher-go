@@ -12,11 +12,12 @@ import (
 )
 
 type historyPayload struct {
-	History []model.HistoryEntry `json:"history"`
-	Total   int                  `json:"total"`
-	Offset  int                  `json:"offset"`
-	Limit   int                  `json:"limit"`
-	HasMore bool                 `json:"hasMore"`
+	History    []model.HistoryEntry `json:"history"`
+	Total      int                  `json:"total"`
+	Offset     int                  `json:"offset"`
+	Limit      int                  `json:"limit"`
+	HasMore    bool                 `json:"hasMore"`
+	NextCursor string               `json:"nextCursor"`
 }
 
 func getHistory(t *testing.T, server *Server, query string) (historyPayload, string) {
@@ -112,5 +113,70 @@ func TestHistoryEndpointFiltersByResultAndTerm(t *testing.T) {
 	none, body := getHistory(t, server, "?q=does-not-exist")
 	if none.Total != 0 || len(none.History) != 0 || !strings.Contains(body, `"history":[]`) {
 		t.Fatalf("unmatched term = %s", body)
+	}
+}
+
+func TestHistoryCursorSurvivesNewRowsWithIdenticalTimestamps(t *testing.T) {
+	st, server := newTestServer(t)
+	for range 3 {
+		if err := st.Record(model.HistoryEntry{TS: 1000, Model: "cline-pass/same"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := st.Metadata().History
+	first, _ := getHistory(t, server, "?limit=2")
+	if first.NextCursor == "" || first.NextCursor != original[1].ID {
+		t.Fatalf("missing stable cursor: %+v", first)
+	}
+	if err := st.Record(model.HistoryEntry{TS: 1000, Model: "cline-pass/same"}); err != nil {
+		t.Fatal(err)
+	}
+	// A cursor takes precedence over the legacy offset parameter.
+	second, _ := getHistory(t, server, "?limit=2&offset=0&cursor="+first.NextCursor)
+	if len(second.History) != 1 || second.History[0].ID != original[2].ID || second.HasMore || second.NextCursor != "" {
+		t.Fatalf("new row shifted the continuation: %+v", second)
+	}
+	if first.History[0].ID == first.History[1].ID {
+		t.Fatal("identical rows need distinct IDs")
+	}
+}
+
+func TestHistoryCursorPreservesFilters(t *testing.T) {
+	st, server := newTestServer(t)
+	seedHistory(t, st)
+	first, _ := getHistory(t, server, "?limit=1&q=alpha&result=error")
+	message := "new failure"
+	if err := st.Record(model.HistoryEntry{TS: 2000, Model: "cline-pass/alpha", Error: &message}); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := getHistory(t, server, "?limit=2&q=alpha&result=error&cursor="+first.NextCursor)
+	if len(second.History) != 2 || second.History[0].TS != 1002 || second.History[1].TS != 1000 || second.HasMore {
+		t.Fatalf("filtered cursor skipped or repeated a row: %+v", second)
+	}
+}
+
+func TestHistoryExpiredCursorDoesNotRestartAtFirstPage(t *testing.T) {
+	for _, reason := range []string{"clear", "retention"} {
+		t.Run(reason, func(t *testing.T) {
+			st, server := newTestServer(t)
+			seedHistory(t, st)
+			first, _ := getHistory(t, server, "?limit=2")
+			if reason == "clear" {
+				if err := st.ClearHistory(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for range model.HistoryLimit {
+					if err := st.Record(model.HistoryEntry{Model: "cline-pass/new"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, localRequest(http.MethodGet, "/api/history?cursor="+first.NextCursor, nil))
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "history_cursor_expired") {
+				t.Fatalf("expired cursor silently changed pages: %d %s", response.Code, response.Body)
+			}
+		})
 	}
 }

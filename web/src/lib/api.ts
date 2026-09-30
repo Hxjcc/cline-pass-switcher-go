@@ -5,6 +5,18 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class APIError extends Error {
+  status: number
+  code?: string
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = "APIError"
+    this.status = status
+    this.code = code
+  }
+}
+
 export async function api<T>(
   path: string,
   options: {
@@ -35,14 +47,14 @@ export async function api<T>(
     throw new UnauthorizedError()
   }
   const payload = (await response.json().catch(() => null)) as
-    | (T & { error?: { message?: string } | string })
+    | (T & { error?: { message?: string; code?: string } | string })
     | null
   if (!response.ok) {
     const message =
       typeof payload?.error === "string"
         ? payload.error
         : payload?.error?.message || `请求失败（${response.status}）`
-    throw new Error(message)
+    throw new APIError(message, response.status, typeof payload?.error === "object" ? payload.error?.code : undefined)
   }
   return payload as T
 }

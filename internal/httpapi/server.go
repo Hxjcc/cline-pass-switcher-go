@@ -34,7 +34,6 @@ type Server struct {
 	shares         *streamShareHub
 	adminThrottle  *authThrottle
 	clientThrottle *authThrottle
-	spendHolds     *spendHolds
 	// requests counts running handlers, so Shutdown can wait for their
 	// history records before the store closes.
 	requests sync.WaitGroup
@@ -74,7 +73,6 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 		shares:         newStreamShareHub(),
 		adminThrottle:  newAuthThrottle(),
 		clientThrottle: newAuthThrottle(),
-		spendHolds:     newSpendHolds(),
 	}, nil
 }
 
@@ -112,10 +110,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-	// API payloads are JSON with heavily repeated field names - the history
-	// page re-filters and polls the same shape - so compress them when the
-	// client asks for it. Streaming lives under /v1 and is never wrapped.
-	if request.Method != http.MethodOptions && strings.HasPrefix(request.URL.Path, "/api/") && acceptsGzip(request) {
+	path := request.URL.Path
+	// Compress console JSON when requested. Client APIs, including /api/v1
+	// aliases, keep their original writer so SSE flushing and write deadlines
+	// remain available.
+	if request.Method != http.MethodOptions && strings.HasPrefix(path, "/api/") && !isClientPath(path) && acceptsGzip(request) {
 		writer.Header().Set("Content-Encoding", "gzip")
 		writer.Header().Add("Vary", "Accept-Encoding")
 		compressor := gzip.NewWriter(writer)
@@ -132,9 +131,19 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	path := request.URL.Path
 	if request.Method == http.MethodGet && path == "/healthz" {
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	if request.Method == http.MethodGet && path == "/readyz" {
+		health := s.store.Health()
+		ready := s.store.IsConfigured() && health.Status != "unavailable"
+		status := http.StatusOK
+		if !ready {
+			status = http.StatusServiceUnavailable
+		}
+		// Like /healthz this is a probe, not an authenticated diagnostic dump.
+		writeJSON(writer, status, map[string]any{"ok": ready, "storage": health.Status})
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/meta" {
@@ -148,6 +157,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		// handed to a caller that either has the key or does not need one.
 		if s.adminRequestAuthorized(request) {
 			payload["proxyBase"] = s.publicProxyBase(cfg)
+			payload["storage"] = s.store.Health()
 		}
 		writeJSON(writer, http.StatusOK, payload)
 		return
@@ -158,7 +168,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if !s.authorizeClient(writer, request) {
 			return
 		}
-		defer spendHoldFrom(request.Context()).release()
+		defer spendHoldFrom(request.Context()).Release()
 	} else if strings.HasPrefix(path, "/api/") {
 		if !s.authorizeAdmin(writer, request) {
 			return
@@ -468,17 +478,38 @@ func (s *Server) handleHistory(writer http.ResponseWriter, request *http.Request
 	entries := filterHistory(s.store.Metadata().History, strings.TrimSpace(query.Get("q")), query.Get("result"))
 	limit := clampQueryInt(query.Get("limit"), defaultHistoryPage, 1, maxHistoryPage)
 	offset := clampQueryInt(query.Get("offset"), 0, 0, len(entries))
+	if cursor := query.Get("cursor"); cursor != "" {
+		found := false
+		for index, entry := range entries {
+			if entry.ID == cursor {
+				offset, found = index+1, true
+				break
+			}
+		}
+		if !found {
+			writeJSON(writer, http.StatusConflict, map[string]any{"error": map[string]any{
+				"code": "history_cursor_expired", "type": "invalid_request_error",
+				"message": "历史分页位置已失效，请刷新请求历史", "param": "cursor",
+			}})
+			return
+		}
+	}
 	end := min(offset+limit, len(entries))
 	page := entries[offset:end]
 	if page == nil {
 		page = []model.HistoryEntry{}
 	}
+	nextCursor := ""
+	if end < len(entries) && len(page) > 0 {
+		nextCursor = page[len(page)-1].ID
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"history": page,
-		"total":   len(entries),
-		"offset":  offset,
-		"limit":   limit,
-		"hasMore": end < len(entries),
+		"history":    page,
+		"total":      len(entries),
+		"offset":     offset,
+		"limit":      limit,
+		"hasMore":    end < len(entries),
+		"nextCursor": nextCursor,
 	})
 }
 

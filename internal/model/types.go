@@ -233,6 +233,8 @@ const (
 )
 
 type HistoryEntry struct {
+	// ID identifies a stored row across pagination, checkpoints and restarts.
+	ID        string `json:"id,omitempty"`
 	TS        int64  `json:"ts"`
 	Model     string `json:"model"`
 	Provider  string `json:"provider,omitempty"`

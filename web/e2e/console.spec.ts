@@ -69,6 +69,32 @@ test("the access panel reports where each runtime value came from", async ({ pag
   await expect(enforce).toContainText("内置默认")
 })
 
+test("storage faults refresh after login and clear after recovery", async ({ page }) => {
+  await page.clock.install()
+  let storage = { status: "ok", message: "", detail: "" }
+  await page.route("**/api/meta", async (route) => {
+    const response = await route.fetch()
+    const payload = await response.json()
+    if (route.request().headers()["x-admin-key"] === ADMIN_KEY) payload.storage = storage
+    await route.fulfill({ response, json: payload })
+  })
+  await signIn(page)
+  await expect(page.getByText("费用记录异常", { exact: true })).toHaveCount(0)
+  storage = { status: "unavailable", message: "已暂停有额度上限的密钥的新请求", detail: "test journal write failed" }
+  await page.clock.fastForward(16_000)
+  await expect(page.getByText("费用记录异常", { exact: true })).toBeVisible()
+  await expect(page.getByText(storage.message, { exact: true })).toBeVisible()
+  await page.getByText("故障详情", { exact: true }).click()
+  await expect(page.getByText(storage.detail, { exact: true })).toBeVisible()
+  storage = { status: "degraded", message: "日志已保存，快照合并失败", detail: "test snapshot failed" }
+  await page.clock.fastForward(16_000)
+  await expect(page.getByText("数据存储需要检查", { exact: true })).toBeVisible()
+  await expect(page.getByText("费用记录异常", { exact: true })).toHaveCount(0)
+  storage = { status: "ok", message: "", detail: "" }
+  await page.clock.fastForward(16_000)
+  await expect(page.getByText("数据存储需要检查", { exact: true })).toHaveCount(0)
+})
+
 // The model list is the busiest panel in the console. This test is the safety
 // net for changing it: expand a row, flip a control that writes through to the
 // API, and check the value survived a reload.

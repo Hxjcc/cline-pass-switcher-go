@@ -28,6 +28,11 @@ func localRequest(method, target string, body io.Reader) *http.Request {
 
 func newTestServer(t *testing.T) (*store.Store, *Server) {
 	t.Helper()
+	return newTestServerInDir(t, t.TempDir())
+}
+
+func newTestServerInDir(t *testing.T, dir string) (*store.Store, *Server) {
+	t.Helper()
 	// Every switch a developer might have exported while debugging: the tests
 	// set what they need, and nothing else should leak in from the shell.
 	for _, name := range []string{
@@ -37,7 +42,7 @@ func newTestServer(t *testing.T) (*store.Store, *Server) {
 	} {
 		t.Setenv(name, "")
 	}
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

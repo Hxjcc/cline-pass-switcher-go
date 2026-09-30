@@ -24,19 +24,24 @@ export interface CachedSnapshot {
   history: HistoryResponse["history"]
   historyTotal?: number
   historyHasMore?: boolean
+  historyCursor?: string
+  historyQuery?: { q: string; onlyErrors: boolean }
   accounts: AccountsResponse
   keys: KeysResponse
   security: SecurityResponse
 }
 
-export async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
-  const [meta, models, accounts, keys, security, history] = await Promise.all([
-    api<MetaResponse>("/api/meta"),
+export type ConsoleSnapshot = Omit<CachedSnapshot, "history" | "historyTotal" | "historyHasMore" | "historyCursor" | "historyQuery">
+
+// History has its own request coordinator; a general refresh must not write
+// unfiltered rows over a newer history query.
+export async function fetchSnapshot(key: string): Promise<ConsoleSnapshot> {
+  const [meta, models, accounts, keys, security] = await Promise.all([
+    api<MetaResponse>("/api/meta", { key }),
     api<ModelsResponse>("/api/models", { key }),
     api<AccountsResponse>("/api/accounts", { key }),
     api<KeysResponse>("/api/keys", { key }),
     api<SecurityResponse>("/api/security", { key }),
-    api<HistoryResponse>(`/api/history?limit=${HISTORY_PAGE_SIZE}`, { key }),
   ])
   return {
     meta,
@@ -44,9 +49,6 @@ export async function fetchSnapshot(key: string): Promise<CachedSnapshot> {
     accounts,
     keys,
     security,
-    history: history.history,
-    historyTotal: history.total,
-    historyHasMore: history.hasMore,
   }
 }
 

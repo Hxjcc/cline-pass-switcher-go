@@ -146,10 +146,10 @@ func (h *streamShareHub) join(parent context.Context, key string, run func(*shar
 		// The run records the spend after its first client may have left,
 		// so it keeps that client's reservation until then.
 		hold := spendHoldFrom(parent)
-		hold.retain()
+		hold.Retain()
 		go func() {
 			defer h.running.Done()
-			defer hold.release()
+			defer hold.Release()
 			run(job)
 			job.finish()
 		}()

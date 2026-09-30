@@ -23,6 +23,7 @@ import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
 import { ModelsPanel } from "@/components/models-panel"
 import { SecurityPanel } from "@/components/security-panel"
+import { StorageAlert } from "@/components/storage-alert"
 import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -31,14 +32,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
-import { HISTORY_PAGE_SIZE, fetchSnapshot, readSnapshot, writeSnapshot, type CachedSnapshot } from "@/lib/console-snapshot"
-import { historyEntryMatches, historyQueryKey } from "@/lib/history-filter"
+import { fetchSnapshot, readSnapshot, writeSnapshot, type ConsoleSnapshot } from "@/lib/console-snapshot"
+import { useHistory } from "@/lib/use-history"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import { cn } from "@/lib/utils"
 import type {
   AccountTestResponse,
   AccountsResponse,
-  HistoryResponse,
   KeysResponse,
   MetaResponse,
   ModelConfig,
@@ -81,25 +81,6 @@ function App() {
   const [security, setSecurity] = useState<SecurityResponse | null>(
     initialSnapshot?.security ?? null,
   )
-  const [history, setHistory] = useState<HistoryResponse["history"]>(
-    initialSnapshot?.history ?? [],
-  )
-  const [historyTotal, setHistoryTotal] = useState(
-    initialSnapshot?.historyTotal ?? initialSnapshot?.history.length ?? 0,
-  )
-  const [historyHasMore, setHistoryHasMore] = useState(initialSnapshot?.historyHasMore ?? false)
-  const [historyQuery, setHistoryQuery] = useState<{ q: string; onlyErrors: boolean }>({
-    q: "",
-    onlyErrors: false,
-  })
-  // The panel re-fetches on every filter change, which reads as "slow" on a
-  // remote console. Responses are cached per filter and a pending change shows
-  // the rows already held that match it, so toggling feels instant.
-  const [historyPending, setHistoryPending] = useState(false)
-  const historyCache = useRef(
-    new Map<string, { history: HistoryResponse["history"]; total: number; hasMore: boolean }>(),
-  )
-  const historyEpoch = useRef(0)
   const [loginOpen, setLoginOpen] = useState(false)
   const [tab, setTab] = useState(initialTab)
   const [refreshing, setRefreshing] = useState(false)
@@ -121,102 +102,21 @@ function App() {
     return response
   }
 
-  // The log is paged: the panel asks for the next slice with the filter it is
-  // currently showing, and appended pages keep the newest-first order.
-  const loadHistory = useCallback(
-    async (
-      options: { offset?: number; limit?: number; q?: string; onlyErrors?: boolean; epoch?: number } = {},
-    ) => {
-      const offset = options.offset ?? 0
-      const limit = Math.min(Math.max(options.limit ?? HISTORY_PAGE_SIZE, 1), 200)
-      const params = new URLSearchParams({
-        limit: String(limit),
-        offset: String(offset),
-      })
-      if (options.q?.trim()) params.set("q", options.q.trim())
-      if (options.onlyErrors) params.set("result", "error")
-      const response = await api<HistoryResponse>(`/api/history?${params.toString()}`, {
-        key: authKey,
-      })
-      const superseded = options.epoch !== undefined && options.epoch !== historyEpoch.current
-      if (!superseded) {
-        setHistory((current) => (offset > 0 ? [...current, ...response.history] : response.history))
-        setHistoryTotal(response.total)
-        setHistoryHasMore(response.hasMore)
-      }
-      if (offset === 0) {
-        historyCache.current.set(historyQueryKey({ q: options.q ?? "", onlyErrors: options.onlyErrors ?? false }), {
-          history: response.history,
-          total: response.total,
-          hasMore: response.hasMore,
-        })
-      }
-      return response
-    },
-    [authKey],
-  )
-
-  const applyHistoryQuery = useCallback(
-    (next: { q: string; onlyErrors: boolean }) => {
-      setHistoryQuery(next)
-      historyEpoch.current += 1
-      const epoch = historyEpoch.current
-      const cached = historyCache.current.get(historyQueryKey(next))
-      if (cached) {
-        setHistory(cached.history)
-        setHistoryTotal(cached.total)
-        setHistoryHasMore(cached.hasMore)
-      } else if (next.onlyErrors) {
-        // Narrowing is exact on the rows already loaded: show the matching ones
-        // now instead of waiting for the round trip. Widening has no local
-        // source, so the previous rows simply stay until the answer arrives.
-        setHistory((current) => current.filter((entry) => historyEntryMatches(entry, next)))
-      }
-      setHistoryPending(true)
-      void loadHistory({ q: next.q, onlyErrors: next.onlyErrors, epoch })
-        .catch(handleError)
-        .finally(() => {
-          if (historyEpoch.current === epoch) setHistoryPending(false)
-        })
-    },
-    [loadHistory, handleError],
-  )
-
-  const refreshHistory = useCallback(
-    () =>
-      loadHistory({
-        // Refreshing keeps the window the operator has scrolled to instead of
-        // collapsing a loaded second page back to the first one.
-        limit: Math.max(HISTORY_PAGE_SIZE, Math.min(history.length, 200)),
-        q: historyQuery.q,
-        onlyErrors: historyQuery.onlyErrors,
-      }),
-    [loadHistory, history.length, historyQuery],
-  )
-
-  const loadMoreHistory = useCallback(
-    () =>
-      loadHistory({
-        offset: history.length,
-        q: historyQuery.q,
-        onlyErrors: historyQuery.onlyErrors,
-      }),
-    [loadHistory, history.length, historyQuery],
-  )
-
-  const applySnapshot = useCallback((snapshot: CachedSnapshot) => {
+  const {
+    history, historyTotal, historyHasMore, historyCursor,
+    query: historyQuery, pending: historyPending, changeQuery: applyHistoryQuery,
+    refresh: refreshHistory, loadMore: loadMoreHistory, clear: clearHistory,
+  } = useHistory(authKey, initialSnapshot, handleError)
+  const applySnapshot = useCallback((snapshot: ConsoleSnapshot) => {
     setMeta(snapshot.meta)
     setModels(snapshot.models)
     setAccounts(snapshot.accounts)
     setKeys(snapshot.keys)
     setSecurity(snapshot.security)
-    setHistory(snapshot.history)
-    setHistoryTotal(snapshot.historyTotal ?? snapshot.history.length)
-    setHistoryHasMore(snapshot.historyHasMore ?? false)
   }, [])
 
-  const loadAll = async (key = authKey) => {
-    applySnapshot(await fetchSnapshot(key))
+  const loadAll = async () => {
+    await Promise.all([fetchSnapshot(authKey).then(applySnapshot), refreshHistory()])
   }
 
   useEffect(() => {
@@ -229,31 +129,46 @@ function App() {
         const probe = await api<MetaResponse>("/api/meta")
         if (probe.authRequired) return
       }
-      const snapshot = await fetchSnapshot(authKey)
+      const [snapshot] = await Promise.all([fetchSnapshot(authKey), refreshHistory()])
       if (active) applySnapshot(snapshot)
     }
     void load().catch((error: unknown) => { if (active) handleError(error) })
     return () => { active = false }
-  }, [authKey, applySnapshot, handleError])
+  }, [authKey, applySnapshot, handleError, refreshHistory])
 
   useEffect(() => {
     let active = true
-    void api<MetaResponse>("/api/meta")
-      .then((response) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let first = true
+    const controller = new AbortController()
+    const poll = async () => {
+      let loginRequired = false
+      try {
+        const response = await api<MetaResponse>("/api/meta", { key: authKey, signal: controller.signal })
         if (!active) return
         setMeta(response)
-        if (response.authRequired && !authKey) {
-          setLoginOpen(true)
-        }
-      })
-      .catch((error: unknown) => { if (active) handleError(error) })
-    return () => { active = false }
+        loginRequired = response.authRequired && !authKey
+        if (loginRequired) setLoginOpen(true)
+      } catch (error: unknown) {
+        // Keep the last known storage fault visible during network trouble.
+        if (active && first) handleError(error)
+      } finally {
+        first = false
+        if (active && !loginRequired) timer = setTimeout(() => void poll(), 15_000)
+      }
+    }
+    void poll()
+    return () => {
+      active = false
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [authKey, handleError])
 
   useEffect(() => {
     if (!models || !meta || !accounts || !keys || !security) return
-    writeSnapshot({ models, meta, history, accounts, keys, security })
-  }, [accounts, history, keys, meta, models, security])
+    writeSnapshot({ models, meta, history, historyTotal, historyHasMore, historyCursor, historyQuery, accounts, keys, security })
+  }, [accounts, history, historyTotal, historyHasMore, historyCursor, historyQuery, keys, meta, models, security])
 
   useEffect(() => {
     sessionStorage.setItem(TAB_STORAGE, tab)
@@ -475,13 +390,6 @@ function App() {
     await loadModels()
   }
 
-  const clearHistory = async () => {
-    await api("/api/history/clear", { key: authKey, body: {} })
-    setHistory([])
-    setHistoryTotal(0)
-    setHistoryHasMore(false)
-  }
-
   const statistics = useMemo(() => {
     const enabledAccounts = accounts?.accounts.filter((account) => account.enabled).length ?? 0
     const requestCount = Object.values(accounts?.stats ?? {}).reduce(
@@ -593,6 +501,7 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-[1400px] space-y-4 px-4 py-5">
+        <StorageAlert health={meta?.storage} />
         {meta && !meta.configured && (
           <Alert variant="destructive">
             <KeyRound />

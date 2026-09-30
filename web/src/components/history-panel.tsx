@@ -489,7 +489,7 @@ export function HistoryPanel({
         ) : narrow ? (
           <div className="space-y-2">
             {history.map((item, index) => (
-              <HistoryCard key={`${item.ts}-${item.model}-${index}`} item={item} />
+              <HistoryCard key={item.id ?? `${item.ts}-${item.model}-${index}`} item={item} />
             ))}
           </div>
         ) : (
@@ -518,7 +518,7 @@ export function HistoryPanel({
               </TableHeader>
               <TableBody>
                 {history.map((item, index) => (
-                  <TableRow key={`${item.ts}-${item.model}-${index}`}>
+                  <TableRow key={item.id ?? `${item.ts}-${item.model}-${index}`}>
                     <TableCell
                       className={cn(cell, "text-muted-foreground text-xs")}
                       title={item.session ? `会话 ${item.session}` : undefined}

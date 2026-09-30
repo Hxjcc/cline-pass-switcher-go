@@ -26,6 +26,7 @@ export function historyEntryMatches(
     entry.kind,
     entry.effort,
     entry.generationId,
+    entry.session,
     entry.error ?? "",
   ].some((field) => (field ?? "").toLowerCase().includes(needle))
 }

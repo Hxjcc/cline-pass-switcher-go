@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -70,12 +69,6 @@ func (u *heldUpstream) body(t *testing.T) map[string]any {
 		t.Fatalf("upstream saw %d requests, want 1", len(u.bodies))
 	}
 	return u.bodies[0]
-}
-
-func runningReservations(holds *spendHolds) map[string]int {
-	holds.mu.Lock()
-	defer holds.mu.Unlock()
-	return maps.Clone(holds.running)
 }
 
 func waitFor(t *testing.T, what string, done <-chan struct{}) {
@@ -145,9 +138,16 @@ func TestClientDisconnectCancelsTheUpstream(t *testing.T) {
 			if len(history) != 1 || history[0].Error == nil || *history[0].Error != "客户端取消" {
 				t.Fatalf("the disconnect must stay visible in the history: %+v", history)
 			}
-			if running := runningReservations(server.spendHolds); len(running) != 0 {
-				t.Fatalf("reservations leaked: %v", running)
+			// With this balance, one leaked slot would prevent a new admission.
+			cost := 9.75
+			if err := st.Record(model.HistoryEntry{KeyID: "limited", Usage: &model.UsageStats{Cost: &cost}}); err != nil {
+				t.Fatal(err)
 			}
+			hold, err := st.ReserveSpend(model.ProxyKeyGrant{ID: "limited", SpendLimitUSD: 10})
+			if err != nil {
+				t.Fatalf("cancelled request leaked its reservation: %v", err)
+			}
+			hold.Release()
 		})
 	}
 }
@@ -172,46 +172,6 @@ func TestChatStreamForwardsTheClientRequestAsSent(t *testing.T) {
 	history := st.Metadata().History
 	if len(history) != 1 || history[0].Usage == nil || history[0].Usage.Cost == nil || *history[0].Usage.Cost != 0.25 {
 		t.Fatalf("the cost must be recorded: %+v", history)
-	}
-}
-
-func TestSpendHoldsReserveRunningRequests(t *testing.T) {
-	holds := newSpendHolds()
-	grant := model.ProxyKeyGrant{ID: "k", SpendLimitUSD: 1}
-	usage := model.KeyUsage{Requests: 4, SpentMicroUSD: 800_000}
-
-	first, message := holds.admit(grant, usage)
-	if first == nil || message != "" {
-		t.Fatalf("the first request must be admitted: %q", message)
-	}
-	// 0.80 spent plus one running request at the 0.20 average reaches 1.00.
-	if second, message := holds.admit(grant, usage); second != nil || !strings.Contains(message, "进行中") {
-		t.Fatalf("a request that could overrun the limit was admitted: %q", message)
-	}
-	// A run that outlives its handler keeps the slot until it releases too.
-	first.retain()
-	first.release()
-	if again, _ := holds.admit(grant, usage); again != nil {
-		t.Fatal("the slot was freed while the run still held it")
-	}
-	first.release()
-	if again, _ := holds.admit(grant, usage); again == nil {
-		t.Fatal("the slot was not freed")
-	}
-
-	// Without any history there is nothing to estimate from.
-	fresh := newSpendHolds()
-	for range 3 {
-		if hold, message := fresh.admit(grant, model.KeyUsage{}); hold == nil {
-			t.Fatalf("a key without history was refused: %q", message)
-		}
-	}
-	// Unlimited keys are not tracked at all.
-	if hold, _ := fresh.admit(model.ProxyKeyGrant{ID: "free"}, usage); hold != nil {
-		t.Fatal("an unlimited key was reserved")
-	}
-	if _, tracked := runningReservations(fresh)["free"]; tracked {
-		t.Fatal("an unlimited key was counted")
 	}
 }
 

@@ -25,6 +25,14 @@ const (
 	journalSyncInterval = 32
 )
 
+type journalFile interface {
+	Write([]byte) (int, error)
+	Stat() (os.FileInfo, error)
+	Sync() error
+	Truncate(int64) error
+	Close() error
+}
+
 // The journal is the commit point for both configuration and metadata. JSON
 // snapshots are materialized views: interrupted two-file writes are replayed
 // from the last metadata sequence, without duplicating history or counters.
@@ -60,7 +68,8 @@ func (s *Store) commitLocked(entry journalEntry) error {
 	// stop rewriting metadata.json once per model.
 	snapshotNow := durable && entry.Kind != "model"
 	if err = s.appendJournalLocked(append(raw, '\n'), durable); err != nil {
-		return err
+		s.writeErr = fmt.Errorf("store journal write failed; restart to recover: %w", err)
+		return s.writeErr
 	}
 	// Detach caller-owned maps and pointers before publishing committed state.
 	s.applyEntry(model.Clone(entry))
@@ -86,7 +95,7 @@ func (s *Store) commitLocked(entry journalEntry) error {
 
 // journalHandleLocked keeps one append handle open: reopening and closing the
 // file for every commit was two extra syscalls per request for no benefit.
-func (s *Store) journalHandleLocked() (*os.File, error) {
+func (s *Store) journalHandleLocked() (journalFile, error) {
 	if s.journal != nil {
 		return s.journal, nil
 	}
@@ -130,7 +139,8 @@ func (s *Store) appendJournalLocked(raw []byte, syncNow bool) error {
 func (s *Store) syncJournalLocked() error {
 	f, err := s.journalHandleLocked()
 	if err != nil {
-		return err
+		s.writeErr = fmt.Errorf("open store journal for sync; restart to recover: %w", err)
+		return s.writeErr
 	}
 	if err := f.Sync(); err != nil {
 		s.writeErr = fmt.Errorf("store journal sync failed; restart to recover: %w", err)
@@ -160,6 +170,10 @@ func (s *Store) applyEntry(entry journalEntry) {
 		s.meta.Models[entry.ModelID] = *entry.ModelMeta
 	case "record":
 		e := *entry.Record
+		if e.ID == "" {
+			// Records written before row IDs existed still replay identically.
+			e.ID = fmt.Sprintf("journal_%d", entry.Sequence)
+		}
 		if e.Error == nil && strings.HasPrefix(e.Model, "cline-pass/") && !slices.Contains(s.config.KnownModels, e.Model) {
 			s.config.KnownModels = append(s.config.KnownModels, e.Model)
 			model.NormalizeConfig(&s.config)
@@ -285,7 +299,8 @@ func (s *Store) recoverJournal() error {
 	return syncDirectory(filepath.Dir(s.journalPath))
 }
 
-func (s *Store) checkpointLocked() error {
+func (s *Store) checkpointLocked() (err error) {
+	defer func() { s.checkpointErr = err }()
 	if s.unsynced > 0 {
 		if err := s.syncJournalLocked(); err != nil {
 			return err

@@ -20,12 +20,16 @@ type Store struct {
 	lock        *os.File
 	// journal stays open between commits; unsynced counts request records that
 	// are in the page cache but not yet fsynced.
-	journal      *os.File
-	unsynced     int
-	journalSyncs uint64
-	pending      int
-	closed       bool
-	writeErr     error
+	journal       journalFile
+	unsynced      int
+	journalSyncs  uint64
+	pending       int
+	closed        bool
+	writeErr      error
+	recordErr     error
+	checkpointErr error
+	// Reservations share the ledger lock with Record and ResetKeyUsage.
+	spendRunning map[string]int
 	// configFileKeys remembers which top-level keys config.json actually
 	// carried at startup. Effective-value reporting needs it to tell an
 	// explicitly configured value from a built-in default; the running
@@ -72,12 +76,14 @@ func Open(dataDir string) (*Store, error) {
 	}
 	model.ApplyEnvironment(&store.config)
 	model.NormalizeConfig(&store.config)
-	if migrateStatsToIDs(store.config, &store.meta) {
+	historyMigrated := ensureHistoryIDs(&store.meta)
+	if migrateStatsToIDs(store.config, &store.meta) || historyMigrated {
 		// The rewrite has to be part of the durable state before any new
 		// journal record is written. Otherwise a crash can leave a snapshot
 		// that still counts under the old name while the journal counts under
 		// the identity, and recovery would only see one of the two halves.
-		// Replaying this migration is safe: it merges equal counters.
+		// Replaying this migration is safe: it merges equal counters. Newly
+		// assigned history IDs must also be durable before clients use them.
 		if err := store.UpdateMetadata(func(*model.Metadata) {}); err != nil {
 			return nil, err
 		}
@@ -118,6 +124,7 @@ func (s *Store) UpdateMetadata(update func(*model.Metadata)) error {
 	next := model.Clone(s.meta)
 	update(&next)
 	model.NormalizeMetadata(&next)
+	ensureHistoryIDs(&next)
 	return s.commitLocked(journalEntry{Kind: "metadata", Metadata: &next})
 }
 
@@ -142,7 +149,14 @@ func (s *Store) Record(entry model.HistoryEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.commitLocked(journalEntry{Kind: "record", Record: &entry})
+	entry.ID = newHistoryID()
+	err := s.commitLocked(journalEntry{Kind: "record", Record: &entry})
+	if err != nil {
+		// Even an unserializable record leaves accounting incomplete. Do not
+		// reopen limited keys merely because a later disk write succeeds.
+		s.recordErr = err
+	}
+	return err
 }
 
 // RemoveModel drops a model from the subscription list together with its

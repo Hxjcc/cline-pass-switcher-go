@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
 
@@ -80,6 +82,12 @@ func constantTimeEqual(left, right string) bool {
 func isClientPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/") ||
 		isModelsPath(path) || isChatPath(path) || isResponsesPath(path) || isResponsesCompactPath(path)
+}
+
+func isGenerationRequest(request *http.Request) bool {
+	path := request.URL.Path
+	return request.Method == http.MethodPost &&
+		(isChatPath(path) || isResponsesPath(path) || isResponsesCompactPath(path))
 }
 
 // authorizeAdmin gates the console and the management API.
@@ -171,14 +179,21 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 		})
 		return false
 	}
-	if message := s.keyLimitMessage(grant); message != "" {
-		writeKeyLimit(writer, "exceeded", message)
-		return false
-	}
-	hold, message := s.spendHolds.admit(grant, s.store.KeyUsage()[grant.ID])
-	if message != "" {
-		writeKeyLimit(writer, "reserved", message)
-		return false
+	var hold *store.SpendReservation
+	if isGenerationRequest(request) {
+		if grant.AccountID != "" {
+			account := s.store.FindAccount(grant.AccountID)
+			if account.Key == "" || !account.Enabled {
+				writeKeyLimit(writer, "exceeded", "该代理密钥绑定的账号当前不可用（已禁用或已删除）")
+				return false
+			}
+		}
+		var err error
+		hold, err = s.store.ReserveSpend(grant)
+		if err != nil {
+			writeSpendError(writer, err)
+			return false
+		}
 	}
 	s.clientThrottle.succeed(client)
 	ctx := withCallerKey(request.Context(), callerKey{
@@ -204,21 +219,23 @@ func writeKeyLimit(writer http.ResponseWriter, reason, message string) {
 	})
 }
 
-// keyLimitMessage reports why an issued key may not run, or an empty string
-// when it may.
-func (s *Server) keyLimitMessage(grant model.ProxyKeyGrant) string {
-	usage := s.store.KeyUsage()[grant.ID]
-	if grant.SpendLimitUSD > 0 && usage.SpentUSD() >= grant.SpendLimitUSD {
-		return "该代理密钥的额度已用尽（限额 " + formatUSD(grant.SpendLimitUSD) +
-			"，已用 " + formatUSD(usage.SpentUSD()) + "），请联系管理员提额或改用新密钥"
-	}
-	if grant.AccountID != "" {
-		account := s.store.FindAccount(grant.AccountID)
-		if account.Key == "" || !account.Enabled {
-			return "该代理密钥绑定的账号当前不可用（已禁用或已删除）"
+func writeSpendError(writer http.ResponseWriter, err error) {
+	var limit *store.SpendLimitError
+	if errors.As(err, &limit) {
+		message := "该代理密钥的额度已用尽（限额 " + formatUSD(limit.LimitUSD) +
+			"，已用 " + formatUSD(limit.Usage.SpentUSD()) + "），请联系管理员提额或改用新密钥"
+		if limit.Reason == "reserved" {
+			message = "该代理密钥的额度即将用尽（限额 " + formatUSD(limit.LimitUSD) +
+				"，已用 " + formatUSD(limit.Usage.SpentUSD()) + "，另有 " + strconv.Itoa(limit.Running) +
+				" 个请求进行中，预计还会花费约 " + formatUSD(float64(limit.ExpectedMicroUSD)/1e6) + "），请等这些请求结束后再试"
 		}
+		writeKeyLimit(writer, limit.Reason, message)
+		return
 	}
-	return ""
+	writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{
+		"type": "server_error", "code": "accounting_unavailable",
+		"message": "服务暂时无法可靠记录费用，已暂停有额度上限的密钥的新生成和压缩请求，请联系管理员处理",
+	}})
 }
 
 // openRequestAllowed requires a trusted local connection whenever this API

@@ -196,6 +196,13 @@ export interface MetaResponse {
   authRequired: boolean
   proxyBase: string
   configured: boolean
+  storage?: StorageHealth
+}
+
+export interface StorageHealth {
+  status: "ok" | "degraded" | "unavailable"
+  message?: string
+  detail?: string
 }
 
 export interface TraceAttempt {
@@ -235,6 +242,7 @@ export interface UsageStats {
 }
 
 export interface HistoryItem {
+  id?: string
   ts: number
   model: string
   provider?: string
@@ -274,6 +282,7 @@ export interface HistoryResponse {
   offset: number
   limit: number
   hasMore: boolean
+  nextCursor?: string
 }
 
 export interface AccountTestResponse {

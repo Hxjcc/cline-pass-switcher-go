@@ -1,13 +1,17 @@
 package httpapi
 
 import (
+	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // The console polls and re-filters /api/history on a remote connection, so the
@@ -50,6 +54,80 @@ func TestAPIResponsesStayPlainWithoutGzip(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "authRequired") {
 		t.Fatalf("plain body should be JSON: %s", response.Body.String())
+	}
+}
+
+// Hold the upstream open until the client receives content over a real HTTP
+// connection. Checking only the finished body would miss buffered Chat output
+// and a Responses stream cut short by a writer that cannot flush.
+func TestClientStreamAliasesFlushWithAndWithoutGzip(t *testing.T) {
+	for _, path := range []string{
+		"/chat/completions", "/v1/chat/completions", "/api/v1/chat/completions",
+		"/responses", "/v1/responses", "/api/v1/responses",
+	} {
+		for _, encoding := range []string{"identity", "gzip"} {
+			t.Run(path+"/"+encoding, func(t *testing.T) {
+				u, us := newHeldUpstream(t)
+				_, server := newTestServer(t)
+				configureDrainKeys(t, server, us.URL)
+				gateway := httptest.NewServer(server)
+				defer func() {
+					gateway.Close()
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := server.Shutdown(ctx); err != nil {
+						t.Error(err)
+					}
+				}()
+				release := sync.OnceFunc(func() { close(u.proceed) })
+				defer release()
+
+				body, terminal := streamChatBody, "data: [DONE]"
+				if strings.HasSuffix(path, "/responses") {
+					body = `{"model":"cline-pass/test","input":"hello","stream":true}`
+					terminal = "event: response.completed"
+				}
+				request, err := http.NewRequest(http.MethodPost, gateway.URL+path, strings.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set("Authorization", "Bearer master")
+				request.Header.Set("Accept-Encoding", encoding)
+				client := gateway.Client()
+				client.Timeout = 5 * time.Second
+				response, err := client.Do(request)
+				if err != nil {
+					t.Fatalf("stream did not reach the client while the upstream was open: %v", err)
+				}
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
+					t.Fatalf("expected SSE, got status %d and headers %v", response.StatusCode, response.Header)
+				}
+				if got := response.Header.Get("Content-Encoding"); got != "" {
+					t.Fatalf("client streams must bypass console compression, got %q", got)
+				}
+
+				reader := bufio.NewReader(response.Body)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						t.Fatalf("first content was not flushed while the upstream was open: %v", err)
+					}
+					if strings.Contains(line, `"start"`) {
+						break
+					}
+				}
+				release()
+				tail, err := io.ReadAll(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(tail), `" end"`) || !strings.Contains(string(tail), terminal) {
+					t.Fatalf("stream lost its remaining content or completion event: %s", tail)
+				}
+			})
+		}
 	}
 }
 
