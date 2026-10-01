@@ -327,7 +327,28 @@ func isWebSearchToolType(typeName string) bool {
 // for the hosted web_search. The gateway performs the search, so the client only
 // ever sees the finished answer.
 func (context *Context) addProviderWebSearch() {
+	if !context.providerToolsAvailable() {
+		return
+	}
 	context.addProviderTool(context.webSearchTool)
+}
+
+// modelPipelineDirect marks the pass-through route.
+const modelPipelineDirect = "direct"
+
+// providerToolsAvailable reports whether this model can carry the gateway's own
+// tool ids. A direct route (OpenRouter/pass-through) forwards the tool list to
+// the provider, which answers an unknown type with "tools[n].type is illegal"
+// and fails the whole turn, so that route gets no gateway tool at all and the
+// model falls back to whatever it can do on its own.
+func (context *Context) providerToolsAvailable() bool {
+	return context != nil && context.modelPipeline != modelPipelineDirect
+}
+
+// providerSearchAvailable reports whether a mapped search tool is actually
+// declared in this request.
+func (context *Context) providerSearchAvailable() bool {
+	return context != nil && context.providerToolsAvailable() && context.isProviderTool(context.webSearchTool)
 }
 
 // addProviderTool declares one gateway-executed tool exactly once and remembers

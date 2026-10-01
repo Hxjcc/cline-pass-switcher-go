@@ -118,6 +118,7 @@ Responses 的 `web_search` 是由服务端执行的托管工具，Chat Completio
 - 只有模型实际调用这些工具时才产生费用。上游返回的 `gateway_cost` 包含工具的按次费用，但实测 Cline Pass 账单只按 `cost`（模型费用）扣费；搜索结果会作为输入 token 进入模型，一次搜索可能带来上万输入 token，这部分按模型价格计费。
 - 搜索在上游执行，客户端只看到最终回答，不会收到 `url_citation` 之类的结构化引用；来源会以正文中的链接给出。
 - 用 `tool_choice` 强制使用 `web_search` 时，网关把它翻译成上游的 `tool_choice: "required"`，让这一轮必须调用搜索；没有配置搜索工具（`WEB_SEARCH_UPSTREAM=off` 等）则返回 400。
+- 搜索工具只对**planner 线路**的模型生效：网关自己执行搜索需要它的私有工具 ID（`vercel:...`）。走 **direct 线路**（OpenRouter 透传）的模型拿到这份工具清单后会转发给渠道，渠道直接回 400 `tools[n].type is illegal` —— 所以这类模型**不声明**网关搜索工具（模型只能用它自己的工具）。想给 direct 线路的模型加搜索，需要的是渠道自己的机制（例如 OpenRouter 的 web 插件），不是 `WEB_SEARCH_UPSTREAM`。
 
 ## Windows shell 兼容
 

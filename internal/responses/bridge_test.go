@@ -2033,6 +2033,48 @@ func TestWebSearchPolicyIsInjectedOnlyWhenDeclared(t *testing.T) {
 	}
 }
 
+// The gateway's own tool ids only work on its planner route. A direct route
+// hands the tool list to the provider, which answers "tools[n].type is illegal"
+// and fails the turn, so the declaration has to be dropped there.
+func TestDirectPipelineDropsTheGatewaySearchTool(t *testing.T) {
+	body := map[string]any{
+		"model": "cline-pass/glm-5.3-flash", "input": "hi",
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}
+	chat, context, err := ToChatWithOptions(body, Options{
+		WebSearchUpstream: "exa",
+		ModelPipeline:     "direct",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range jsonx.Slice(chat["tools"]) {
+		tool := jsonx.Map(raw)
+		if strings.HasPrefix(jsonx.String(tool["type"]), "vercel:") {
+			t.Fatalf("a direct route must not declare the gateway tool: %#v", tool)
+		}
+	}
+	if strings.Contains(context.webSearchPolicy(), "Web search policy") {
+		// The policy text only makes sense next to a tool the gateway runs.
+		t.Fatalf("policy text leaked without a provider tool: %q", context.webSearchPolicy())
+	}
+
+	// The same declaration on the planner route still becomes the gateway tool.
+	planner, _, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa", ModelPipeline: "planner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, raw := range jsonx.Slice(planner["tools"]) {
+		if jsonx.String(jsonx.Map(raw)["type"]) == "vercel:exa_search" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the planner route must keep the gateway tool: %#v", planner["tools"])
+	}
+}
+
 func TestProviderToolCallNeverReachesTheClient(t *testing.T) {
 	_, context, err := ToChatWithOptions(map[string]any{
 		"model": "cline-pass/glm-5.3-flash", "input": "search", "stream": true,

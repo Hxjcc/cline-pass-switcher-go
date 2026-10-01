@@ -43,6 +43,8 @@ type Context struct {
 	// Empty keeps the capability off.
 	webSearchTool string
 	webFetchTool  string
+	// modelPipeline is the gateway route this model uses; see Options.ModelPipeline.
+	modelPipeline string
 	// compactionRecent is the verbatim tail embedded in compaction items; it
 	// survives the summary so exact paths, commands and errors are not lost.
 	compactionRecent []CompactionRecentMessage
@@ -83,6 +85,12 @@ type Options struct {
 	// (vercel:browserbase_fetch). It is only declared when the request carries a
 	// link in user-authored text.
 	WebFetchUpstream string
+	// ModelPipeline is the route the gateway uses for this model ("planner" or
+	// "direct"). The gateway's own tool ids (vercel:...) only work on the
+	// planner route: a direct route forwards the tool list to the provider,
+	// which rejects an unknown type with a 400. Empty means "unknown", which is
+	// treated as the planner route to keep the previous behaviour.
+	ModelPipeline string
 	// RecentCompactionTokens is the verbatim tail (estimated tokens) kept inside
 	// compaction items. Zero disables it: the item then carries the summary only.
 	RecentCompactionTokens int
@@ -156,6 +164,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		RawReasoning:       options.RawReasoning,
 		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
+		modelPipeline:      strings.TrimSpace(options.ModelPipeline),
 		shellCompat:        normaliseShellCompat(options.ShellCompat),
 		shellCompatEnforce: options.ShellCompatEnforce,
 		providerTools:      map[string]struct{}{},
@@ -179,7 +188,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"], 0)
-	if context.webFetchTool != "" && requestHasUserURL(body["input"]) {
+	if context.providerToolsAvailable() && context.webFetchTool != "" && requestHasUserURL(body["input"]) {
 		context.addProviderTool(context.webFetchTool)
 	}
 	if jsonx.String(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
@@ -518,7 +527,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	// A client-pinned hosted search can only be honoured when the request also
 	// declared web_search and the proxy mapped it onto a gateway tool;
 	// otherwise the forced choice would silently degrade.
-	if context.forcedHostedSearch() && !context.isProviderTool(context.webSearchTool) {
+	if context.forcedHostedSearch() && !context.providerSearchAvailable() {
 		return nil, nil, unsupported("tool_choice.type", "forced hosted web search without a configured search upstream")
 	}
 	if choice := context.toolChoiceToChat(context.ResponseToolChoice); choice != nil {
