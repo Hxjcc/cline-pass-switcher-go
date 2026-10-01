@@ -26,6 +26,10 @@ services:
       # 不要留空：控制台保存过的值会留在 config.json 里，空值不会覆盖它。
       - WEB_SEARCH_UPSTREAM=${WEB_SEARCH_UPSTREAM-exa}
       - WEB_FETCH_UPSTREAM=${WEB_FETCH_UPSTREAM-browserbase_fetch}
+      # 会话粘性有效期（Go duration，如 10m / 2h）；留空 = 60m。
+      - STICK_TTL=${STICK_TTL:-}
+      # 结构化输出校验失败时，把上游原始文本写到该目录（仅排障，含模型输出）；留空 = 关闭。
+      - SCHEMA_FAIL_DUMP=${SCHEMA_FAIL_DUMP:-}
       # Windows 客户端兼容：把工具的 shell 参数收窄成必填的 powershell，
       # 模型忘带 shell 时客户端就不会回退 cmd.exe。留空 = 关闭（默认）。
       - SHELL_COMPAT=${SHELL_COMPAT:-}

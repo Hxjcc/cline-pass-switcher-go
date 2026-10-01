@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -190,4 +193,61 @@ func describeStructuredFailure(text string) string {
 		return "output is not valid JSON: " + boundedSchemaError(err)
 	}
 	return "output is not a single JSON value"
+}
+
+// dumpStructuredFailure writes the raw upstream text plus the schema and
+// failure reason to SCHEMA_FAIL_DUMP (a directory) when strict schema
+// validation fails. The switch is off by default: the dump contains generated
+// content and exists for local diagnosis only.
+func (state *StreamState) dumpStructuredFailure(reason error) {
+	dir := strings.TrimSpace(os.Getenv("SCHEMA_FAIL_DUMP"))
+	switch strings.ToLower(dir) {
+	case "", "0", "off", "false", "no":
+		return
+	}
+	text := state.structuredFailureText()
+	payload := map[string]any{
+		"time":          time.Now().Format(time.RFC3339Nano),
+		"model":         state.context.Model,
+		"response_id":   state.responseID,
+		"finish_reason": state.finishReason,
+		"reason":        reason.Error(),
+		"text_length":   len(text),
+		"text":          text,
+		"schema":        jsonx.Map(jsonx.Map(state.context.ResponseText)["format"])["schema"],
+	}
+	if state.context.Metadata != nil {
+		payload["metadata"] = state.context.Metadata
+	}
+	if state.reasoning != nil {
+		payload["reasoning"] = state.reasoning.Text.String()
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	name := fmt.Sprintf("schema-failure-%d.json", time.Now().UnixNano())
+	_ = os.WriteFile(filepath.Join(dir, name), data, 0o600)
+}
+
+// structuredFailureText concatenates the final message text the validator
+// looked at, so a dump shows exactly what the upstream produced.
+func (state *StreamState) structuredFailureText() string {
+	var text strings.Builder
+	for _, item := range state.outputItems() {
+		output := jsonx.Map(item)
+		if jsonx.String(output["type"]) != "message" {
+			continue
+		}
+		for _, raw := range jsonx.Slice(output["content"]) {
+			part := jsonx.Map(raw)
+			if jsonx.String(part["type"]) == "output_text" {
+				text.WriteString(jsonx.String(part["text"]))
+			}
+		}
+	}
+	return text.String()
 }

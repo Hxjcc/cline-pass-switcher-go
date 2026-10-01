@@ -961,6 +961,7 @@ func (state *StreamState) finish(events []Event, status, incompleteReason string
 	state.usage = reportedUsage(state.rawUsage, state.usageLegs(), state.context.InputTokenCap)
 	if status == "completed" {
 		if err := state.validateStructuredOutput(); err != nil {
+			state.dumpStructuredFailure(err)
 			return append(events, state.Fail(err.Error(), "upstream_schema_validation_failed")...)
 		}
 	}

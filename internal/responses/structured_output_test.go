@@ -164,6 +164,36 @@ func TestStrictStreamBuffersRepairsBeforeDelivery(t *testing.T) {
 	}
 }
 
+func TestStructuredFailureDumpWritesRawText(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SCHEMA_FAIL_DUMP", dir)
+	context := strictContext(t, `{"type":"object","properties":{"token":{"type":"string"}},"required":["token"],"additionalProperties":false}`)
+	if out, err := FromChat(completedChat(`{"token":`), context); out != nil || err == nil {
+		t.Fatal("expected schema failure")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("dump not written: %v %v", entries, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if text := jsonx.String(payload["text"]); text != `{"token":` {
+		t.Fatalf("dump text = %q", text)
+	}
+	if reason := jsonx.String(payload["reason"]); !strings.Contains(reason, "not a single valid JSON value") {
+		t.Fatalf("dump reason = %q", reason)
+	}
+	if payload["schema"] == nil {
+		t.Fatal("dump lost the schema")
+	}
+}
+
 func TestStrictSchemaPreservesOtherOutcomes(t *testing.T) {
 	context := strictContext(t, `{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)
 	for _, tc := range []struct {

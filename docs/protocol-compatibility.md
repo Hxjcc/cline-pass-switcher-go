@@ -137,6 +137,7 @@ Codex 的命令执行工具带有一个 `shell` 参数。模型漏填时，Windo
 - 修形后仍不符合 Schema（字段名、类型、枚举等）：非流式返回 502（`upstream_schema_validation_failed`）；流式以 `response.failed` 事件结束，错误码相同。这类失败不会自动重试。
 - 找不到完整 JSON 值时同样失败，错误信息会说明原因类别（空输出 / 以代码围栏开头 / 首个 JSON 之后还有多余文本 / JSON 语法错误），但不包含模型生成的内容。
 - 网关只做上述"取出 JSON"的修形，不改字段名、不转换类型；本来就是单独一个 JSON 值的输出保留原文（含原有空白）。
+- 排障开关：`SCHEMA_FAIL_DUMP=/data/schema-failures` 时，校验失败会把上游原始文本、Schema、reasoning 与失败原因写进该目录（默认关闭，文件含模型输出，仅本机诊断用）。
 - 工具调用、拒答、因长度或内容过滤而不完整的输出不参与校验，保留原来的状态。
 - `strict: false` 时只转发 Schema，不在本地校验。
 
