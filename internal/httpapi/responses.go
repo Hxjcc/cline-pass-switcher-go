@@ -64,25 +64,36 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	modelConfig := s.store.ModelConfig(modelID)
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	stream, _ := body["stream"].(bool)
-	if stream {
+	strictStructured := bridgeContext.StrictOutput()
+	if stream && !strictStructured {
 		s.handleStreamingResponses(writer, request, body, chatBody, bridgeContext, modelID, modelConfig)
 		return
 	}
+	// Strict structured requests are answered from one buffered upstream turn
+	// so the bridge can wrap plain text or run a single reformatting repair
+	// before any partial, non-JSON text reaches the client. The upstream call
+	// itself must be non-streaming: AttemptNonStream only parses JSON bodies.
+	upstreamBody := chatBody
+	if strictStructured {
+		upstreamBody = model.Clone(chatBody)
+		delete(upstreamBody, "stream")
+		delete(upstreamBody, "stream_options")
+	}
 
-	result := s.runNonStreamChain(request.Context(), modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
+	result := s.runNonStreamChain(request.Context(), modelID, upstreamBody, modelConfig, s.upstream.NonStreamTimeout())
 	if result.Out == nil {
 		writeJSON(writer, http.StatusBadGateway, map[string]any{
 			"error": map[string]any{"message": "no upstream response", "type": "upstream_error"},
 		})
 		return
 	}
-	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
+	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, upstreamBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(result.Started).Milliseconds(),
-			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Stream: stream, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
@@ -93,16 +104,23 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	response, err := responsesbridge.FromChat(result.Out, bridgeContext)
+	if err != nil && strictStructured {
+		result, response, err = s.repairStructuredOutput(request.Context(), modelID, modelConfig, upstreamBody, bridgeContext, result, err)
+	}
 	if err != nil {
 		message := err.Error()
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, Provider: result.Routing.FinalProvider,
 			Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
-			Stream: false, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
+			Stream: stream, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
+		if stream {
+			s.writeBufferedResponsesStream(writer, result, bridgeContext)
+			return
+		}
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": conversionErrorBody(err)})
 		return
 	}
@@ -110,7 +128,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		TS: time.Now().UnixMilli(), Model: modelID, Session: sessionIDFromBody(chatBody),
 		Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
-		Stream: false, Kind: "responses",
+		Stream: stream, Kind: "responses",
 		Error: nil, Account: result.Account.Name, AccountID: result.Account.ID,
 		Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 	}
@@ -118,7 +136,103 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	applyChatStats(&entry, result.Out, entry.MS)
 	applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	s.record(request.Context(), entry)
+	if stream {
+		s.writeBufferedResponsesStream(writer, result, bridgeContext)
+		return
+	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+// repairStructuredOutput rewrites an upstream answer that ignored a strict
+// JSON Schema. Plain text is wrapped locally when the schema has a single
+// string property (conversation titles); otherwise one low-effort
+// reformatting call carries only the failed text and the schema. The caller
+// re-validates the returned response, so a repair that still does not satisfy
+// the schema keeps the original failure.
+func (s *Server) repairStructuredOutput(
+	ctx context.Context,
+	modelID string,
+	modelConfig model.PerModelConfig,
+	chatBody map[string]any,
+	bridgeContext *responsesbridge.Context,
+	result chainResult,
+	failure error,
+) (chainResult, map[string]any, error) {
+	schema := bridgeContext.StructuredSchema()
+	if schema == nil {
+		return result, nil, failure
+	}
+	text := firstChatChoiceText(result.Out)
+	if strings.TrimSpace(text) == "" {
+		return result, nil, failure
+	}
+	if wrapped, ok := responsesbridge.WrapPlainTextForSchema(text, schema); ok {
+		patched := patchChatCompletionText(result.Out, wrapped)
+		if response, err := responsesbridge.FromChat(patched, bridgeContext); err == nil {
+			result.Out = patched
+			return result, response, nil
+		}
+	}
+	repaired := s.runNonStreamChain(ctx, modelID, responsesbridge.StructuredRepairBody(chatBody, text, schema), modelConfig, s.upstream.NonStreamTimeout())
+	if repaired.Out == nil || repaired.Status != http.StatusOK {
+		return result, nil, failure
+	}
+	response, err := responsesbridge.FromChat(repaired.Out, bridgeContext)
+	if err != nil {
+		return result, nil, failure
+	}
+	return repaired, response, nil
+}
+
+// firstChatChoiceText returns the buffered completion's visible text.
+func firstChatChoiceText(chat map[string]any) string {
+	choices := jsonx.Slice(chat["choices"])
+	if len(choices) == 0 {
+		return ""
+	}
+	message := jsonx.Map(jsonx.Map(choices[0])["message"])
+	if message == nil {
+		return ""
+	}
+	if text, ok := message["content"].(string); ok {
+		return text
+	}
+	var builder strings.Builder
+	for _, raw := range jsonx.Slice(message["content"]) {
+		if part := jsonx.Map(raw); part != nil {
+			builder.WriteString(jsonx.String(part["text"]))
+		}
+	}
+	return builder.String()
+}
+
+func patchChatCompletionText(chat map[string]any, text string) map[string]any {
+	patched := model.Clone(chat)
+	choices := jsonx.Slice(patched["choices"])
+	if len(choices) == 0 {
+		return patched
+	}
+	if message := jsonx.Map(jsonx.Map(choices[0])["message"]); message != nil {
+		message["content"] = text
+	}
+	return patched
+}
+
+// writeBufferedResponsesStream replays a buffered upstream turn as the full
+// Responses event sequence for clients that asked for SSE. Strict structured
+// requests take this path so a failed or repaired answer is never streamed
+// partially.
+func (s *Server) writeBufferedResponsesStream(writer http.ResponseWriter, result chainResult, bridgeContext *responsesbridge.Context) {
+	events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
+	if err != nil {
+		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}})
+		return
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), events)
 }
 
 // conversionErrorBody keeps the state machine's error code/type when a

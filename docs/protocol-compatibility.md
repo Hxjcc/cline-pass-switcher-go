@@ -133,9 +133,9 @@ Codex 的命令执行工具带有一个 `shell` 参数。模型漏填时，Windo
 
 - 校验器为 `github.com/santhosh-tekuri/jsonschema/v6`，按 JSON Schema draft 2020-12 并开启 format 校验，支持 Schema 内部的 `$defs` / `$ref`，不加载任何外部引用。
 - Schema 本身无效：返回 400（`invalid_json_schema`），`param` 指出字段，不调用上游。
-- 最终输出不符合 Schema：非流式返回 502（`upstream_schema_validation_failed`）；流式以 `response.failed` 事件结束，错误码相同。错误信息会带上失败类别（空输出 / 以代码围栏开头 / 首个 JSON 之后还有多余文本 / JSON 语法错误），但不包含模型生成的内容；这类失败不会自动重试。
-- 流式请求的增量内容照常实时发送，校验只在结束时进行，不会撤回已经发出的内容。调用方必须等到 `response.completed` 才能把结果当作合格的结构化数据。
-- 网关不会修正输出：不去掉 Markdown 代码块、不改字段名、不转换类型。合格的输出保留原文。
+- 上游没有按 Schema 输出时（实测 GLM 会直接给纯文本标题或拒绝话术），网关先尝试本机修复：Schema 只有一个字符串字段（会话标题这类）时，把纯文本包成 `{"字段": "文本"}` 再校验；包不进去时再补发一次"改写为 JSON"的小请求 —— 只带原文与 Schema，low 推理档，最多一次。修复结果仍要完整通过 Schema 校验才会返回，不改字段名、不转换类型。
+- strict 请求在网关内部按非流式处理，事件流在结果确定后一次性发出，避免把第一次的无效文本流给客户端；正文不再是逐字流。修复回合的用量按最终那次调用统计。
+- 修复后仍不符合 Schema（字段名、类型、枚举、长度等）：非流式返回 502（`upstream_schema_validation_failed`）；流式以 `response.failed` 事件结束，错误码相同。错误信息会带上失败类别，但不包含模型生成的内容。
 - 排障开关：`SCHEMA_FAIL_DUMP=/data/schema-failures` 时，校验失败会把上游原始文本、Schema、reasoning 与失败原因写进该目录（默认关闭，文件含模型输出，仅本机诊断用）。
 - 工具调用、拒答、因长度或内容过滤而不完整的输出不参与校验，保留原来的状态。
 - `strict: false` 时只转发 Schema，不在本地校验。
