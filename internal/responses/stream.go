@@ -155,13 +155,9 @@ type StreamState struct {
 	inlineThinkRaw    string
 	inlineThinkSeen   bool
 	inlineTrimLeading bool
-	// structured buffers visible text for strict structured-output requests so
-	// the bridge can repair fences/prose and validate before the client sees
-	// it. Reasoning deltas still stream live.
-	structured    strings.Builder
-	tools         map[int]*toolState
-	lastToolIndex int
-	droppedTools  int
+	tools             map[int]*toolState
+	lastToolIndex     int
+	droppedTools      int
 	// rawUsage is the upstream usage object. The gateway tool counters are the
 	// legs it ran inside its own loop; the client-facing usage divides the
 	// summed prompt by those legs plus the final answer.
@@ -387,10 +383,6 @@ func (state *StreamState) pushContent(delta string) []Event {
 	if delta == "" {
 		return nil
 	}
-	if state.context != nil && state.context.outputSchema != nil {
-		state.structured.WriteString(delta)
-		return nil
-	}
 	state.inlineThinkRaw += delta
 	return state.drainInline()
 }
@@ -491,31 +483,6 @@ func (state *StreamState) flushInlineThink() []Event {
 		}
 		return state.emitText(raw)
 	}
-}
-
-// flushStructured emits buffered strict-schema text once, after repair. The
-// single delta keeps the Responses event sequence intact for clients that
-// assemble output from deltas.
-func (state *StreamState) flushStructured() []Event {
-	if state.context == nil || state.context.outputSchema == nil {
-		return nil
-	}
-	raw := state.structured.String()
-	state.structured.Reset()
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	text := raw
-	if cleaned, ok := extractStructuredJSON(raw); ok {
-		text = cleaned
-	}
-	events := state.closeReasoning()
-	events = append(events, state.ensureMessage("output_text")...)
-	state.message.PartText.WriteString(text)
-	return append(events, event("response.output_text.delta", map[string]any{
-		"item_id": state.message.ItemID, "output_index": state.message.OutputIndex,
-		"content_index": len(state.message.Parts), "delta": text,
-	}))
 }
 
 func (state *StreamState) closeMessagePart() []Event {
@@ -875,7 +842,6 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 	}
 	events := state.flushInlineThink()
 	events = append(events, state.closeReasoning()...)
-	events = append(events, state.flushStructured()...)
 	events = append(events, state.closeMessage()...)
 	events = append(events, state.closeTools()...)
 

@@ -122,40 +122,6 @@ func (state *StreamState) validateStructuredOutput() error {
 	return nil
 }
 
-// extractStructuredJSON pulls the first complete JSON value out of upstream
-// text. Strict json_schema requests still come back with a Markdown fence or a
-// sentence around the value from some providers (z-ai/GLM, for example), and
-// the buffered bridge repairs those before the client sees the text. Only
-// object and array values are discovered mid-text: scanning for scalars would
-// match words like "true" inside ordinary prose.
-func extractStructuredJSON(text string) (string, bool) {
-	trimmed := strings.TrimSpace(strings.TrimPrefix(text, "\ufeff"))
-	if trimmed == "" {
-		return "", false
-	}
-	if _, rest, ok := decodeFirstJSONValue(trimmed); ok && strings.TrimSpace(rest) == "" {
-		// Already a single value: keep the original bytes untouched.
-		return text, true
-	}
-	body := trimmed
-	if strings.HasPrefix(body, "```") {
-		line := strings.IndexByte(body, '\n')
-		if line < 0 {
-			return "", false
-		}
-		body = body[line+1:]
-	}
-	for offset := 0; offset < len(body); offset++ {
-		if body[offset] != '{' && body[offset] != '[' {
-			continue
-		}
-		if value, _, ok := decodeFirstJSONValue(body[offset:]); ok {
-			return value, true
-		}
-	}
-	return "", false
-}
-
 // decodeFirstJSONValue decodes one value and reports the exact byte range it
 // occupied, so callers can slice the original text without re-encoding it.
 func decodeFirstJSONValue(text string) (value string, rest string, ok bool) {
