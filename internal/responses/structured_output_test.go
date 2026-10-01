@@ -39,44 +39,58 @@ func TestStrictStructuredOutputSchemaSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name, schema, text string
 		valid              bool
+		want               string
 	}{
-		{"valid unchanged", object, " \n{\"token\":\"COBALT-742\", \"color\":\"red\"}\n", true},
-		{"renamed field", object, `{"token":"COBALT-742","image_color":"red"}`, false},
-		{"extra field", object, `{"token":"COBALT-742","color":"red","status":"done"}`, false},
-		{"wrong type", object, `{"token":12,"color":"red"}`, false},
-		{"enum mismatch", object, `{"token":"COBALT-742","color":"green"}`, false},
-		{"code fence", object, "```json\n{\"token\":\"COBALT-742\",\"color\":\"red\"}\n```", false},
-		{"multiple documents", object, `{"token":"a","color":"red"}{"token":"b","color":"blue"}`, false},
-		{"invalid JSON", object, `{"token":`, false},
-		{"null object", object, `null`, false},
-		{"nested array", `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"integer"},"minItems":2}},"required":["rows"]}`, `{"rows":[1,2.0]}`, true},
-		{"invalid nested array", `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"integer"}}}}`, `{"rows":[1,2.5]}`, false},
-		{"nullable anyOf", `{"type":"object","properties":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["value"]}`, `{"value":null}`, true},
-		{"invalid anyOf", `{"type":"object","properties":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["value"]}`, `{"value":42}`, false},
-		{"local ref", `{"$defs":{"value":{"type":"integer","minimum":2}},"type":"object","properties":{"x":{"$ref":"#/$defs/value"}},"required":["x"]}`, `{"x":2}`, true},
-		{"local ref invalid", `{"$defs":{"value":{"type":"integer","minimum":2}},"type":"object","properties":{"x":{"$ref":"#/$defs/value"}},"required":["x"]}`, `{"x":1}`, false},
-		{"recursive ref", `{"$defs":{"node":{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"additionalProperties":false}},"$ref":"#/$defs/node"}`, `{"children":[{"children":[]}]}`, true},
-		{"recursive invalid", `{"$defs":{"node":{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"additionalProperties":false}},"$ref":"#/$defs/node"}`, `{"children":[{"children":"bad"}]}`, false},
-		{"precise integer", `{"type":"object","properties":{"id":{"const":9007199254740993}},"required":["id"]}`, `{"id":9007199254740993}`, true},
-		{"neighbor integer", `{"type":"object","properties":{"id":{"const":9007199254740993}},"required":["id"]}`, `{"id":9007199254740992}`, false},
-		{"pattern", `{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Z]{3}$"}},"required":["id"]}`, `{"id":"ABC"}`, true},
-		{"pattern mismatch", `{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Z]{3}$"}},"required":["id"]}`, `{"id":"abc"}`, false},
-		{"format mismatch", `{"type":"object","properties":{"email":{"type":"string","format":"email"}},"required":["email"]}`, `{"email":"invalid"}`, false},
+		{"valid unchanged", object, " \n{\"token\":\"COBALT-742\", \"color\":\"red\"}\n", true, ""},
+		{"renamed field", object, `{"token":"COBALT-742","image_color":"red"}`, false, ""},
+		{"extra field", object, `{"token":"COBALT-742","color":"red","status":"done"}`, false, ""},
+		{"wrong type", object, `{"token":12,"color":"red"}`, false, ""},
+		{"enum mismatch", object, `{"token":"COBALT-742","color":"green"}`, false, ""},
+		{"code fence", object, "```json\n{\"token\":\"COBALT-742\",\"color\":\"red\"}\n```", true, `{"token":"COBALT-742","color":"red"}`},
+		{"fence with prose", object, "Here is the result:\n```json\n{\"token\":\"COBALT-742\",\"color\":\"red\"}\n```", true, `{"token":"COBALT-742","color":"red"}`},
+		{"multiple documents", object, `{"token":"a","color":"red"}{"token":"b","color":"blue"}`, true, `{"token":"a","color":"red"}`},
+		{"invalid JSON", object, `{"token":`, false, ""},
+		{"null object", object, `null`, false, ""},
+		{"nested array", `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"integer"},"minItems":2}},"required":["rows"]}`, `{"rows":[1,2.0]}`, true, ""},
+		{"invalid nested array", `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"integer"}}}}`, `{"rows":[1,2.5]}`, false, ""},
+		{"nullable anyOf", `{"type":"object","properties":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["value"]}`, `{"value":null}`, true, ""},
+		{"invalid anyOf", `{"type":"object","properties":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["value"]}`, `{"value":42}`, false, ""},
+		{"local ref", `{"$defs":{"value":{"type":"integer","minimum":2}},"type":"object","properties":{"x":{"$ref":"#/$defs/value"}},"required":["x"]}`, `{"x":2}`, true, ""},
+		{"local ref invalid", `{"$defs":{"value":{"type":"integer","minimum":2}},"type":"object","properties":{"x":{"$ref":"#/$defs/value"}},"required":["x"]}`, `{"x":1}`, false, ""},
+		{"recursive ref", `{"$defs":{"node":{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"additionalProperties":false}},"$ref":"#/$defs/node"}`, `{"children":[{"children":[]}]}`, true, ""},
+		{"recursive invalid", `{"$defs":{"node":{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"additionalProperties":false}},"$ref":"#/$defs/node"}`, `{"children":[{"children":"bad"}]}`, false, ""},
+		{"precise integer", `{"type":"object","properties":{"id":{"const":9007199254740993}},"required":["id"]}`, `{"id":9007199254740993}`, true, ""},
+		{"neighbor integer", `{"type":"object","properties":{"id":{"const":9007199254740993}},"required":["id"]}`, `{"id":9007199254740992}`, false, ""},
+		{"pattern", `{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Z]{3}$"}},"required":["id"]}`, `{"id":"ABC"}`, true, ""},
+		{"pattern mismatch", `{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Z]{3}$"}},"required":["id"]}`, `{"id":"abc"}`, false, ""},
+		{"format mismatch", `{"type":"object","properties":{"email":{"type":"string","format":"email"}},"required":["email"]}`, `{"email":"invalid"}`, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			context := strictContext(t, tc.schema)
 			out, err := FromChat(completedChat(tc.text), context)
 			if tc.valid {
-				if err != nil || out["status"] != "completed" || responseOutputText(out) != strings.TrimSpace(tc.text) {
+				want := tc.want
+				if want == "" {
+					want = strings.TrimSpace(tc.text)
+				}
+				if err != nil || out["status"] != "completed" || responseOutputText(out) != want {
 					t.Fatalf("valid output rejected or changed: %#v %v", out, err)
 				}
-				if textFromParts(jsonx.Map(jsonx.Slice(out["output"])[0])["content"]) != tc.text {
+				parts := textFromParts(jsonx.Map(jsonx.Slice(out["output"])[0])["content"])
+				if tc.want != "" && parts != tc.want {
+					t.Fatalf("repaired text not delivered: %q", parts)
+				}
+				if tc.want == "" && parts != tc.text {
 					t.Fatal("validation rewrote original text")
 				}
 			} else {
 				var failure *ChatFailure
 				if out != nil || !errors.As(err, &failure) || failure.Code != "upstream_schema_validation_failed" {
 					t.Fatalf("invalid output accepted: %#v %v", out, err)
+				}
+				if !strings.Contains(failure.Message, "not a single valid JSON value") &&
+					!strings.Contains(failure.Message, "does not match text.format.schema") {
+					t.Fatalf("failure reason missing class: %q", failure.Message)
 				}
 				if strings.Contains(failure.Message, "COBALT-742") {
 					t.Fatal("error copied response values into history")
@@ -118,6 +132,35 @@ func TestStrictStreamValidatesBeforeCompleted(t *testing.T) {
 		if len(adapter.Finish(nil)) != 0 {
 			t.Fatal("duplicate terminal on Finish")
 		}
+	}
+}
+
+func TestStrictStreamBuffersRepairsBeforeDelivery(t *testing.T) {
+	context := strictContext(t, `{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
+	adapter := NewStreamAdapter(context)
+	var events []Event
+	for _, part := range []string{"Here is the result:\n```json\n", `{"ok":`, "true}", "\n```"} {
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": part}}}})
+		events = append(events, adapter.Feed([]byte("data: "+string(chunk)+"\n\n"))...)
+	}
+	for _, event := range events {
+		if event.Type == "response.output_text.delta" {
+			t.Fatal("strict structured output streamed before repair")
+		}
+	}
+	finish, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{}, "finish_reason": "stop"}}})
+	events = append(events, adapter.Feed([]byte("data: "+string(finish)+"\n\ndata: [DONE]\n\n"))...)
+	if outcome := OutcomeFromEvents(events); outcome.Status != "completed" {
+		t.Fatalf("repaired stream failed: %#v", outcome)
+	}
+	var delivered string
+	for _, event := range events {
+		if event.Type == "response.output_text.delta" {
+			delivered += jsonx.String(event.Data["delta"])
+		}
+	}
+	if delivered != `{"ok":true}` {
+		t.Fatalf("repaired text not delivered: %q", delivered)
 	}
 }
 

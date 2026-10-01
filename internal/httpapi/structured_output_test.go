@@ -101,6 +101,67 @@ func TestResponsesStrictSchemaEndToEnd(t *testing.T) {
 	}
 }
 
+func TestResponsesStrictSchemaRepairsFencedOutput(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			const fenced = "```json\n{\"color\":\"red\"}\n```"
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					encoded, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+						"delta": map[string]any{"content": fenced}, "finish_reason": "stop",
+					}}})
+					fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", encoded)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+					"message": map[string]any{"content": fenced}, "finish_reason": "stop",
+				}}})
+			}))
+			defer up.Close()
+			st, server := newTestServer(t)
+			if err := st.UpdateConfig(func(c *model.Config) {
+				c.UpstreamBase = up.URL
+				c.Accounts = []model.Account{{Name: "test", Key: "test", Enabled: true}}
+				c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first"}, PinMode: "strict"}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			body := fmt.Sprintf(`{"model":"test","input":"hi","stream":%v,%s}`, stream, strictOutputFormat)
+			w := httptest.NewRecorder()
+			server.ServeHTTP(w, localRequest("POST", "/v1/responses", strings.NewReader(body)))
+			if w.Code != 200 {
+				t.Fatalf("repair rejected: %d %s", w.Code, w.Body.String())
+			}
+			if stream {
+				if !strings.Contains(w.Body.String(), "response.completed") || strings.Contains(w.Body.String(), "response.failed") {
+					t.Fatalf("wrong stream terminal: %s", w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), `{\"color\":\"red\"}`) {
+					t.Fatalf("cleaned JSON missing from stream: %s", w.Body.String())
+				}
+				return
+			}
+			var result struct {
+				Status string `json:"status"`
+				Output []struct {
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"output"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != "completed" || len(result.Output) == 0 || len(result.Output[0].Content) == 0 ||
+				result.Output[0].Content[0].Text != `{"color":"red"}` {
+				t.Fatalf("cleaned JSON not delivered: %s", w.Body.String())
+			}
+		})
+	}
+}
+
 func TestInvalidStrictSchemaIsClientError(t *testing.T) {
 	var hits atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
