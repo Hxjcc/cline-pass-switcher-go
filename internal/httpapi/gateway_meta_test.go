@@ -172,7 +172,7 @@ func TestStreamingChatRecordsGatewayMetadata(t *testing.T) {
 		config.Accounts = []model.Account{{Name: "main", Key: "cline-key", Enabled: true}}
 		config.KnownModels = []string{"cline-pass/test"}
 		config.PerModel = map[string]model.PerModelConfig{
-			"cline-pass/test": {Upstreams: []string{"deepseek"}, PinMode: "strict"},
+			"cline-pass/test": {Upstreams: []string{"deepseek"}},
 		}
 	}); err != nil {
 		t.Fatal(err)

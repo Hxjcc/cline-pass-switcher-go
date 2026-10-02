@@ -271,9 +271,7 @@ func SameProvider(first, second string) bool {
 
 type Attempt struct {
 	Upstream    string
-	OrderRest   []string
 	ExcludeList []string
-	Strict      bool
 }
 
 type AttemptResult struct {

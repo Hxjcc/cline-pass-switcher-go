@@ -21,17 +21,10 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Field, IconAction } from "@/components/console-kit"
+import { IconAction } from "@/components/console-kit"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { TableCell, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -94,12 +87,6 @@ function RowAction({
       {children}
     </IconAction>
   )
-}
-
-// Base UI renders the raw value in the trigger unless it knows the labels.
-const pinModeItems: Record<ModelConfig["pinMode"], string> = {
-  strict: "严格钉住",
-  preferred: "优先 + 回退",
 }
 
 /**
@@ -248,14 +235,10 @@ export function ModelRow({
   const pinnedFirst = config.upstreams[0]
   const actualProvider = model.meta?.lastProvider
   const pinMismatch = Boolean(
-    pinnedFirst &&
-      actualProvider &&
-      pinnedFirst !== actualProvider &&
-      (pinDisabled || config.pinMode === "strict"),
+    pinnedFirst && actualProvider && pinnedFirst !== actualProvider,
   )
   const upstreams = orderedUpstreams(model)
   const probed = Boolean(model.meta?.pipeline || model.meta?.probedAt)
-  const controlId = (name: string) => `${model.id}-${name}`
 
   return (
     <Fragment>
@@ -438,29 +421,6 @@ export function ModelRow({
               )}
 
               <div className="flex flex-wrap items-end gap-3">
-                <Field label="钉住模式" labelId={controlId("pin-mode")}>
-                  <Select
-                    value={config.pinMode}
-                    items={pinModeItems}
-                    onValueChange={(value) => void save({ ...config, pinMode: value as ModelConfig["pinMode"] })}
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="bg-background w-36"
-                      disabled={pinDisabled}
-                      aria-labelledby={controlId("pin-mode")}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(pinModeItems).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>
-                          {label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" disabled={pinDisabled} onClick={() => bulkAll()}>
                     <ListPlus data-icon="inline-start" />

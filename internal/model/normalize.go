@@ -228,9 +228,6 @@ func NormalizeConfig(cfg *Config) {
 		if len(modelConfig.Exclude) > 10 {
 			modelConfig.Exclude = modelConfig.Exclude[:10]
 		}
-		if modelConfig.PinMode != "preferred" {
-			modelConfig.PinMode = "strict"
-		}
 		modelConfig.Upstream = ""
 		if len(modelConfig.Upstreams) > 0 {
 			modelConfig.Upstream = modelConfig.Upstreams[0]

@@ -31,7 +31,7 @@ func TestProbeModelSendsTheConfiguredPin(t *testing.T) {
 	st := newStreamTestStore(t, upstreamServer.URL)
 	if err := st.UpdateConfig(func(cfg *model.Config) {
 		cfg.PerModel = map[string]model.PerModelConfig{
-			"cline-pass/test": {Upstreams: []string{"z-ai"}, PinMode: "strict"},
+			"cline-pass/test": {Upstreams: []string{"z-ai"}},
 		}
 	}); err != nil {
 		t.Fatal(err)

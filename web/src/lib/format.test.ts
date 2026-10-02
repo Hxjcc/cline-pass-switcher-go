@@ -53,16 +53,12 @@ test("normalizeModelConfig fills in the missing halves", () => {
     upstream: undefined,
     upstreams: [],
     exclude: [],
-    pinMode: "strict",
   })
-  expect(normalizeModelConfig({ upstreams: ["a"], pinMode: "preferred" })).toEqual({
+  expect(normalizeModelConfig({ upstreams: ["a"] })).toEqual({
     upstream: undefined,
     upstreams: ["a"],
     exclude: [],
-    pinMode: "preferred",
   })
-  // Anything that is not "preferred" means the channel is pinned strictly.
-  expect(normalizeModelConfig({ pinMode: "other" as never }).pinMode).toBe("strict")
 })
 
 test("pipelineLabel names the two aggregators", () => {

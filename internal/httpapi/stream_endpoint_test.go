@@ -294,7 +294,7 @@ func TestStreamingResponsesFailsOverToHealthyAccountOn401(t *testing.T) {
 			{Name: "backup", Key: "good-key", Enabled: true},
 		}
 		config.KnownModels = []string{"cline-pass/test"}
-		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}, PinMode: "strict"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}}
 	}); err != nil {
 		t.Fatal(err)
 	}

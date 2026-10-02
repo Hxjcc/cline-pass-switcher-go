@@ -176,7 +176,7 @@ func TestSuccessfulResponsesFallbackClearsPreviousError(t *testing.T) {
 	if err := st.UpdateConfig(func(c *model.Config) {
 		c.UpstreamBase = up.URL
 		c.Accounts = []model.Account{{Name: "main", Key: "test", Enabled: true}}
-		c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}, PinMode: "strict"}
+		c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}}
 	}); err != nil {
 		t.Fatal(err)
 	}

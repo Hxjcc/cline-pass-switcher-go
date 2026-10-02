@@ -63,7 +63,7 @@ func configureTwoAccounts(t *testing.T, st *store.Store, baseURL string, pinChan
 		}
 		config.KnownModels = []string{"cline-pass/test"}
 		if pinChannel {
-			config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}, PinMode: "strict"}
+			config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}}
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestSameNamedAccountsKeepSeparateHealth(t *testing.T) {
 			{Name: "duplicate", Key: "good-key", Enabled: true},
 		}
 		config.KnownModels = []string{"cline-pass/test"}
-		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}, PinMode: "strict"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,6 @@ func TestDisabledLegacyAccountIsNotARuntimeFallback(t *testing.T) {
 		config.KnownModels = []string{"cline-pass/test"}
 		config.PerModel["cline-pass/test"] = model.PerModelConfig{
 			Upstreams: []string{"first", "second", "third"},
-			PinMode:   "strict",
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -325,7 +324,6 @@ func TestExcludingEveryChannelFailsWithoutCallingUpstream(t *testing.T) {
 				config.KnownModels = []string{"cline-pass/test"}
 				config.PerModel["cline-pass/test"] = model.PerModelConfig{
 					Exclude: []string{"only"},
-					PinMode: "strict",
 				}
 			}); err != nil {
 				t.Fatal(err)
@@ -372,7 +370,6 @@ func TestStrictPinStillWorksWithUnrelatedExcludeList(t *testing.T) {
 		config.PerModel["cline-pass/test"] = model.PerModelConfig{
 			Upstreams: []string{"only"},
 			Exclude:   []string{"other"},
-			PinMode:   "strict",
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -456,7 +453,7 @@ func TestChatStreamFailureIsRecorded(t *testing.T) {
 		config.UpstreamBase = upstreamServer.URL
 		config.Accounts = []model.Account{{Name: "main", Key: "test", Enabled: true}}
 		config.KnownModels = []string{"cline-pass/test"}
-		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}, PinMode: "strict"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"only"}}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +558,6 @@ func TestRateLimitOnAutoRouteSwitchesAccountButNotChannel(t *testing.T) {
 		config.KnownModels = []string{"cline-pass/test"}
 		config.PerModel["cline-pass/test"] = model.PerModelConfig{
 			Upstreams: []string{"deepseek", "glm"},
-			PinMode:   "strict",
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -609,7 +605,6 @@ func TestRateLimitOnPinnableModelTriesTheNextChannel(t *testing.T) {
 		config.KnownModels = []string{"cline-pass/test"}
 		config.PerModel["cline-pass/test"] = model.PerModelConfig{
 			Upstreams: []string{"deepseek", "glm"},
-			PinMode:   "strict",
 		}
 	}); err != nil {
 		t.Fatal(err)

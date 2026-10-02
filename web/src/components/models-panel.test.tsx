@@ -20,7 +20,6 @@ const data: ModelsResponse = {
       config: {
         upstreams: ["fireworks"],
         exclude: [],
-        pinMode: "strict",
       },
       meta: {
         pipeline: "planner",

@@ -8,7 +8,6 @@ function model(config: Partial<ModelConfig>, meta: ModelMeta | null): Subscripti
     config: {
       upstreams: [],
       exclude: [],
-      pinMode: "strict",
       ...config,
     },
     meta,

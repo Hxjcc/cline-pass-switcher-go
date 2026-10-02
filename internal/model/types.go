@@ -45,7 +45,6 @@ type PerModelConfig struct {
 	Upstream  string   `json:"upstream,omitempty"`
 	Upstreams []string `json:"upstreams"`
 	Exclude   []string `json:"exclude"`
-	PinMode   string   `json:"pinMode"`
 }
 
 type Config struct {

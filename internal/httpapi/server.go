@@ -607,9 +607,6 @@ func (s *Server) handleSaveConfig(writer http.ResponseWriter, request *http.Requ
 			if len(value.Upstreams) > 0 {
 				value.Upstream = value.Upstreams[0]
 			}
-			if value.PinMode != "preferred" {
-				value.PinMode = "strict"
-			}
 			cfg.PerModel[modelID] = value
 		}
 	}); err != nil {

@@ -90,7 +90,6 @@ func TestServerFallsBackAcrossUpstreamsAndRecordsTrace(t *testing.T) {
 		config.PerModel["cline-pass/test"] = model.PerModelConfig{
 			Upstreams: []string{"first", "second"},
 			Exclude:   []string{},
-			PinMode:   "strict",
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -202,7 +201,7 @@ func TestRemoveModelDropsSubscriptionConfigAndMeta(t *testing.T) {
 	st, server := newTestServer(t)
 	const modelID = "cline-pass/glm-5.3-flash"
 	if err := st.UpdateConfig(func(config *model.Config) {
-		config.PerModel[modelID] = model.PerModelConfig{Upstreams: []string{"z-ai"}, PinMode: "strict"}
+		config.PerModel[modelID] = model.PerModelConfig{Upstreams: []string{"z-ai"}}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +385,7 @@ func TestResponsesEndpointConvertsRequestAndResponse(t *testing.T) {
 		config.Accounts = []model.Account{{Name: "main", Key: "cline-key", Enabled: true}}
 		config.KnownModels = []string{"cline-pass/deepseek-v4.1-flash"}
 		config.PerModel["cline-pass/deepseek-v4.1-flash"] = model.PerModelConfig{
-			Upstreams: []string{"deepseek"}, Exclude: []string{}, PinMode: "strict",
+			Upstreams: []string{"deepseek"}, Exclude: []string{},
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -477,7 +476,7 @@ func TestNonStreamChainStopsOnAuthFailureWithoutAlternateAccount(t *testing.T) {
 		config.UpstreamBase = upstreamServer.URL
 		config.Accounts = []model.Account{{Name: "only", Key: "bad-key", Enabled: true}}
 		config.KnownModels = []string{"cline-pass/test"}
-		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"first", "second", "third"}, PinMode: "strict"}
+		config.PerModel["cline-pass/test"] = model.PerModelConfig{Upstreams: []string{"first", "second", "third"}}
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -66,7 +66,7 @@ func TestResponsesStrictSchemaEndToEnd(t *testing.T) {
 				if err := st.UpdateConfig(func(c *model.Config) {
 					c.UpstreamBase = up.URL
 					c.Accounts = []model.Account{{Name: "test", Key: "test", Enabled: true}}
-					c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}, PinMode: "strict"}
+					c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first", "second"}}
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -136,7 +136,7 @@ func TestResponsesStrictSchemaWrapsPlainTitle(t *testing.T) {
 			if err := st.UpdateConfig(func(c *model.Config) {
 				c.UpstreamBase = up.URL
 				c.Accounts = []model.Account{{Name: "test", Key: "test", Enabled: true}}
-				c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first"}, PinMode: "strict"}
+				c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first"}}
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -193,7 +193,7 @@ func TestResponsesStrictSchemaRepairsRefusalText(t *testing.T) {
 			if err := st.UpdateConfig(func(c *model.Config) {
 				c.UpstreamBase = up.URL
 				c.Accounts = []model.Account{{Name: "test", Key: "test", Enabled: true}}
-				c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first"}, PinMode: "strict"}
+				c.PerModel["test"] = model.PerModelConfig{Upstreams: []string{"first"}}
 			}); err != nil {
 				t.Fatal(err)
 			}

@@ -95,10 +95,9 @@ test("storage faults refresh after login and clear after recovery", async ({ pag
   await expect(page.getByText("数据存储需要检查", { exact: true })).toHaveCount(0)
 })
 
-// The model list is the busiest panel in the console. This test is the safety
-// net for changing it: expand a row, flip a control that writes through to the
-// API, and check the value survived a reload.
-test("edits a model's routing controls and keeps the change", async ({ page }) => {
+// The legacy "优先 + 回退" pin mode was removed: pinning is always strict now,
+// so the expanded panel must not offer a mode selector.
+test("expanded model keeps the strict-only routing controls", async ({ page }) => {
   await signIn(page)
   const modelID = "cline-pass/glm-5.3-flash"
   const modelRow = () => page.getByRole("row").filter({ hasText: modelID }).first()
@@ -106,14 +105,7 @@ test("edits a model's routing controls and keeps the change", async ({ page }) =
   await expect(modelRow()).toBeVisible()
   await modelRow().getByRole("button", { name: "展开模型" }).click()
 
-  const pinMode = page.getByLabel("钉住模式")
-  await expect(pinMode).toBeVisible()
-  await pinMode.click()
-  await page.getByRole("option", { name: "优先 + 回退" }).click()
-  await expect(pinMode).toContainText("优先 + 回退")
-
-  // The change is written through immediately, so a reload must reproduce it.
-  await page.reload()
-  await modelRow().getByRole("button", { name: "展开模型" }).click()
-  await expect(page.getByLabel("钉住模式")).toContainText("优先 + 回退")
+  await expect(page.getByLabel("钉住模式")).toHaveCount(0)
+  await expect(modelRow().getByRole("button", { name: "全部设为优先" })).toBeVisible()
+  await expect(modelRow().getByRole("button", { name: "恢复自动" })).toBeVisible()
 })

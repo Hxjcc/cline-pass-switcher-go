@@ -1,4 +1,3 @@
-export type PinMode = "strict" | "preferred"
 export type UpstreamState = "ok" | "limited" | "bad" | "auth" | "unknown"
 
 export interface Account {
@@ -15,7 +14,6 @@ export interface ModelConfig {
   upstream?: string
   upstreams: string[]
   exclude: string[]
-  pinMode: PinMode
 }
 
 export interface UpstreamDetail {

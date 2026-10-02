@@ -195,6 +195,5 @@ export function normalizeModelConfig(
     upstream: config?.upstream,
     upstreams: config?.upstreams ?? [],
     exclude: config?.exclude ?? [],
-    pinMode: config?.pinMode === "preferred" ? "preferred" : "strict",
   }
 }

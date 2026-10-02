@@ -12,7 +12,6 @@ const models: SubscriptionModel[] = [
     config: {
       upstreams: ["fireworks"],
       exclude: [],
-      pinMode: "strict",
     },
     meta: {
       pipeline: "planner",

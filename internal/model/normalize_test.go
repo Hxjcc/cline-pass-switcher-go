@@ -1,8 +1,10 @@
 package model
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,8 +48,10 @@ func TestLoadConfigMigratesLegacyFields(t *testing.T) {
 	if len(modelConfig.Upstreams) != 1 || modelConfig.Upstreams[0] != "alibaba" {
 		t.Fatalf("expected legacy upstream migration, got %#v", modelConfig.Upstreams)
 	}
-	if modelConfig.PinMode != "preferred" {
-		t.Fatalf("expected preferred mode, got %q", modelConfig.PinMode)
+	// Legacy pinMode keys keep loading but are dropped: pinning is always
+	// strict and the old mode must not be written back.
+	if raw, err := json.Marshal(modelConfig); err != nil || strings.Contains(string(raw), "pinMode") {
+		t.Fatalf("legacy pinMode must not survive loading: %s %v", raw, err)
 	}
 	if config.Port != 3123 || config.UpstreamBase != DefaultUpstreamBase {
 		t.Fatalf("expected defaults to survive partial config: %#v", config)
@@ -83,7 +87,6 @@ func TestNormalizeConfigExcludeWins(t *testing.T) {
 	config.PerModel["model"] = PerModelConfig{
 		Upstreams: []string{"a", "b", "a"},
 		Exclude:   []string{"b"},
-		PinMode:   "unknown",
 	}
 	NormalizeConfig(&config)
 	value := config.PerModel["model"]
@@ -92,9 +95,6 @@ func TestNormalizeConfigExcludeWins(t *testing.T) {
 	}
 	if value.Upstream != "a" {
 		t.Fatalf("legacy mirror should point at first upstream, got %q", value.Upstream)
-	}
-	if value.PinMode != "strict" {
-		t.Fatalf("unknown pin mode should normalize to strict, got %q", value.PinMode)
 	}
 }
 

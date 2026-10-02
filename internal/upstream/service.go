@@ -668,22 +668,14 @@ func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Atte
 			wanted = append(wanted, upstreamSlug)
 		}
 	}
-	strict := cfg.PinMode != "preferred"
-	base := Attempt{ExcludeList: cfg.Exclude, Strict: strict}
+	base := Attempt{ExcludeList: cfg.Exclude}
 	if len(wanted) == 0 {
 		return []Attempt{base}
 	}
 	attempts := make([]Attempt, 0, len(wanted))
-	for index, upstreamSlug := range wanted {
+	for _, upstreamSlug := range wanted {
 		attempt := base
 		attempt.Upstream = upstreamSlug
-		if !strict {
-			for otherIndex, other := range wanted {
-				if otherIndex != index {
-					attempt.OrderRest = append(attempt.OrderRest, other)
-				}
-			}
-		}
 		attempts = append(attempts, attempt)
 	}
 	return attempts
@@ -707,8 +699,8 @@ func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Detail
 	if len(attempt.ExcludeList) == 0 {
 		return nil
 	}
-	if attempt.Strict && attempt.Upstream != "" {
-		// A strict pin names the single channel allowed to serve the request,
+	if attempt.Upstream != "" {
+		// A pin names the single channel allowed to serve the request,
 		// and BuildAttempts never selects an excluded channel.
 		return nil
 	}
@@ -779,14 +771,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			gateway = map[string]any{}
 		}
 		if attempt.Upstream != "" {
-			if attempt.Strict {
-				gateway["only"] = []string{attempt.Upstream}
-			} else {
-				gateway["order"] = append([]string{attempt.Upstream}, attempt.OrderRest...)
-				if len(allowList) > 0 {
-					gateway["only"] = allowList
-				}
-			}
+			gateway["only"] = []string{attempt.Upstream}
 		} else if len(allowList) > 0 {
 			gateway["only"] = allowList
 		}
@@ -799,14 +784,7 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			provider = map[string]any{}
 		}
 		if attempt.Upstream != "" {
-			if attempt.Strict {
-				provider["only"] = []string{attempt.Upstream}
-			} else {
-				provider["order"] = append([]string{attempt.Upstream}, attempt.OrderRest...)
-				if len(allowList) > 0 {
-					provider["only"] = allowList
-				}
-			}
+			provider["only"] = []string{attempt.Upstream}
 		} else if len(allowList) > 0 {
 			provider["only"] = allowList
 		}
