@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
@@ -68,6 +69,48 @@ func TestProbeModelWithoutAPinStaysUnconstrained(t *testing.T) {
 	if asksForChannel(bodies[0], "z-ai") {
 		t.Fatalf("an unpinned probe must not ask for a channel: %#v", bodies[0])
 	}
+}
+
+// A pinned probe carries the pin, so its plan only lists that one channel. That
+// must not be mistaken for a single-provider model: the channel list still has
+// to come from the impossible-provider harvest, and the model stays pinnable.
+func TestProbeModelPinnedDoesNotLookSingleProvider(t *testing.T) {
+	var calls atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body := decodeRequestBody(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			if !asksForChannel(body, "deepseek") {
+				t.Errorf("main probe must carry the configured pin: %#v", body)
+			}
+			_, _ = io.WriteString(writer, `{"id":"chatcmpl-1","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK","provider_metadata":{"gateway":{"routing":{"canonicalSlug":"deepseek/deepseek-v4.1-flash","finalProvider":"deepseek","fallbacksAvailable":[],"planningReasoning":"Provider set restricted to: deepseek. System credentials planned for: deepseek. Total execution order: deepseek(system)"}}}},"finish_reason":"stop"}]}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"error":{"message":"No allowed providers. Available providers are: deepseek, alibaba, baseten, fireworks.","type":"upstream_error"}}`)
+	}))
+	defer upstreamServer.Close()
+
+	st := newStreamTestStore(t, upstreamServer.URL)
+	if err := st.UpdateConfig(func(cfg *model.Config) {
+		cfg.PerModel = map[string]model.PerModelConfig{
+			"cline-pass/test": {Upstreams: []string{"deepseek"}},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := New(st).ProbeModel(t.Context(), "cline-pass/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := result.ModelMeta
+	if meta.Pinnable == nil || !*meta.Pinnable {
+		t.Fatalf("pinned probe must stay pinnable: pinnable=%v reason=%q", meta.Pinnable, meta.PinReason)
+	}
+	if meta.PinReason != "" {
+		t.Fatalf("pinReason = %q, want empty", meta.PinReason)
+	}
+	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"deepseek", "alibaba", "baseten", "fireworks"})
 }
 
 // asksForChannel reports whether a chat body pins routing to one channel through

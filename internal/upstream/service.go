@@ -144,9 +144,14 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	// The probe reproduces the channel preference a real request carries: its
 	// result is what the console shows as 最近命中, and asking without the pin
 	// made every pinned model look like a miss. Channel discovery is unaffected
-	// - that comes from the impossible-provider probe below.
+	// - that comes from the impossible-provider probe below. Remember whether
+	// the request carried our own restriction: a restricted plan only names
+	// the allowed channel, so it cannot be used to count the model's channels.
+	probeRestricted := false
 	if attempts := s.BuildAttempts(modelID, s.store.ModelConfig(modelID)); len(attempts) > 0 {
-		body = s.InjectPrefs(body, modelID, attempts[0])
+		attempt := attempts[0]
+		body = s.InjectPrefs(body, modelID, attempt)
+		probeRestricted = attempt.Upstream != "" || len(attempt.ExcludeList) > 0
 	}
 	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
 	if err != nil {
@@ -190,10 +195,14 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	}
 	pinnable := false
 	pinReason := ""
+	// A plan that our own pin/exclusion list restricted proves nothing about
+	// how many channels the model has; only an unrestricted one-entry plan is
+	// authoritative. Otherwise the harvested channel list decides.
+	singleProvider := len(upstreams) == 1 || (!probeRestricted && len(planned) == 1)
 	switch {
 	case routing.Pipeline == "":
 		pinReason = pinReasonUnsupported
-	case routing.Pipeline == "planner" && (len(planned) == 1 || (len(planned) == 0 && len(upstreams) == 1)):
+	case routing.Pipeline == "planner" && singleProvider:
 		pinReason = pinReasonSingleProvider
 	case len(upstreams) == 0:
 		pinReason = pinReasonNoChannels
