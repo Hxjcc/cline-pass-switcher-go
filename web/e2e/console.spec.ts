@@ -105,7 +105,10 @@ test("expanded model keeps the strict-only routing controls", async ({ page }) =
   await expect(modelRow()).toBeVisible()
   await modelRow().getByRole("button", { name: "展开模型" }).click()
 
+  // The expanded panel is its own table row and does not repeat the model id,
+  // so locate it by the controls it contains.
+  const panel = page.getByRole("row").filter({ hasText: "全部设为优先" })
   await expect(page.getByLabel("钉住模式")).toHaveCount(0)
-  await expect(modelRow().getByRole("button", { name: "全部设为优先" })).toBeVisible()
-  await expect(modelRow().getByRole("button", { name: "恢复自动" })).toBeVisible()
+  await expect(panel.getByRole("button", { name: "全部设为优先" })).toBeVisible()
+  await expect(panel.getByRole("button", { name: "恢复自动" })).toBeVisible()
 })
