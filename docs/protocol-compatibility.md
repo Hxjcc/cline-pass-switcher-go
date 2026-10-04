@@ -111,6 +111,8 @@ Responses 的 `web_search` 是由服务端执行的托管工具，Chat Completio
 
 启用搜索时，网关会在系统提示中附加一段搜索约束：每轮尽量只搜一次、最多取 3 条结果、不并行搜索。
 
+对 **Chat Completions 客户端**（DeepSeek Harness、Cherry Studio、脚本等）同样生效：planner 线路的模型（如 `cline-pass/deepseek-v4.1-flash`）会在请求里自动带上该网关搜索工具，由模型自行决定是否搜索；搜索在网关内部执行，客户端只拿到最终回答。direct 线路（OpenRouter 透传，如 GLM）不会声明（渠道会拒绝 `vercel:` 类型）。把 `WEB_SEARCH_UPSTREAM` 设为空或 `off` 即关闭。
+
 `WEB_FETCH_UPSTREAM`（可选值 `browserbase_fetch`）控制网页抓取：只有当**用户消息**里出现 http(s) 链接时，网关才额外声明 `vercel:browserbase_fetch`，让模型读取链接内容。链接只出现在工具输出里时不会触发。
 
 需要注意：

@@ -330,8 +330,8 @@ func TestNormaliseWebSearchToolAliases(t *testing.T) {
 		"off":                "",
 	}
 	for input, want := range cases {
-		if got := normaliseWebSearchTool(input); got != want {
-			t.Fatalf("normaliseWebSearchTool(%q) = %q, want %q", input, got, want)
+		if got := NormaliseWebSearchTool(input); got != want {
+			t.Fatalf("NormaliseWebSearchTool(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

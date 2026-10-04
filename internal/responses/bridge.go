@@ -162,7 +162,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		TopP:               body["top_p"],
 		Metadata:           metadata,
 		RawReasoning:       options.RawReasoning,
-		webSearchTool:      normaliseWebSearchTool(options.WebSearchUpstream),
+		webSearchTool:      NormaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
 		modelPipeline:      strings.TrimSpace(options.ModelPipeline),
 		shellCompat:        normaliseShellCompat(options.ShellCompat),

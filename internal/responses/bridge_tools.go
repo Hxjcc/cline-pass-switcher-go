@@ -398,8 +398,8 @@ func normaliseShellCompat(value string) string {
 	}
 }
 
-// normaliseWebSearchTool maps configuration onto a gateway provider tool id.
-func normaliseWebSearchTool(value string) string {
+// NormaliseWebSearchTool maps configuration onto a gateway provider tool id.
+func NormaliseWebSearchTool(value string) string {
 	trimmed := strings.TrimSpace(value)
 	switch strings.ToLower(trimmed) {
 	case "", "off", "none", "false", "disabled":
