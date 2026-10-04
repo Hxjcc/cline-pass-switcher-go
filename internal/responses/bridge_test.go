@@ -1990,6 +1990,60 @@ func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
 	}
 }
 
+func TestClientFunctionWebSearchMapsToGatewayTool(t *testing.T) {
+	clientTool := map[string]any{
+		"type": "function", "name": "web_search",
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			},
+			"required": []any{"queries"},
+		},
+	}
+	body := map[string]any{"model": "cline-pass/deepseek-v4.1-flash", "input": "hi", "tools": []any{clientTool}}
+
+	// With a configured gateway search the client declaration is replaced, so
+	// the gateway runs the search and the client needs no provider key.
+	chat, context, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
+		t.Fatalf("client web_search must become the gateway tool: %#v", tools)
+	}
+	if !context.isProviderTool("vercel:exa_search") {
+		t.Fatal("gateway search tool was not tracked")
+	}
+	if !strings.Contains(context.webSearchPolicy(), "Web search policy") {
+		t.Fatal("search policy was not injected")
+	}
+
+	// Without a configured search the client keeps its own tool: declaring
+	// nothing means searching not at all.
+	chat, _, err = ToChatWithOptions(body, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools = jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "function" ||
+		jsonx.String(jsonx.Map(jsonx.Map(tools[0])["function"])["name"]) != "web_search" {
+		t.Fatalf("client web_search must survive without a gateway search: %#v", tools)
+	}
+
+	// Direct routes cannot carry the gateway's private tool ids, so the client
+	// keeps its own declaration there too.
+	chat, _, err = ToChatWithOptions(body, Options{WebSearchUpstream: "exa", ModelPipeline: "direct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools = jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "function" {
+		t.Fatalf("direct route must keep the client tool: %#v", tools)
+	}
+}
+
 func TestWebSearchPolicyIsInjectedOnlyWhenDeclared(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/deepseek-v4.1-flash", "input": "hi",

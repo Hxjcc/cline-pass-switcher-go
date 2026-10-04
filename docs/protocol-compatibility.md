@@ -111,6 +111,8 @@ Responses 的 `web_search` 是由服务端执行的托管工具，Chat Completio
 
 启用搜索时，网关会在系统提示中附加一段搜索约束：每轮尽量只搜一次、最多取 3 条结果、不并行搜索。
 
+客户端把搜索声明成**普通函数工具**时（DeepSeek Harness 的 `web_search` 就是这种），planner 线路的模型会被替换成同一个网关搜索工具：搜索由网关执行，客户端不需要自己的搜索凭据；客户端**不声明就不映射**，一个搜索工具都不会出现。direct 线路（OpenRouter 透传）无法携带 `vercel:` 类型，保持客户端自己的声明不变。
+
 `WEB_FETCH_UPSTREAM`（可选值 `browserbase_fetch`）控制网页抓取：只有当**用户消息**里出现 http(s) 链接时，网关才额外声明 `vercel:browserbase_fetch`，让模型读取链接内容。链接只出现在工具输出里时不会触发。
 
 需要注意：
