@@ -143,9 +143,9 @@ Cline Pass 套餐有 5 小时、7 天、30 天三个用量窗口。网关通过�
 |---|---|
 | `X-Cline-Account` | 最终使用的账号名称。 |
 | `X-Cline-Target-Upstream` | 计划尝试的渠道，多个用 `>` 连接；自动路由时为 `auto`。 |
-| `X-Cline-Actual-Upstream` | 上游实际使用的渠道，未知时为 `unknown`。 |
+| `X-Cline-Actual-Upstream` | 上游实际使用的渠道；流式请求发出响应头时还不知道实际渠道，此时不发送该头。 |
 | `X-Cline-Canonical-Model` | 上游报告的规范模型名。 |
 | `X-Cline-Attempts` | 这次请求实际向上游发出的调用次数。 |
 | `X-Cline-Reasoning-Effort` | Responses 接口实际发给上游的推理档位。 |
 
-流式请求的响应头在第一个事件到达时就发出，此时还不知道实际渠道和规范模型，所以通常只有前两项和 `X-Cline-Attempts`；这些信息会记在请求历史里。
+非流式请求在拿到完整响应后解析路由，响应头里的渠道和规范模型是准确的。流式请求的响应头在第一个事件到达时就发出，此时还不知道实际渠道和规范模型，所以通常只有前两项和 `X-Cline-Attempts`，`X-Cline-Actual-Upstream` 与 `X-Cline-Canonical-Model` 会省略；这些信息会记在请求历史里。

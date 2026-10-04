@@ -51,6 +51,11 @@ func TestStreamingResponsesEndpointEmitsResponsesEvents(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("streaming responses request failed: %d %s", response.Code, response.Body.String())
 	}
+	// The routing tail only arrives at the end of the upstream stream, so the
+	// response must not claim a placeholder channel it cannot know yet.
+	if actual := response.Header().Get("X-Cline-Actual-Upstream"); actual != "" {
+		t.Fatalf("an unreleased stream must not advertise an actual channel: %q", actual)
+	}
 	stream := response.Body.String()
 	for _, expected := range []string{
 		"event: response.created", "event: response.output_text.delta", "event: response.completed",

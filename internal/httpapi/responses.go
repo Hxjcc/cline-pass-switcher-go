@@ -18,8 +18,16 @@ import (
 
 func setResponsesHeaders(writer http.ResponseWriter, targets []string, result chainResult, effort string) {
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))
-	writer.Header().Set("X-Cline-Canonical-Model", result.Routing.CanonicalSlug)
+	// Streaming responses are released before the gateway's routing tail
+	// arrives, so the actual channel is unknown at this point. Omit the header
+	// instead of advertising "unknown": the history row still records the real
+	// provider once the stream ends, and honestly absent beats a placeholder.
+	if actual := firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider); actual != "" {
+		writer.Header().Set("X-Cline-Actual-Upstream", actual)
+	}
+	if canonical := strings.TrimSpace(result.Routing.CanonicalSlug); canonical != "" {
+		writer.Header().Set("X-Cline-Canonical-Model", canonical)
+	}
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(result.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
 	if effort != "" {
