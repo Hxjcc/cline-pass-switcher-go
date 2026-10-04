@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,52 @@ func TestSessionKeyUsesOnlyTheClientCacheKey(t *testing.T) {
 	delete(body, "prompt_cache_key")
 	if got := SessionKey("cline-pass/demo", body); got != "" {
 		t.Fatalf("user and system text must not stick a conversation, got %q", got)
+	}
+}
+
+func TestSessionIDFromHeadersPrefersTheSpecificHeader(t *testing.T) {
+	header := http.Header{}
+	if got := SessionIDFromHeaders(header); got != "" {
+		t.Fatalf("a request without session headers must stay empty, got %q", got)
+	}
+	header.Set("x-client-request-id", "loose-id")
+	header.Set("session_id", "pi-session")
+	if got := SessionIDFromHeaders(header); got != "pi-session" {
+		t.Fatalf("session_id should win over the generic header, got %q", got)
+	}
+	header.Del("session_id")
+	if got := SessionIDFromHeaders(header); got != "loose-id" {
+		t.Fatalf("x-client-request-id fallback = %q", got)
+	}
+}
+
+func TestSessionIDFromHeadersHashesOversizedValues(t *testing.T) {
+	header := http.Header{}
+	long := strings.Repeat("x", maxSessionHintLen+1)
+	header.Set("session_id", long)
+	got := SessionIDFromHeaders(header)
+	if len(got) != 65 || got == long || !strings.HasPrefix(got, "h") {
+		t.Fatalf("an oversized id should be hashed, got %q", got)
+	}
+	if again := SessionIDFromHeaders(header); again != got {
+		t.Fatalf("hashing must be stable: %q vs %q", got, again)
+	}
+}
+
+func TestSessionKeyForPrefersTheBodyAndFallsBackToHeaders(t *testing.T) {
+	header := http.Header{}
+	header.Set("session_id", "pi-session")
+	ctx := WithSessionHint(context.Background(), SessionIDFromHeaders(header))
+	body := map[string]any{"prompt_cache_key": "codex-session"}
+	if got := SessionKeyFor(ctx, "cline-pass/demo", body); got != "cache\ncline-pass/demo\ncodex-session" {
+		t.Fatalf("the body key should win: %q", got)
+	}
+	delete(body, "prompt_cache_key")
+	if got := SessionKeyFor(ctx, "cline-pass/demo", body); got != "cache\ncline-pass/demo\npi-session" {
+		t.Fatalf("header fallback = %q", got)
+	}
+	if got := SessionKeyFor(context.Background(), "cline-pass/demo", body); got != "" {
+		t.Fatalf("without a body key or a hint nothing may stick, got %q", got)
 	}
 }
 

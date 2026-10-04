@@ -28,6 +28,7 @@ func setResponsesHeaders(writer http.ResponseWriter, targets []string, result ch
 }
 
 func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Request) {
+	request = withSessionHint(request)
 	var body map[string]any
 	if err := readJSON(request, &body); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
@@ -87,7 +88,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		})
 		return
 	}
-	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, upstreamBody))
+	targets := attemptTargets(s.requestAttempts(request.Context(), modelID, modelConfig, upstreamBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
@@ -262,6 +263,7 @@ func writeResponsesRequestError(writer http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *http.Request) {
+	request = withSessionHint(request)
 	var body map[string]any
 	if err := readJSON(request, &body); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
@@ -620,7 +622,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	}
 
 	s.record(request.Context(), compactionEntry(modelID, stream, started, bridgeContext, chatBody, result, compaction))
-	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, chatBody))
+	targets := attemptTargets(s.requestAttempts(request.Context(), modelID, modelConfig, chatBody))
 	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if !stream {
 		writeJSON(writer, http.StatusOK, compaction)

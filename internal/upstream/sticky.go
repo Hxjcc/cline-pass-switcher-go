@@ -2,6 +2,8 @@ package upstream
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -75,6 +77,54 @@ type stickHint struct {
 	accountID string
 }
 
+// sessionHeaderNames are the out-of-band conversation ids clients send when
+// they do not put prompt_cache_key in the body. pi sends the first three once
+// its session affinity headers are enabled; OpenRouter-style clients use
+// x-session-id. Order is priority: the most specific header wins.
+var sessionHeaderNames = []string{"session_id", "x-session-affinity", "x-session-id", "x-client-request-id"}
+
+// maxSessionHintLen caps how much of a header value becomes a memory key. A
+// long id is hashed rather than truncated so two conversations can never share
+// a key through a common prefix.
+const maxSessionHintLen = 128
+
+// SessionIDFromHeaders returns the conversation id a client sent in headers,
+// or "" when none of the session headers is present.
+func SessionIDFromHeaders(header http.Header) string {
+	for _, name := range sessionHeaderNames {
+		id := strings.TrimSpace(header.Get(name))
+		if id == "" {
+			continue
+		}
+		if len(id) > maxSessionHintLen {
+			sum := sha256.Sum256([]byte(id))
+			return "h" + hex.EncodeToString(sum[:])
+		}
+		return id
+	}
+	return ""
+}
+
+type sessionHintContextKey struct{}
+
+// WithSessionHint attaches a header-derived conversation id so the sticky
+// layer can use it on requests that carry no prompt_cache_key in the body.
+func WithSessionHint(ctx context.Context, id string) context.Context {
+	id = strings.TrimSpace(id)
+	if ctx == nil || id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionHintContextKey{}, id)
+}
+
+func sessionHintFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(sessionHintContextKey{}).(string)
+	return id
+}
+
 // SessionKey identifies one conversation for stickiness. Only the client's
 // prompt_cache_key counts. Codex sends that on every turn of a thread; a
 // shared system prompt or user field would glue unrelated chats together.
@@ -84,6 +134,21 @@ func SessionKey(modelID string, body map[string]any) string {
 		return ""
 	}
 	return "cache\n" + strings.TrimSpace(modelID) + "\n" + key
+}
+
+// SessionKeyFor resolves the conversation key the same way as SessionKey, and
+// falls back to the session hint from headers when the body carries none. The
+// two share one key space, so a client that switches between the body field
+// and the headers keeps the same warm conversation.
+func SessionKeyFor(ctx context.Context, modelID string, body map[string]any) string {
+	if key := SessionKey(modelID, body); key != "" {
+		return key
+	}
+	hint := sessionHintFrom(ctx)
+	if hint == "" {
+		return ""
+	}
+	return "cache\n" + strings.TrimSpace(modelID) + "\n" + hint
 }
 
 // WithStick attaches the conversation identity and its current account choice

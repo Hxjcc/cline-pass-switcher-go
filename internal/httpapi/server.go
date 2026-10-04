@@ -707,20 +707,35 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) withSessionStick(ctx context.Context, modelID string, body map[string]any) context.Context {
-	session := upstream.SessionKey(modelID, body)
+	session := upstream.SessionKeyFor(ctx, modelID, body)
 	accountID, _ := s.upstream.LookupStick(session)
 	return withRecordedSession(upstream.WithStick(ctx, session, accountID), body)
 }
 
-func (s *Server) requestAttempts(modelID string, cfg model.PerModelConfig, body map[string]any) []upstream.Attempt {
+// withSessionHint carries a conversation id that the client sent in headers
+// (session_id / x-session-affinity / x-client-request-id) into the request
+// context. pi sends those when session affinity headers are enabled; the
+// sticky layer then keeps one account and channel per conversation even
+// though the body has no prompt_cache_key.
+func withSessionHint(request *http.Request) *http.Request {
+	if request == nil {
+		return request
+	}
+	if id := upstream.SessionIDFromHeaders(request.Header); id != "" {
+		return request.WithContext(upstream.WithSessionHint(request.Context(), id))
+	}
+	return request
+}
+
+func (s *Server) requestAttempts(ctx context.Context, modelID string, cfg model.PerModelConfig, body map[string]any) []upstream.Attempt {
 	attempts := s.upstream.BuildAttempts(modelID, cfg)
-	_, slug := s.upstream.LookupStick(upstream.SessionKey(modelID, body))
+	_, slug := s.upstream.LookupStick(upstream.SessionKeyFor(ctx, modelID, body))
 	return upstream.PreferAttempt(attempts, slug)
 }
 
 func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map[string]any, modelConfig model.PerModelConfig, timeout time.Duration) chainResult {
 	ctx = s.withSessionStick(ctx, modelID, body)
-	attempts := s.requestAttempts(modelID, modelConfig, body)
+	attempts := s.requestAttempts(ctx, modelID, modelConfig, body)
 	result := chainResult{Status: http.StatusBadGateway, Started: time.Now()}
 	budget := newAttemptBudget(len(attempts), s.upstream.AccountAttemptLimit())
 	for _, attempt := range attempts {
@@ -842,6 +857,7 @@ func (s *Server) accountRetryAllowed(status, accountsUsed int, budget *attemptBu
 }
 
 func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
+	request = withSessionHint(request)
 	var body map[string]any
 	if err := readJSON(request, &body); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "invalid JSON body"}})
@@ -891,7 +907,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	}
 	s.record(request.Context(), entry)
 
-	targets := attemptTargets(s.requestAttempts(modelID, modelConfig, body))
+	targets := attemptTargets(s.requestAttempts(request.Context(), modelID, modelConfig, body))
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
 	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))

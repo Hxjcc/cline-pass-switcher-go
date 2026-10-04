@@ -25,7 +25,7 @@ var (
 func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.Request, modelID string, body map[string]any, modelConfig model.PerModelConfig) {
 	defer clearStreamDeadline(writer)
 	ctx := s.withSessionStick(request.Context(), modelID, body)
-	attempts := s.requestAttempts(modelID, modelConfig, body)
+	attempts := s.requestAttempts(ctx, modelID, modelConfig, body)
 	targets := attemptTargets(attempts)
 	var last chainResult
 	last.Status = http.StatusBadGateway

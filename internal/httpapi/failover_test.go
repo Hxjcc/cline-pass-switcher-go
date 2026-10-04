@@ -674,3 +674,52 @@ func TestStickySessionReusesTheAccountAcrossTurns(t *testing.T) {
 		t.Fatalf("the same conversation should keep its account, a new one should move on: %#v", auths)
 	}
 }
+
+// pi sends its conversation id in headers instead of prompt_cache_key when
+// session affinity headers are enabled. Those requests must still keep one
+// account per conversation, and any of the session headers may carry the id.
+func TestSessionHeadersStickOneAccountPerConversation(t *testing.T) {
+	var auths []string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") || request.URL.Path != "/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		auths = append(auths, request.Header.Get("Authorization"))
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, chatCompletionBody)
+	}))
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.AccountMode = "roundrobin"
+		config.Accounts = []model.Account{
+			{Name: "a", Key: "key-a", Enabled: true},
+			{Name: "b", Key: "key-b", Enabled: true},
+		}
+		config.KnownModels = []string{"cline-pass/test"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(headerName, sessionID string) {
+		t.Helper()
+		body := `{"model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]}`
+		request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(headerName, sessionID)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("chat failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+	send("session_id", "pi-session")
+	send("x-session-affinity", "pi-session")
+	send("session_id", "other-session")
+	if len(auths) != 3 || auths[0] == "" || auths[0] != auths[1] || auths[2] == auths[0] {
+		t.Fatalf("the header conversation should keep its account, a new one should move on: %#v", auths)
+	}
+}

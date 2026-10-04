@@ -399,7 +399,7 @@ func (s *Server) runSharedResponses(
 	// Keep job.ctx as the cancellable parent. Another client can read it while
 	// this run starts, so the stick values live on a child context instead.
 	ctx := s.withSessionStick(job.ctx, modelID, chatBody)
-	attempts := s.requestAttempts(modelID, modelConfig, chatBody)
+	attempts := s.requestAttempts(ctx, modelID, modelConfig, chatBody)
 	job.targets = attemptTargets(attempts)
 	job.effort = bridgeContext.MappedReasoningEffort
 	job.keepalive = streamKeepaliveInterval(s.upstream.StreamIdleTimeout())
