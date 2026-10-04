@@ -1976,8 +1976,7 @@ func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
 		t.Fatalf("web_search_preview was not mapped: %#v", tools)
 	}
 
-	// Other hosted tools keep being dropped — the gateway search is still
-	// declared because the operator configured it.
+	// Other hosted tools keep being dropped.
 	fileSearch := map[string]any{
 		"model": "cline-pass/glm-5.3-flash", "input": "hi",
 		"tools": []any{map[string]any{"type": "file_search"}},
@@ -1986,25 +1985,12 @@ func TestWebSearchMapsToGatewayProviderTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools = jsonx.Slice(chat["tools"])
-	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
-		t.Fatalf("file_search must stay unmapped while the gateway search is declared: %#v", chat["tools"])
-	}
-
-	// A configured gateway search needs no client declaration at all: planner
-	// models get it even for a bare request.
-	bare := map[string]any{"model": "cline-pass/deepseek-v4.1-flash", "input": "hi"}
-	chat, _, err = ToChatWithOptions(bare, Options{WebSearchUpstream: "exa"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tools = jsonx.Slice(chat["tools"])
-	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
-		t.Fatalf("bare planner request must carry the gateway search tool: %#v", chat["tools"])
+	if jsonx.Slice(chat["tools"]) != nil {
+		t.Fatalf("file_search must stay unmapped: %#v", chat["tools"])
 	}
 }
 
-func TestWebSearchPolicyFollowsTheConfiguredProviderTool(t *testing.T) {
+func TestWebSearchPolicyIsInjectedOnlyWhenDeclared(t *testing.T) {
 	body := map[string]any{
 		"model": "cline-pass/deepseek-v4.1-flash", "input": "hi",
 		"instructions": "base instructions",
@@ -2034,8 +2020,8 @@ func TestWebSearchPolicyFollowsTheConfiguredProviderTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if content = jsonx.String(jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"]); !strings.Contains(content, "Web search policy") {
-		t.Fatalf("policy must follow the configured gateway search tool: %#v", content)
+	if content = jsonx.String(jsonx.Map(jsonx.Slice(chat["messages"])[0])["content"]); strings.Contains(content, "Web search policy") {
+		t.Fatalf("policy leaked into a request without web_search: %#v", content)
 	}
 
 	chat, _, err = ToChatWithOptions(body, Options{})

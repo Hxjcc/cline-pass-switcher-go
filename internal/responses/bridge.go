@@ -188,12 +188,6 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"], 0)
-	// A configured gateway search tool is declared even when the client does
-	// not ask for the hosted web_search: Codex desktop never declares it, and
-	// clients with their own client-side search (DeepSeek Harness) lose that
-	// tool the moment its provider is disabled. The model decides whether to
-	// search, and the gateway runs the search inside its own loop.
-	context.addProviderWebSearch()
 	if context.providerToolsAvailable() && context.webFetchTool != "" && requestHasUserURL(body["input"]) {
 		context.addProviderTool(context.webFetchTool)
 	}
