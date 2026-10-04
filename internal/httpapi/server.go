@@ -852,7 +852,6 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "model is required"}})
 		return
 	}
-	s.injectChatSearch(modelID, body)
 	modelConfig := s.store.ModelConfig(modelID)
 	stream, _ := body["stream"].(bool)
 	if stream {
