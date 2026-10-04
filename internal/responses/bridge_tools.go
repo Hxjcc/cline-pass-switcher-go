@@ -422,8 +422,8 @@ func normaliseShellCompat(value string) string {
 	}
 }
 
-// normaliseWebSearchTool maps configuration onto a gateway provider tool id.
-func normaliseWebSearchTool(value string) string {
+// NormaliseWebSearchTool maps configuration onto a gateway provider tool id.
+func NormaliseWebSearchTool(value string) string {
 	trimmed := strings.TrimSpace(value)
 	switch strings.ToLower(trimmed) {
 	case "", "off", "none", "false", "disabled":
@@ -466,12 +466,7 @@ func (context *Context) webSearchPolicy() string {
 	if context == nil || context.webSearchTool == "" || !context.isProviderTool(context.webSearchTool) {
 		return ""
 	}
-	return "Web search policy:\n" +
-		"- Prefer at most one web search call per turn.\n" +
-		"- Request at most 3 results.\n" +
-		"- Do not issue parallel web searches.\n" +
-		"- When invoking tools, do not output raw XML or DSML tool-call markup.\n" +
-		"- After receiving search results, answer directly; only search again if the results are clearly insufficient."
+	return GatewaySearchPolicy()
 }
 
 func (context *Context) collectDeclaredInputTools(value any, depth int) {
