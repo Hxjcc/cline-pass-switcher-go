@@ -44,6 +44,27 @@ func decodeRequestBody(t *testing.T, request *http.Request) map[string]any {
 	return payload
 }
 
+// requestedOnlyProvider reads the provider allow list a request carries in the
+// pipeline-specific routing field: providerOptions.gateway.only for planner
+// models, provider.only for direct ones.
+func requestedOnlyProvider(payload map[string]any) string {
+	if providerOptions, ok := payload["providerOptions"].(map[string]any); ok {
+		if gateway, ok := providerOptions["gateway"].(map[string]any); ok {
+			if only, ok := gateway["only"].([]any); ok && len(only) > 0 {
+				value, _ := only[0].(string)
+				return value
+			}
+		}
+	}
+	if provider, ok := payload["provider"].(map[string]any); ok {
+		if only, ok := provider["only"].([]any); ok && len(only) > 0 {
+			value, _ := only[0].(string)
+			return value
+		}
+	}
+	return ""
+}
+
 // A planner-pipeline completion does not carry the channel list, so the probe
 // asks the gateway for it with an impossible provider pin and parses the
 // rejection. Both halves have to line up or the console shows no channels.
@@ -168,6 +189,53 @@ func TestProbeModelMarksSingleProviderPlannerAsNotPinnable(t *testing.T) {
 		t.Fatalf("pinnable = %v, pinReason = %q, want single-provider", meta.Pinnable, meta.PinReason)
 	}
 	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"openai-compatible-private"})
+}
+
+// The same private route, but probed while the model already carries a saved
+// pin. That makes the probe restricted, which disables the one-entry-plan
+// shortcut, and the gateway still answers the impossible pin with the model's
+// OpenRouter fallback list - so the model used to be advertised as pinnable
+// even though every request lands on the private endpoint.
+func TestProbeModelKeepsPinnedPrivateRouteSingleProvider(t *testing.T) {
+	var probes atomic.Int32
+	plan := "Routed via VMC 'test-contributor-fallbacks' → private/test-contributor. System credentials planned for: " +
+		privateChannel + ". Total execution order: " + privateChannel + "(system)"
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if requestedOnlyProvider(decodeRequestBody(t, request)) == pinProbeSlug {
+			probes.Add(1)
+			_, _ = io.WriteString(writer, `{"error":{"message":"No available providers match the 'only' filter: `+pinProbeSlug+
+				`. Available providers are: alibaba, baseten, deepinfra, novita, togetherai.","type":"invalid_request_error"}}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"id":"chatcmpl-1","model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"OK","provider_metadata":{"gateway":{"routing":{"canonicalSlug":"private/test-contributor","finalProvider":"`+
+			privateChannel+`","fallbacksAvailable":[],"planningReasoning":"`+plan+`"}}}},"finish_reason":"stop"}]}`)
+	}))
+	defer upstreamServer.Close()
+
+	st := newStreamTestStore(t, upstreamServer.URL)
+	if err := st.UpdateConfig(func(cfg *model.Config) {
+		cfg.PerModel = map[string]model.PerModelConfig{"cline-pass/test": {Upstreams: []string{"deepinfra"}}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := New(st).ProbeModel(t.Context(), "cline-pass/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probes.Load() != 1 {
+		t.Fatalf("preference probes = %d, want 1", probes.Load())
+	}
+	meta := result.ModelMeta
+	if meta.Pinnable == nil || *meta.Pinnable || meta.PinReason != pinReasonSingleProvider {
+		t.Fatalf("pinnable = %v, pinReason = %q, want single-provider", meta.Pinnable, meta.PinReason)
+	}
+	// The OpenRouter names the harvest handed back cannot serve the model, so
+	// they must not survive into the channel list or the console shows channels
+	// that can never be used.
+	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{privateChannel})
+	assertSameStringSet(t, "availableProviders", meta.AvailableProviders, []string{privateChannel})
 }
 
 // A direct-pipeline completion names its provider and canonical model, which

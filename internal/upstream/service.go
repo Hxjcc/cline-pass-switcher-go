@@ -81,6 +81,34 @@ const (
 	pinReasonUnsupported    = "unsupported_pipeline"
 )
 
+// privateChannel is the one endpoint Cline uses to serve the models it hosts
+// itself (the VMC/contributor deployments). Those models have no other usable
+// channel: the OpenRouter providers the gateway names in an impossible-pin
+// rejection are fallbacks it does not take, so a channel preference cannot
+// move the request and must not be advertised as pinning.
+const privateChannel = "openai-compatible-private"
+
+// servedPrivately reports whether the gateway answered this completion from
+// its own private endpoint. Cline reports the route both as the serving
+// channel and, for contributor models, as the canonical slug's namespace.
+func servedPrivately(routing Routing) bool {
+	if providerKey(routing.FinalProvider) == providerKey(privateChannel) {
+		return true
+	}
+	return strings.HasPrefix(routing.CanonicalSlug, "private/")
+}
+
+// privateRouteChannel files a private route under the slug the model's channel
+// list uses, so the console and the saved pin configuration name it the same
+// way even when the gateway spelled the endpoint differently.
+func privateRouteChannel(routing Routing, planned []string, detail map[string]model.UpstreamDetail) string {
+	known := model.ModelMeta{Upstreams: planned, UpstreamDetail: detail}
+	if slug := CanonicalProvider(known, routing.FinalProvider); providerKey(slug) == providerKey(privateChannel) {
+		return slug
+	}
+	return CanonicalProvider(known, privateChannel)
+}
+
 type ValidationResult struct {
 	Supported bool
 	Reason    string
@@ -182,11 +210,19 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	for _, endpoint := range endpoints {
 		detail[endpoint.Slug] = endpoint
 	}
+	// A model Cline hosts itself is served by the private endpoint alone. The
+	// OpenRouter names the gateway returns for an impossible pin are fallbacks
+	// it never takes, so the channel list is just that endpoint: keeping the
+	// rest would offer channels nobody can use, and nobody can pin to.
+	privateRoute := servedPrivately(routing)
 	var upstreams []string
-	if routing.Pipeline == "planner" {
+	switch {
+	case privateRoute:
+		upstreams = []string{privateRouteChannel(routing, planned, detail)}
+	case routing.Pipeline == "planner":
 		finalSlug := CanonicalProvider(model.ModelMeta{Upstreams: planned, UpstreamDetail: detail}, routing.FinalProvider)
 		upstreams = strx.Unique(append(append(append(append([]string{}, planned...), finalSlug), routing.Fallbacks...), probe.providers...))
-	} else {
+	default:
 		keys := make([]string, 0, len(detail))
 		for key := range detail {
 			keys = append(keys, key)
@@ -202,6 +238,11 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	switch {
 	case routing.Pipeline == "":
 		pinReason = pinReasonUnsupported
+	// The check has to come first: a saved pin makes the probe restricted,
+	// which disables the one-entry-plan shortcut above, and the gateway's
+	// OpenRouter fallback list would otherwise read as "pinnable".
+	case privateRoute:
+		pinReason = pinReasonSingleProvider
 	case routing.Pipeline == "planner" && singleProvider:
 		pinReason = pinReasonSingleProvider
 	case len(upstreams) == 0:
@@ -215,7 +256,10 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	default:
 		pinReason = pinReasonProbeFailed
 	}
-	tier0 := strx.Unique(append(previous.Tier0, parseTier0(routing.Plan)...))
+	var tier0 []string
+	if !privateRoute {
+		tier0 = strx.Unique(append(previous.Tier0, parseTier0(routing.Plan)...))
+	}
 	// The channel list was just (re)built; resolve the hit against it rather
 	// than against whatever the previous probe knew.
 	routing.FinalProvider = CanonicalProvider(model.ModelMeta{Upstreams: upstreams, UpstreamDetail: detail}, routing.FinalProvider)
@@ -224,15 +268,23 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		current.Pipeline = routing.Pipeline
 		current.Pinnable = &pinnable
 		current.PinReason = pinReason
-		current.AvailableProviders = strx.Unique(append(probe.providers, current.AvailableProviders...))
 		current.CanonicalSlug = routing.CanonicalSlug
 		current.OpenRouterSlug = orSlug
-		current.UpstreamDetail = detail
 		current.Upstreams = upstreams
-		current.Tier0 = tier0
 		current.LastProvider = routing.FinalProvider
 		current.LastMS = time.Since(started).Milliseconds()
 		current.ProbedAt = time.Now().UnixMilli()
+		if privateRoute {
+			// The model has one channel and no OpenRouter endpoints, so
+			// whatever an earlier probe harvested for it is stale.
+			current.AvailableProviders = slices.Clone(upstreams)
+			current.UpstreamDetail = nil
+			current.Tier0 = nil
+		} else {
+			current.AvailableProviders = strx.Unique(append(probe.providers, current.AvailableProviders...))
+			current.UpstreamDetail = detail
+			current.Tier0 = tier0
+		}
 		if !pinnable {
 			// A previous probe may have stored a green board from when the
 			// gateway still honoured pins; stale data is worse than none.
