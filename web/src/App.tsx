@@ -28,7 +28,7 @@ import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsIndicator, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
@@ -524,9 +524,14 @@ function App() {
           setVisitedTabs((current) => new Set([...current, value]))
         }}>
           <div className="overflow-x-auto pb-1">
-            <TabsList className="w-max gap-0.5">
+            <TabsList className="relative w-max gap-0.5">
+              <TabsIndicator />
               {TABS.map(({ value, label, icon: Icon }) => (
-                <TabsTrigger key={value} value={value} className="px-3">
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="px-3"
+                >
                   <Icon data-icon="inline-start" />
                   {label}
                 </TabsTrigger>

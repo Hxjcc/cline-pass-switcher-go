@@ -171,33 +171,33 @@ html.theme-transition *::after {
     outline-color 0.35s ease !important;
 }
 
-/* Tab switches. Base UI keeps the outgoing panel mounted until its transition
-   finishes, so the two panels can cross-fade; the incoming one also slides in
-   from the side its tab sits on, which is what makes the direction readable. */
-[data-slot="tabs-content"] {
+/* Tab switches move the highlight, not the page: the pill travels from the tab
+   that had it to the tab that takes it, carries a little past the new tab, and
+   settles back onto it, while the two labels swap their colour. Nothing scales,
+   so the text never looks like it thickens on the way. Base UI hands the pill
+   the active tab's geometry as custom properties. */
+[data-slot="tabs-indicator"] {
+  position: absolute;
+  left: var(--active-tab-left);
+  top: var(--active-tab-top);
+  width: var(--active-tab-width);
+  height: var(--active-tab-height);
+  border-radius: var(--radius-md);
+  background-color: var(--background);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06), 0 1px 1px oklch(0 0 0 / 0.04);
   transition:
-    opacity 180ms ease-out,
-    transform 180ms ease-out;
+    left 300ms cubic-bezier(0.34, 1.4, 0.64, 1),
+    top 300ms ease-out,
+    width 300ms cubic-bezier(0.34, 1.4, 0.64, 1),
+    height 300ms ease-out;
 }
-[data-slot="tabs-content"][data-starting-style],
-[data-slot="tabs-content"][data-ending-style] {
-  opacity: 0;
-}
-[data-slot="tabs-content"][data-starting-style] {
-  transform: translateX(12px);
-}
-[data-slot="tabs-content"][data-ending-style] {
-  transform: translateX(-12px);
-}
-[data-slot="tabs-content"][data-activation-direction="left"][data-starting-style] {
-  transform: translateX(-12px);
-}
-[data-slot="tabs-content"][data-activation-direction="left"][data-ending-style] {
-  transform: translateX(12px);
+
+.dark [data-slot="tabs-indicator"] {
+  background-color: color-mix(in oklab, var(--input) 30%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-slot="tabs-content"] {
+  [data-slot="tabs-indicator"] {
     transition: none;
   }
 }
