@@ -24,7 +24,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
-import { formatCompactTime, formatTime } from "@/lib/format"
+import { formatCompactTime, formatTime, keyMask } from "@/lib/format"
 import { useDraft } from "@/lib/use-draft"
 import { cn } from "@/lib/utils"
 import type { AccountsResponse, KeysResponse, ProxyKeyDraft } from "@/types"
@@ -33,10 +33,6 @@ const ANY_ACCOUNT = "__any__"
 const ANY_ACCOUNT_LABEL = "不限定（自动选择）"
 const draftIdPrefix = "draft_"
 const isDraftId = (id: string) => id.startsWith(draftIdPrefix)
-
-// This is only a password-field display value, never part of the draft or
-// save payload. It matches the account panel's hidden stored credential.
-const storedKeyMask = "00000000000000000000"
 
 // Both rows of a key share one column template, so every field lines up with
 // the one above it.
@@ -76,6 +72,7 @@ function toDraft(item: KeysResponse["keys"][number], key: string): ProxyKeyDraft
     spentUsd: item.spentUsd,
     lastUsed: item.lastUsed,
     keyPreview: item.keyPreview,
+    keyLength: item.keyLength,
     hasKey: item.hasKey,
     dirty: false,
   }
@@ -86,7 +83,8 @@ function toDraft(item: KeysResponse["keys"][number], key: string): ProxyKeyDraft
 // change still replaces the draft with the authoritative server snapshot.
 function reconcileKeyUsage(draft: ProxyKeyDraft[], next: ProxyKeyDraft[], previous: ProxyKeyDraft[]): ProxyKeyDraft[] {
   const configuration = (rows: ProxyKeyDraft[]) => JSON.stringify(rows.map((row) => [
-    row.id, row.name, row.enabled, row.accountId, row.spendLimitUsd, row.note, row.createdAt, row.keyPreview, row.hasKey,
+    row.id, row.name, row.enabled, row.accountId, row.spendLimitUsd, row.note, row.createdAt, row.keyPreview,
+    row.keyLength, row.hasKey,
   ]))
   if (configuration(next) !== configuration(previous)) return next
   const byID = new Map(next.map((row) => [row.id, row]))
@@ -340,7 +338,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
               const visibleKey = row.key || revealedKeys[row.id] || ""
               const fieldKey = revealed || row.key
                 ? visibleKey
-                : row.hasKey && keyFocused !== row.id ? storedKeyMask : ""
+                : row.hasKey && keyFocused !== row.id ? keyMask(row.keyLength) : ""
               const exhausted = row.spendLimitUsd > 0 && row.spentUsd >= row.spendLimitUsd
               const bindingBroken = row.accountId !== ANY_ACCOUNT && !accountUsable(row.accountId)
               const ids = {

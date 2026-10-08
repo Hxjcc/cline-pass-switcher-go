@@ -121,6 +121,27 @@ test("reveals stored secrets on demand and masks them again", async () => {
   expect(input.value).toMatch(/^0+$/)
 })
 
+test("sizes the mask over a stored key to the key's length", () => {
+  // The field is a password input, so the dots are the mask's characters: a
+  // fixed-width mask would claim a length the stored key does not have.
+  renderPanel([
+    {
+      id: "key_1",
+      name: "ci",
+      keyPreview: "sk-12…cdef",
+      keyLength: 67,
+      hasKey: true,
+      enabled: true,
+      requests: 0,
+      spentUsd: 0,
+    },
+  ])
+  const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
+  expect(input.type).toBe("password")
+  expect(input.value).toMatch(/^0+$/)
+  expect(input.value).toHaveLength(67)
+})
+
 test("revealing keys preserves edits, new rows, deletions and typed secrets", async () => {
   const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
   const removed = { ...stored, id: "key_2", name: "removed" }
