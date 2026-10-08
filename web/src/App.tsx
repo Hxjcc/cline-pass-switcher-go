@@ -520,6 +520,12 @@ function App() {
         )}
 
         <Tabs value={tab} onValueChange={(value) => {
+          if (value !== tab) {
+            // A panel swap keeps whatever scroll offset the last one was read
+            // at, which drops the reader into the middle of the new panel - or
+            // past the end of a shorter one. Start it from the top instead.
+            window.scrollTo({ top: 0 })
+          }
           setTab(value)
           setVisitedTabs((current) => new Set([...current, value]))
         }}>
