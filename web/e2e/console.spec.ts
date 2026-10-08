@@ -28,7 +28,9 @@ test("issuing a client key keeps the secret out of the boot frame", async ({ pag
   await page.getByRole("tab", { name: "代理密钥" }).click()
   await page.getByRole("button", { name: /新增客户端密钥/ }).click()
 
-  const field = page.getByLabel("客户端密钥")
+  // A fresh row rests as dots too; its own eye is what shows the key it minted.
+  const field = page.getByRole("article").last().getByLabel("客户端密钥")
+  await page.getByRole("article").last().getByRole("button", { name: "显示密钥" }).click()
   const minted = await field.inputValue()
   expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
 
@@ -41,12 +43,15 @@ test("issuing a client key keeps the secret out of the boot frame", async ({ pag
   await page.reload()
   await page.getByRole("tab", { name: "代理密钥" }).click()
   const stored = page.getByLabel("客户端密钥")
-  await expect(stored).toHaveAttribute("type", "password")
-  await expect(stored).toHaveValue(/^0+$/)
+  // The resting mask is text we paint ourselves, one dot per character of the
+  // stored key, so the field reports the key's length without holding it.
+  await expect(stored).toHaveAttribute("type", "text")
+  await expect(stored).toHaveValue(/^•+$/)
   await stored.focus()
   await expect(stored).toHaveValue("")
+  await expect(stored).toHaveAttribute("type", "password")
   await stored.blur()
-  await expect(stored).toHaveValue(/^0+$/)
+  await expect(stored).toHaveValue(/^•+$/)
   await expect(page.getByPlaceholder("使用者或用途")).toHaveValue("e2e")
 
   // Revealing it puts the plaintext into the DOM; the boot frame written on
@@ -89,16 +94,23 @@ test("revealing client keys keeps an unsaved rename and a new row", async ({ pag
   await existing.fill("unsaved rename")
   await page.getByRole("button", { name: /新增客户端密钥/ }).click()
   await page.getByPlaceholder("使用者或用途").last().fill("unsaved new key")
-  const minted = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
-  await page.getByRole("button", { name: /显示密钥/ }).click()
-  await expect(page.getByRole("button", { name: /隐藏密钥/ })).toBeVisible()
+  // Each row carries its own eye: the draft's reveals the key it minted, the
+  // stored row's fetches the secret behind it.
+  const draftRow = page.getByRole("article").last()
+  const mintedField = draftRow.getByLabel("客户端密钥", { exact: true })
+  await draftRow.getByRole("button", { name: "显示密钥" }).click()
+  const minted = await mintedField.inputValue()
+  expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
+  const storedRow = page.locator("article").filter({ has: page.locator(`[id=${JSON.stringify(keyId)}]`) })
+  await storedRow.getByRole("button", { name: "显示密钥" }).click()
+  await expect(storedRow.getByRole("button", { name: "隐藏密钥" })).toBeVisible()
   await expect(existing).toHaveValue("unsaved rename")
   await expect(page.getByPlaceholder("使用者或用途").last()).toHaveValue("unsaved new key")
-  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
-  await page.getByRole("button", { name: /隐藏密钥/ }).click()
-  await expect(page.locator(`[id=${JSON.stringify(keyId)}]`)).toHaveValue(/^0+$/)
+  await expect(mintedField).toHaveValue(minted)
+  await storedRow.getByRole("button", { name: "隐藏密钥" }).click()
+  await expect(page.locator(`[id=${JSON.stringify(keyId)}]`)).toHaveValue(/^•+$/)
   await expect(existing).toHaveValue("unsaved rename")
-  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
+  await expect(mintedField).toHaveValue(minted)
 })
 
 test("storage faults refresh after login and clear after recovery", async ({ page }) => {
@@ -159,7 +171,11 @@ test("resetting usage preserves unfinished key edits and additions", async ({ pa
   await signIn(page)
   await page.getByRole("tab", { name: "代理密钥", exact: true }).click()
   await page.getByRole("button", { name: /新增客户端密钥/ }).click()
-  const secret = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
+  // The row rests as dots; reveal it to read the key this test then sends.
+  const firstRow = page.getByRole("article").last()
+  await firstRow.getByRole("button", { name: "显示密钥" }).click()
+  const secret = await firstRow.getByLabel("客户端密钥", { exact: true }).inputValue()
+  expect(secret).toMatch(/^sk-[0-9a-f]{48}$/)
   await page.getByPlaceholder("使用者或用途").last().fill("usage reset fixture")
   await page.getByRole("button", { name: /^保存$/ }).click()
   await expect(page.getByText("代理密钥已保存", { exact: true })).toBeVisible()
@@ -179,12 +195,16 @@ test("resetting usage preserves unfinished key edits and additions", async ({ pa
   await name.fill("unsaved reset rename")
   await page.getByRole("button", { name: /新增客户端密钥/ }).click()
   await page.getByPlaceholder("使用者或用途").last().fill("unsaved reset addition")
-  const minted = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
+  const additionRow = page.getByRole("article").last()
+  const additionField = additionRow.getByLabel("客户端密钥", { exact: true })
+  await additionRow.getByRole("button", { name: "显示密钥" }).click()
+  const minted = await additionField.inputValue()
+  expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
   await page.getByRole("article", { name: "unsaved reset rename", exact: true }).getByRole("button", { name: "重置用量", exact: true }).click()
   await expect(page.getByText("已重置该密钥的用量", { exact: true })).toBeVisible()
   await expect(name).toHaveValue("unsaved reset rename")
   await expect(page.getByPlaceholder("使用者或用途").last()).toHaveValue("unsaved reset addition")
-  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
+  await expect(additionField).toHaveValue(minted)
   await expect(page.getByRole("article", { name: "unsaved reset rename", exact: true }).getByRole("button", { name: "重置用量", exact: true })).toBeDisabled()
 })
 
