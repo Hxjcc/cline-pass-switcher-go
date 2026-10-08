@@ -44,6 +44,33 @@ func TestSessionIDFromHeadersPrefersTheSpecificHeader(t *testing.T) {
 	}
 }
 
+// Codex spells the conversation id with dashes, so the underscore spelling
+// never matches it. A subagent reports the conversation that spawned it as
+// session-id while thread-id holds the subagent's own thread.
+func TestSessionIDFromHeadersReadsTheCodexDashSpelling(t *testing.T) {
+	thread := http.Header{}
+	thread.Set("session-id", "codex-thread")
+	thread.Set("thread-id", "codex-thread")
+	thread.Set("x-client-request-id", "codex-thread")
+	if got := SessionIDFromHeaders(thread); got != "codex-thread" {
+		t.Fatalf("session-id should be recognised, got %q", got)
+	}
+
+	subagent := http.Header{}
+	subagent.Set("session-id", "parent-thread")
+	subagent.Set("thread-id", "child-thread")
+	subagent.Set("x-client-request-id", "child-thread")
+	if got := SessionIDFromHeaders(subagent); got != "parent-thread" {
+		t.Fatalf("a subagent should stay with the conversation that spawned it, got %q", got)
+	}
+
+	only := http.Header{}
+	only.Set("thread-id", "thread-only")
+	if got := SessionIDFromHeaders(only); got != "thread-only" {
+		t.Fatalf("thread-id fallback = %q", got)
+	}
+}
+
 func TestSessionIDFromHeadersHashesOversizedValues(t *testing.T) {
 	header := http.Header{}
 	long := strings.Repeat("x", maxSessionHintLen+1)

@@ -723,3 +723,62 @@ func TestSessionHeadersStickOneAccountPerConversation(t *testing.T) {
 		t.Fatalf("the header conversation should keep its account, a new one should move on: %#v", auths)
 	}
 }
+
+// Codex spells the conversation id with dashes (session-id / thread-id) beside
+// x-client-request-id, so a request without prompt_cache_key must still stick.
+// A subagent reports the conversation that spawned it as session-id, which
+// keeps the child on its parent's account.
+func TestCodexSessionHeadersStickOneAccountPerConversation(t *testing.T) {
+	var auths []string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/users/me/plan") || request.URL.Path != "/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		auths = append(auths, request.Header.Get("Authorization"))
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, chatCompletionBody)
+	}))
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.AccountMode = "roundrobin"
+		config.Accounts = []model.Account{
+			{Name: "a", Key: "key-a", Enabled: true},
+			{Name: "b", Key: "key-b", Enabled: true},
+		}
+		config.KnownModels = []string{"cline-pass/test"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(session, thread string) {
+		t.Helper()
+		body := `{"model":"cline-pass/test","messages":[{"role":"user","content":"hi"}]}`
+		request := localRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("session-id", session)
+		request.Header.Set("thread-id", thread)
+		request.Header.Set("x-client-request-id", thread)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("chat failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+	send("codex-thread", "codex-thread")
+	send("codex-thread", "codex-thread")
+	send("codex-thread", "child-thread")
+	send("other-thread", "other-thread")
+	if len(auths) != 4 || auths[0] == "" {
+		t.Fatalf("expected four recorded attempts, got %#v", auths)
+	}
+	if auths[1] != auths[0] || auths[2] != auths[0] {
+		t.Fatalf("one Codex thread and its subagent should keep the account: %#v", auths)
+	}
+	if auths[3] == auths[0] {
+		t.Fatalf("a new Codex thread should move on: %#v", auths)
+	}
+}

@@ -78,10 +78,21 @@ type stickHint struct {
 }
 
 // sessionHeaderNames are the out-of-band conversation ids clients send when
-// they do not put prompt_cache_key in the body. pi sends the first three once
-// its session affinity headers are enabled; OpenRouter-style clients use
-// x-session-id. Order is priority: the most specific header wins.
-var sessionHeaderNames = []string{"session_id", "x-session-affinity", "x-session-id", "x-client-request-id"}
+// they do not put prompt_cache_key in the body. pi sends session_id and
+// x-session-affinity once its affinity headers are enabled, OpenRouter-style
+// clients use x-session-id, and Codex sends session-id next to thread-id and
+// x-client-request-id (dashes, so the underscore spelling never matches it).
+// Order is priority: the conversation header wins over the thread header,
+// because a Codex subagent reports its parent as session-id and its own id as
+// thread-id, and a subagent belongs to the conversation that spawned it.
+var sessionHeaderNames = []string{
+	"session_id",
+	"session-id",
+	"x-session-affinity",
+	"x-session-id",
+	"thread-id",
+	"x-client-request-id",
+}
 
 // maxSessionHintLen caps how much of a header value becomes a memory key. A
 // long id is hashed rather than truncated so two conversations can never share
