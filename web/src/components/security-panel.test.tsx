@@ -1,10 +1,13 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { SecurityPanel } from "./security-panel"
 import type { SecurityResponse } from "@/types"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const data: SecurityResponse = {
   proxyKey: "sk-master",
@@ -43,4 +46,20 @@ test("never echoes a secret value", () => {
   expect(screen.queryByText("sk-master")).toBeNull()
   expect(screen.queryByText("sk-console")).toBeNull()
   expect(screen.getByText("已设置")).toBeTruthy()
+})
+
+// Each key sits behind an eye, a dice and a copy button; copying must work
+// while the field is still masked, exactly like the keys panel's rows.
+test("copies either key while it is masked", async () => {
+  const writeText = vi.fn(async () => {})
+  vi.stubGlobal("navigator", { clipboard: { writeText } })
+  renderPanel()
+
+  fireEvent.click(screen.getByRole("button", { name: "复制管理密钥" }))
+  await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("sk-console"))
+  fireEvent.click(screen.getByRole("button", { name: "复制代理主密钥" }))
+  await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("sk-master"))
+
+  expect((screen.getByLabelText("管理密钥（控制台）") as HTMLInputElement).type).toBe("password")
+  expect((screen.getByLabelText("代理主密钥（客户端）") as HTMLInputElement).type).toBe("password")
 })

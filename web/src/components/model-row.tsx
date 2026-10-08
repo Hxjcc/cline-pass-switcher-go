@@ -315,11 +315,11 @@ export function ModelRow({
                 />
               }
             >
-              {probed ? pipelineLabel(model.meta?.pipeline) : "未探测"}
+              {probed ? pipelineLabel(model.meta?.pipeline, model.meta) : "未探测"}
             </TooltipTrigger>
             <TooltipContent className="max-w-72">
               {probed
-                ? pipelineHint(model.meta?.pipeline, model.meta?.pinnable, model.meta?.pinReason)
+                ? pipelineHint(model.meta?.pipeline, model.meta?.pinnable, model.meta?.pinReason, model.meta)
                 : "执行探测后即可识别该模型使用的路由线路。"}
             </TooltipContent>
           </Tooltip>

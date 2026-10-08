@@ -64,9 +64,18 @@ test("normalizeModelConfig fills in the missing halves", () => {
 
 test("pipelineLabel names the two aggregators", () => {
   expect(pipelineLabel("direct")).toBe("OpenRouter")
-  expect(pipelineLabel("planner")).toBe("Vercel 网关")
+  expect(pipelineLabel("planner")).toBe("Vercel")
   expect(pipelineLabel(undefined)).toBe("未识别")
   expect(pipelineLabel("something-else")).toBe("未识别")
+})
+
+test("pipelineLabel gives a privately served model its own line", () => {
+  // The provider filter never reaches OpenRouter or Vercel for these, so naming
+  // either one on the row would be a lie.
+  expect(pipelineLabel("planner", { canonicalSlug: "private/glm-5p3-contributor" })).toBe("Private")
+  expect(pipelineLabel("planner", { upstreams: ["openai-compatible-private"] })).toBe("Private")
+  expect(pipelineLabel("planner", { upstreams: ["deepseek", "azure"] })).toBe("Vercel")
+  expect(pipelineLabel("planner")).toBe("Vercel")
 })
 
 test("providerLabel shortens the private-endpoint slug and passes others through", () => {
@@ -112,4 +121,10 @@ test("pipelineHint explains when pinning is unavailable", () => {
   expect(pipelineHint("planner", true)).toContain("providerOptions.gateway")
   expect(pipelineHint("direct", true)).toContain("provider 字段")
   expect(pipelineHint(undefined)).toContain("无法区分渠道")
+})
+
+test("pipelineHint explains a privately served model", () => {
+  const hint = pipelineHint("planner", false, "single_provider", { canonicalSlug: "private/glm-5p3-contributor" })
+  expect(hint).toContain("不经过 OpenRouter / Vercel")
+  expect(hint).toContain("不能钉住")
 })

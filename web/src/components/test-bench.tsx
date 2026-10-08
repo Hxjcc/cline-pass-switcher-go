@@ -212,7 +212,7 @@ export function TestBench({ models, onTest }: TestBenchProps) {
                 </AlertTitle>
                 <AlertDescription>
                   {result.ok
-                    ? `耗时 ${shortDuration(result.ms)} · 线路 ${pipelineLabel(result.pipeline)} · 背后模型 ${result.canonicalSlug || "—"}`
+                    ? `耗时 ${shortDuration(result.ms)} · 线路 ${pipelineLabel(result.pipeline, { canonicalSlug: result.canonicalSlug })} · 背后模型 ${result.canonicalSlug || "—"}`
                     : result.error}
                 </AlertDescription>
               </Alert>

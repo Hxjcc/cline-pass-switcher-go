@@ -105,6 +105,21 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
     }
   }
 
+  // The copy button works whether or not the key is on screen: the draft already
+  // holds the value, so nothing has to be revealed first.
+  const copySecret = async (value: string, message: string) => {
+    if (!value) {
+      toast.error("还没有填写密钥")
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(message)
+    } catch {
+      toast.error("无法访问剪贴板")
+    }
+  }
+
   const save = async () => {
     setSaving(true)
     try {
@@ -170,6 +185,12 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
                 >
                   <Dices />
                 </IconAction>
+                <IconAction
+                  label="复制管理密钥"
+                  onClick={() => void copySecret(draft.adminKey, "管理密钥已复制")}
+                >
+                  <Copy />
+                </IconAction>
               </div>
             </Field>
 
@@ -201,6 +222,12 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
                   onClick={() => setDraft((current) => ({ ...current, proxyKey: randomKey() }))}
                 >
                   <Dices />
+                </IconAction>
+                <IconAction
+                  label="复制代理主密钥"
+                  onClick={() => void copySecret(draft.proxyKey, "代理主密钥已复制")}
+                >
+                  <Copy />
                 </IconAction>
               </div>
             </Field>

@@ -4,7 +4,10 @@ import { afterEach, expect, test, vi } from "vitest"
 import { KeysPanel } from "./keys-panel"
 import type { AccountsResponse, KeysResponse, ProxyKeyDraft } from "@/types"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const accounts: AccountsResponse = {
   accounts: [
@@ -30,6 +33,9 @@ test("mints an sk- prefixed key when a row is added", () => {
   renderPanel([])
   fireEvent.click(screen.getByRole("button", { name: /新增客户端密钥/ }))
   const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
+  // A fresh row rests as dots as well; the eye is what shows the key it minted.
+  expect(input.value).toMatch(/^•+$/)
+  fireEvent.click(screen.getByRole("button", { name: "显示密钥" }))
   expect(input.value).toMatch(/^sk-[0-9a-f]{48}$/)
 })
 
@@ -147,6 +153,22 @@ test("sizes the mask over a stored key to the key's length", () => {
   expect(input.value).toHaveLength(67)
 })
 
+test("copies a stored secret without putting it on screen", async () => {
+  const stored = { id: "key_1", name: "ci", keyPreview: "sk-12…cdef", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
+  const writeText = vi.fn(async () => {})
+  vi.stubGlobal("navigator", { clipboard: { writeText } })
+  const onReveal = vi.fn(async (): Promise<KeysResponse> => ({ keys: [{ ...stored, key: "sk-secret" }] }))
+  render(
+    <KeysPanel data={{ keys: [stored] }} accounts={accounts} onSave={vi.fn()} onReveal={onReveal} onReset={vi.fn()} />,
+  )
+
+  fireEvent.click(screen.getByRole("button", { name: "复制密钥" }))
+  await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("sk-secret"))
+  // Copying is not revealing: the row keeps its mask and its eye stays closed.
+  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^•+$/)
+  expect(screen.getByRole("button", { name: "显示密钥" })).toBeTruthy()
+})
+
 test("revealing keys preserves edits, new rows, deletions and typed secrets", async () => {
   const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
   const removed = { ...stored, id: "key_2", name: "removed" }
@@ -163,15 +185,23 @@ test("revealing keys preserves edits, new rows, deletions and typed secrets", as
   fireEvent.click(within(screen.getByRole("article", { name: "removed" })).getByRole("button", { name: "删除密钥" }))
   fireEvent.click(screen.getByRole("button", { name: /新增客户端密钥/ }))
   fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[1], { target: { value: "new draft" } })
-  const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
 
-  fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
-  await vi.waitFor(() => expect(screen.getByRole("button", { name: /隐藏密钥/ })).toBeTruthy())
+  // The eye belongs to the row it sits in: showing one row must leave the other
+  // one masked, and must not disturb anything typed into the draft.
+  const eye = (name: string) =>
+    within(screen.getByRole("article", { name })).getByRole("button", { name: "显示密钥" })
+  fireEvent.click(eye("renamed"))
+  await vi.waitFor(() =>
+    expect((screen.getAllByLabelText("客户端密钥")[0] as HTMLInputElement).value).toBe("sk-replacement"),
+  )
+  expect((screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value).toMatch(/^•+$/)
+  fireEvent.click(eye("new draft"))
+  const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
+  expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
+
   expect(screen.getAllByRole("article")).toHaveLength(2)
   expect(screen.queryByRole("article", { name: "removed" })).toBeNull()
   expect((screen.getAllByLabelText("客户端密钥")[0] as HTMLInputElement).value).toBe("sk-replacement")
-  fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
-  expect((screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value).toBe(minted)
 
   fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
   await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
@@ -226,7 +256,9 @@ test("resetting usage updates counters without discarding any unsaved rows", asy
   fireEvent.click(within(screen.getByRole("article", { name: "removed" })).getByRole("button", { name: "删除密钥" }))
   fireEvent.click(screen.getByRole("button", { name: /新增客户端密钥/ }))
   fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[1], { target: { value: "new draft" } })
+  fireEvent.click(within(screen.getByRole("article", { name: "new draft" })).getByRole("button", { name: "显示密钥" }))
   const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
+  expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
   fireEvent.click(within(screen.getByRole("article", { name: "renamed" })).getByRole("button", { name: "重置用量" }))
   await vi.waitFor(() => expect(onReset).toHaveBeenCalled())
   await vi.waitFor(() => expect(screen.getByRole("article", { name: "renamed" })).toBeTruthy())

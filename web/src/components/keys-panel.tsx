@@ -154,9 +154,11 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
   const [revealing, setRevealing] = useState(false)
   // Revealing is a view of stored secrets, not a replacement of the draft.
   // A changed server snapshot invalidates that view, including late replies.
-  const [reveal, setReveal] = useState<{ source: ProxyKeyDraft[]; keys: Record<string, string> } | null>(null)
-  const revealed = reveal !== null && reveal.source === source
-  const revealedKeys = revealed ? reveal.keys : {}
+  // The secrets arrive as one payload, but each row decides for itself whether
+  // it shows one: the eye sits in the row, next to the row's own copy button.
+  const [secrets, setSecrets] = useState<{ source: ProxyKeyDraft[]; keys: Record<string, string> } | null>(null)
+  const [shownIds, setShownIds] = useState<ReadonlySet<string>>(() => new Set())
+  const revealedKeys = secrets !== null && secrets.source === source ? secrets.keys : {}
   const [keyFocused, setKeyFocused] = useState<string | null>(null)
   const [resetting, setResetting] = useState<string | null>(null)
 
@@ -205,19 +207,54 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
     setDraft((current) => current.filter((_, rowIndex) => rowIndex !== index))
   }
 
-  const toggleReveal = async () => {
-    if (revealed) {
-      setReveal(null)
-      return
-    }
+  // Fetches the stored secrets once and keeps them until the server snapshot
+  // changes. The eye and the copy button both go through it, so copying a
+  // hidden key works without first showing it on screen.
+  const loadSecrets = async (): Promise<Record<string, string>> => {
+    if (secrets !== null && secrets.source === source) return secrets.keys
     setRevealing(true)
     try {
       const response = await onReveal()
-      setReveal({ source, keys: Object.fromEntries(response.keys.map((item) => [item.id, item.key ?? ""])) })
-    } catch (error) {
-      toast.error(errorMessage(error))
+      const keys = Object.fromEntries(response.keys.map((item) => [item.id, item.key ?? ""]))
+      setSecrets({ source, keys })
+      return keys
     } finally {
       setRevealing(false)
+    }
+  }
+
+  // What a row already holds: the value the operator typed or generated, or a
+  // stored one the server has handed over. Empty means "a stored key that has
+  // not been fetched yet".
+  const localSecret = (row: ProxyKeyDraft): string =>
+    row.key || isDraftId(row.id) || !row.hasKey ? row.key : revealedKeys[row.id] ?? ""
+
+  const resolveSecret = async (row: ProxyKeyDraft): Promise<string> => {
+    const local = localSecret(row)
+    if (local !== "" || isDraftId(row.id) || !row.hasKey) return local
+    return (await loadSecrets())[row.id] ?? ""
+  }
+
+  const toggleRow = async (row: ProxyKeyDraft) => {
+    if (shownIds.has(row.id)) {
+      setShownIds((current) => {
+        const next = new Set(current)
+        next.delete(row.id)
+        return next
+      })
+      return
+    }
+    // A value the row already holds is shown on the spot; only a stored key
+    // behind the API has to be fetched first.
+    if (localSecret(row) !== "") {
+      setShownIds((current) => new Set(current).add(row.id))
+      return
+    }
+    try {
+      await resolveSecret(row)
+      setShownIds((current) => new Set(current).add(row.id))
+    } catch (error) {
+      toast.error(errorMessage(error))
     }
   }
 
@@ -233,7 +270,6 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
       }))
       const response = await onSave(payload)
       setDraft(response.keys.map((item) => toDraft(item, "")))
-      setReveal(null)
       toast.success("代理密钥已保存")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -247,7 +283,6 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
     setResetting(row.id)
     try {
       await onReset(row.id)
-      setReveal(null)
       toast.success("已重置该密钥的用量")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -258,7 +293,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
 
   const copyKey = async (value: string) => {
     if (!value) {
-      toast.error("密钥已隐藏，请先点击「显示密钥」")
+      toast.error("这一行还没有密钥，点左边的骰子生成一个")
       return
     }
     try {
@@ -266,6 +301,16 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
       toast.success("密钥已复制")
     } catch {
       toast.error("无法访问剪贴板")
+    }
+  }
+
+  // The row's copy button never needs the secret on screen: a stored key is
+  // fetched behind the scenes and goes straight to the clipboard.
+  const copyRow = async (row: ProxyKeyDraft) => {
+    try {
+      await copyKey(await resolveSecret(row))
+    } catch (error) {
+      toast.error(errorMessage(error))
     }
   }
 
@@ -277,21 +322,6 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
           为下游客户端签发独立的访问密钥，可分别限定使用的账号与累计消费上限。
         </CardDescription>
         <CardAction className={cardActionClass}>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void toggleReveal()}
-            disabled={revealing || draft.length === 0}
-          >
-            {revealing ? (
-              <RefreshCw className="animate-spin" data-icon="inline-start" />
-            ) : revealed ? (
-              <EyeOff data-icon="inline-start" />
-            ) : (
-              <Eye data-icon="inline-start" />
-            )}
-            {revealed ? "隐藏密钥" : "显示密钥"}
-          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -336,14 +366,20 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
             {draft.map((row, index) => {
               const draftRow = isDraftId(row.id)
               const visibleKey = row.key || revealedKeys[row.id] || ""
-              // The stored key rests as dots painted in this field's own
+              // A row is only "shown" while it actually has a secret to show:
+              // saving or resetting drops the cached payload, and the row has to
+              // fall back to dots rather than an empty field.
+              const shown = shownIds.has(row.id) && visibleKey !== ""
+              const editing = keyFocused === row.id
+              const known = Boolean(row.key || row.hasKey)
+              // Hidden, the row rests as dots painted in this field's own
               // monospace font, so the row is exactly as long as the key the
-              // reveal button shows. Any value that is a real secret stays in a
-              // password input, where the browser masks it itself.
-              const storedMask = !revealed && !row.key && row.hasKey && keyFocused !== row.id
-              const fieldKey = storedMask
-                ? keyMask(row.keyLength)
-                : revealed || row.key ? visibleKey : ""
+              // eye reveals. Anything holding a real secret - the shown value
+              // and whatever the operator is typing - stays a password input,
+              // where the browser masks it instead of us.
+              const fieldKey = shown
+                ? visibleKey
+                : known && !editing ? keyMask(visibleKey.length || row.keyLength) : ""
               const exhausted = row.spendLimitUsd > 0 && row.spentUsd >= row.spendLimitUsd
               const bindingBroken = row.accountId !== ANY_ACCOUNT && !accountUsable(row.accountId)
               const ids = {
@@ -376,7 +412,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
                         <div className="flex gap-1.5">
                           <Input
                             id={ids.key}
-                            type={revealed || storedMask ? "text" : "password"}
+                            type={shown || (known && !editing) ? "text" : "password"}
                             value={fieldKey}
                             onFocus={() => setKeyFocused(row.id)}
                             onBlur={() => setKeyFocused((current) => current === row.id ? null : current)}
@@ -389,12 +425,19 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
                             className="font-mono text-xs"
                           />
                           <IconAction
+                            label={shown ? "隐藏密钥" : "显示密钥"}
+                            disabled={revealing && !shown}
+                            onClick={() => void toggleRow(row)}
+                          >
+                            {shown ? <EyeOff /> : <Eye />}
+                          </IconAction>
+                          <IconAction
                             label="生成新的随机密钥"
                             onClick={() => update(index, { key: generateKey() })}
                           >
                             <Dices />
                           </IconAction>
-                          <IconAction label="复制密钥" onClick={() => void copyKey(visibleKey)}>
+                          <IconAction label="复制密钥" onClick={() => void copyRow(row)}>
                             <Copy />
                           </IconAction>
                         </div>
@@ -549,7 +592,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
             </li>
             <li>绑定账号后，该密钥仅使用指定账号；账号不可用时请求直接失败，不会切换到其他账号。</li>
             <li>累计消费以上游返回的实际费用为准，达到额度上限后请求返回 HTTP 429；留空表示不限额。</li>
-            <li>保存后的密钥默认显示为圆点，点击「显示密钥」可查看完整内容；删除或停用需保存后生效。</li>
+            <li>保存后的密钥默认显示为圆点，点该行的小眼睛可查看完整内容，复制按钮不需要先显示；删除或停用需保存后生效。</li>
         </NoteList>
       </CardContent>
     </Card>

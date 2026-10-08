@@ -170,3 +170,34 @@ html.theme-transition *::after {
     box-shadow 0.35s ease,
     outline-color 0.35s ease !important;
 }
+
+/* Tab switches. Base UI keeps the outgoing panel mounted until its transition
+   finishes, so the two panels can cross-fade; the incoming one also slides in
+   from the side its tab sits on, which is what makes the direction readable. */
+[data-slot="tabs-content"] {
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out;
+}
+[data-slot="tabs-content"][data-starting-style],
+[data-slot="tabs-content"][data-ending-style] {
+  opacity: 0;
+}
+[data-slot="tabs-content"][data-starting-style] {
+  transform: translateX(12px);
+}
+[data-slot="tabs-content"][data-ending-style] {
+  transform: translateX(-12px);
+}
+[data-slot="tabs-content"][data-activation-direction="left"][data-starting-style] {
+  transform: translateX(-12px);
+}
+[data-slot="tabs-content"][data-activation-direction="left"][data-ending-style] {
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="tabs-content"] {
+    transition: none;
+  }
+}

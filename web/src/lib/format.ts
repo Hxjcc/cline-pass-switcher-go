@@ -107,11 +107,28 @@ export function formatPlanExpiry(value?: string): string {
   })
 }
 
-// The Cline gateway forwards each model through one of two aggregators; we
-// tell them apart by the shape of the routing metadata in the response.
-export function pipelineLabel(pipeline?: string): string {
+export interface PipelineMeta {
+  canonicalSlug?: string
+  upstreams?: string[]
+}
+
+// A model Cline serves from its own registered endpoint never reaches
+// OpenRouter or Vercel to pick a provider, so it gets its own line label: the
+// route is visible in the canonical slug's namespace, and a single
+// openai-compatible-private channel says the same thing about older metadata.
+export function isPrivateLine(meta?: PipelineMeta | null): boolean {
+  if (!meta) return false
+  if (meta.canonicalSlug?.startsWith("private/")) return true
+  return meta.upstreams?.length === 1 && meta.upstreams[0] === "openai-compatible-private"
+}
+
+// The Cline gateway forwards each model through one of three lines; the two
+// aggregators are told apart by the shape of the routing metadata in the
+// response, and the private one by where it is served from.
+export function pipelineLabel(pipeline?: string, meta?: PipelineMeta | null): string {
+  if (isPrivateLine(meta)) return "Private"
   if (pipeline === "direct") return "OpenRouter"
-  if (pipeline === "planner") return "Vercel 网关"
+  if (pipeline === "planner") return "Vercel"
   return "未识别"
 }
 
@@ -173,7 +190,15 @@ export function isPinDisabled(
   return meta?.pinnable === false || Boolean(meta?.pinReason)
 }
 
-export function pipelineHint(pipeline?: string, pinnable?: boolean, pinReason?: string): string {
+export function pipelineHint(
+  pipeline?: string,
+  pinnable?: boolean,
+  pinReason?: string,
+  meta?: PipelineMeta | null,
+): string {
+  if (isPrivateLine(meta)) {
+    return "该模型由网关私有注册的接口直接提供，不经过 OpenRouter / Vercel 的渠道选择，也没有第二个渠道可选，因此不能钉住或排除。"
+  }
   const pinDisabled = isPinDisabled({ pinnable, pinReason })
   if (pinDisabled && pinReason === "single_provider") {
     return "该模型仅有一个候选渠道，无需钉住，也没有其他渠道可供校验。"
