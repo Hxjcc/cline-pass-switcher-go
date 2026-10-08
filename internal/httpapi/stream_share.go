@@ -15,6 +15,7 @@ import (
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
 	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
 )
@@ -115,10 +116,26 @@ type sharedResponsesStream struct {
 }
 
 func (h *streamShareHub) join(parent context.Context, key string, run func(*sharedResponsesStream)) *sharedResponsesStream {
+	job, _ := h.joinWithAdmission(parent, key, nil, run)
+	return job
+}
+
+// Admission and publication of a new job are one operation. An existing job
+// keeps its original reservation, so reconnects and duplicate subscribers do
+// not reserve or charge another generation. Failed admission publishes no job.
+func (h *streamShareHub) joinWithAdmission(parent context.Context, key string, admit func() (context.Context, error), run func(*sharedResponsesStream)) (*sharedResponsesStream, error) {
 	h.mu.Lock()
 	job := h.jobs[key]
 	started := false
 	if job == nil || job.runDone || job.ctx.Err() != nil {
+		if admit != nil {
+			var err error
+			parent, err = admit()
+			if err != nil {
+				h.mu.Unlock()
+				return nil, err
+			}
+		}
 		// A subscriber may disconnect while others still need the stream.
 		// Keep its authorization values, but let the hub own cancellation.
 		ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
@@ -154,7 +171,7 @@ func (h *streamShareHub) join(parent context.Context, key string, run func(*shar
 			job.finish()
 		}()
 	}
-	return job
+	return job, nil
 }
 
 func (j *sharedResponsesStream) release() {
@@ -273,9 +290,19 @@ func (s *Server) handleStreamingResponses(
 	modelConfig model.PerModelConfig,
 ) {
 	ctx := request.Context()
-	job := s.shares.join(ctx, responsesShareKey(ctx, modelID, requestBody, chatBody, modelConfig), func(job *sharedResponsesStream) {
+	var hold *store.SpendReservation
+	job, err := s.shares.joinWithAdmission(ctx, responsesShareKey(ctx, modelID, requestBody, chatBody, modelConfig), func() (context.Context, error) {
+		var err error
+		hold, err = s.reserveRequestSpend(ctx)
+		return withSpendHold(ctx, hold), err
+	}, func(job *sharedResponsesStream) {
 		s.runSharedResponses(job, chatBody, bridgeContext, modelID, modelConfig)
 	})
+	if err != nil {
+		writeSpendError(writer, err)
+		return
+	}
+	defer hold.Release()
 	defer job.release()
 
 	select {

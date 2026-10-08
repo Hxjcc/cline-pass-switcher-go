@@ -83,6 +83,7 @@ function App() {
   )
   const [loginOpen, setLoginOpen] = useState(false)
   const [tab, setTab] = useState(initialTab)
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([tab]))
   const [refreshing, setRefreshing] = useState(false)
   const [proxyBaseCopied, setProxyBaseCopied] = useState(false)
   const [batchProbe, setBatchProbe] = useState<{ done: number; total: number } | null>(null)
@@ -240,7 +241,15 @@ function App() {
       key: authKey,
       body: { id, all },
     })
-    setKeys(response)
+    const usageByID = new Map(response.keys.map((row) => [row.id, row]))
+    setKeys((current) => current ? {
+      ...current,
+      keys: current.keys.map((row) => {
+        if (!all && row.id !== id) return row
+        const usage = usageByID.get(row.id)
+        return usage ? { ...row, requests: usage.requests, spentUsd: usage.spentUsd, lastUsed: usage.lastUsed } : row
+      }),
+    } : response)
     return response
   }
 
@@ -510,7 +519,10 @@ function App() {
           </Alert>
         )}
 
-        <Tabs value={tab} onValueChange={setTab}>
+        <Tabs value={tab} onValueChange={(value) => {
+          setTab(value)
+          setVisitedTabs((current) => new Set([...current, value]))
+        }}>
           <div className="overflow-x-auto pb-1">
             <TabsList className="w-max gap-0.5">
               {TABS.map(({ value, label, icon: Icon }) => (
@@ -568,7 +580,7 @@ function App() {
             )}
           </TabsContent>
 
-          <TabsContent value="accounts">
+          <TabsContent value="accounts" keepMounted={visitedTabs.has("accounts")}>
             {accounts && (
               <AccountsPanel
                 data={accounts}
@@ -580,13 +592,13 @@ function App() {
             )}
           </TabsContent>
 
-          <TabsContent value="security">
+          <TabsContent value="security" keepMounted={visitedTabs.has("security")}>
             {security && (
               <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
             )}
           </TabsContent>
 
-          <TabsContent value="keys">
+          <TabsContent value="keys" keepMounted={visitedTabs.has("keys")}>
             {keys && accounts && (
               <KeysPanel
                 data={keys}

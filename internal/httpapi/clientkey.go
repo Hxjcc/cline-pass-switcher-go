@@ -26,6 +26,9 @@ type callerKey struct {
 	ID        string
 	Name      string
 	AccountID string
+	// SpendLimitUSD is the admitting grant's budget. Responses reserve it after
+	// conversion, once an existing shared run can be distinguished from a new one.
+	SpendLimitUSD float64
 	// Issued is true when the call came from a console-issued key rather than
 	// the master proxy key. Only issued keys accumulate a spend limit.
 	Issued bool
@@ -188,16 +191,19 @@ func (s *Server) authorizeClient(writer http.ResponseWriter, request *http.Reque
 				return false
 			}
 		}
-		var err error
-		hold, err = s.store.ReserveSpend(grant)
-		if err != nil {
-			writeSpendError(writer, err)
-			return false
+		if !isResponsesPath(request.URL.Path) {
+			var err error
+			hold, err = s.store.ReserveSpend(grant)
+			if err != nil {
+				writeSpendError(writer, err)
+				return false
+			}
 		}
 	}
 	s.clientThrottle.succeed(client)
 	ctx := withCallerKey(request.Context(), callerKey{
 		ID: grant.ID, Name: grant.Name, AccountID: grant.AccountID, Issued: true,
+		SpendLimitUSD: grant.SpendLimitUSD,
 	})
 	ctx = withSpendHold(ctx, hold)
 	// A pinned key never falls back to another account: the operator promised

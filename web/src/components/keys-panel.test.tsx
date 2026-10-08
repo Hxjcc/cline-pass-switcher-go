@@ -184,6 +184,36 @@ test("a late reveal cannot expose a credential from an earlier server snapshot",
   expect(screen.queryByRole("button", { name: /隐藏密钥/ })).toBeNull()
 })
 
+test("resetting usage updates counters without discarding any unsaved rows", async () => {
+  const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 4, spentUsd: 1.25 }
+  const removed = { ...stored, id: "key_2", name: "removed" }
+  const reset: KeysResponse = { keys: [{ ...stored, requests: 0, spentUsd: 0 }, removed] }
+  const onSave = vi.fn(async (_value: ProxyKeyDraft[]): Promise<KeysResponse> => reset)
+  let updateSnapshot!: () => void
+  const onReset = vi.fn(async () => { updateSnapshot(); return reset })
+  const props = { accounts, onSave, onReveal: vi.fn(), onReset }
+  const panel = render(<KeysPanel {...props} data={{ keys: [stored, removed] }} />)
+  updateSnapshot = () => panel.rerender(<KeysPanel {...props} data={reset} />)
+  fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[0], { target: { value: "renamed" } })
+  fireEvent.change(screen.getAllByLabelText("客户端密钥")[0], { target: { value: "sk-edited" } })
+  fireEvent.change(screen.getAllByLabelText("额度上限（USD）")[0], { target: { value: "2.5" } })
+  fireEvent.click(within(screen.getByRole("article", { name: "removed" })).getByRole("button", { name: "删除密钥" }))
+  fireEvent.click(screen.getByRole("button", { name: /新增客户端密钥/ }))
+  fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[1], { target: { value: "new draft" } })
+  const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
+  fireEvent.click(within(screen.getByRole("article", { name: "renamed" })).getByRole("button", { name: "重置用量" }))
+  await vi.waitFor(() => expect(onReset).toHaveBeenCalled())
+  await vi.waitFor(() => expect(screen.getByRole("article", { name: "renamed" })).toBeTruthy())
+  expect(screen.queryByRole("article", { name: "removed" })).toBeNull()
+  expect(screen.getByRole("article", { name: "new draft" })).toBeTruthy()
+  expect(within(screen.getByRole("article", { name: "renamed" })).getByText("0")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
+  await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
+  expect(onSave.mock.calls[0][0]).toHaveLength(2)
+  expect(onSave.mock.calls[0][0][0]).toMatchObject({ id: "key_1", name: "renamed", key: "sk-edited", spendLimitUsd: 2.5, requests: 0, spentUsd: 0 })
+  expect(onSave.mock.calls[0][0][1]).toMatchObject({ name: "new draft", key: minted })
+})
+
 test("shows spend against the limit with readable amounts", () => {
   renderPanel([
     { id: "key_small", name: "small", hasKey: true, enabled: true, spendLimitUsd: 0.5, requests: 2, spentUsd: 0.0018 },

@@ -127,6 +127,67 @@ test("storage faults refresh after login and clear after recovery", async ({ pag
   await expect(page.getByText("数据存储需要检查", { exact: true })).toHaveCount(0)
 })
 
+test("switching tabs keeps unfinished management drafts", async ({ page }) => {
+  await signIn(page)
+  await page.getByRole("tab", { name: "代理密钥", exact: true }).click()
+  await page.getByRole("button", { name: /新增客户端密钥/ }).click()
+  const nameId = await page.getByPlaceholder("使用者或用途").last().getAttribute("id")
+  const keyId = await page.getByLabel("客户端密钥", { exact: true }).last().getAttribute("id")
+  const keyName = page.locator(`[id=${JSON.stringify(nameId)}]`)
+  await keyName.fill("unfinished key")
+  const secret = await page.locator(`[id=${JSON.stringify(keyId)}]`).inputValue()
+  await page.getByRole("tab", { name: "账号池", exact: true }).click()
+  await page.getByRole("button", { name: "添加账号", exact: true }).click()
+  await page.getByLabel("账号名称", { exact: true }).fill("unfinished account")
+  await page.getByRole("tab", { name: "访问与安全", exact: true }).click()
+  await page.getByLabel("公网访问地址", { exact: true }).fill("https://unfinished.example")
+  await page.getByRole("tab", { name: "测试台", exact: true }).click()
+  await expect(page.getByRole("button", { name: "发送测试", exact: true })).toBeVisible()
+  await page.getByRole("tab", { name: "代理密钥", exact: true }).click()
+  await expect(keyName).toHaveValue("unfinished key")
+  await expect(page.locator(`[id=${JSON.stringify(keyId)}]`)).toHaveValue(secret)
+  await page.getByRole("tab", { name: "账号池", exact: true }).click()
+  await expect(page.getByLabel("账号名称", { exact: true })).toHaveValue("unfinished account")
+  await page.getByRole("tab", { name: "访问与安全", exact: true }).click()
+  await expect(page.getByLabel("公网访问地址", { exact: true })).toHaveValue("https://unfinished.example")
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")))
+  const snapshot = await page.evaluate(() => sessionStorage.getItem("cline-pass-switcher-root-snapshot-v1") ?? "")
+  expect(snapshot).not.toContain(secret)
+})
+
+test("resetting usage preserves unfinished key edits and additions", async ({ page }) => {
+  await signIn(page)
+  await page.getByRole("tab", { name: "代理密钥", exact: true }).click()
+  await page.getByRole("button", { name: /新增客户端密钥/ }).click()
+  const secret = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
+  await page.getByPlaceholder("使用者或用途").last().fill("usage reset fixture")
+  await page.getByRole("button", { name: /^保存$/ }).click()
+  await expect(page.getByText("代理密钥已保存", { exact: true })).toBeVisible()
+  // The isolated server has no upstream accounts. A refused generation is a
+  // real recorded request, so resetting its counter exercises the API for free.
+  const generated = await page.request.post("/v1/chat/completions", {
+    headers: { Authorization: `Bearer ${secret}` },
+    data: { model: "cline-pass/glm-5.3-flash", messages: [{ role: "user", content: "test" }] },
+  })
+  expect(generated.status()).toBe(503)
+  expect((await generated.json()).error.code).toBe("no_account")
+  await page.getByRole("button", { name: "刷新", exact: true }).click()
+  const saved = page.getByRole("article", { name: "usage reset fixture", exact: true })
+  const nameId = await saved.getByPlaceholder("使用者或用途").getAttribute("id")
+  const name = page.locator(`[id=${JSON.stringify(nameId)}]`)
+  await expect(saved.getByRole("button", { name: "重置用量", exact: true })).toBeEnabled()
+  await name.fill("unsaved reset rename")
+  await page.getByRole("button", { name: /新增客户端密钥/ }).click()
+  await page.getByPlaceholder("使用者或用途").last().fill("unsaved reset addition")
+  const minted = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
+  await page.getByRole("article", { name: "unsaved reset rename", exact: true }).getByRole("button", { name: "重置用量", exact: true }).click()
+  await expect(page.getByText("已重置该密钥的用量", { exact: true })).toBeVisible()
+  await expect(name).toHaveValue("unsaved reset rename")
+  await expect(page.getByPlaceholder("使用者或用途").last()).toHaveValue("unsaved reset addition")
+  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
+  await expect(page.getByRole("article", { name: "unsaved reset rename", exact: true }).getByRole("button", { name: "重置用量", exact: true })).toBeDisabled()
+})
+
 // The legacy "优先 + 回退" pin mode was removed: pinning is always strict now,
 // so the expanded panel must not offer a mode selector.
 test("expanded model keeps the strict-only routing controls", async ({ page }) => {

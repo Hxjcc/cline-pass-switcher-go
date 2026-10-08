@@ -81,6 +81,21 @@ function toDraft(item: KeysResponse["keys"][number], key: string): ProxyKeyDraft
   }
 }
 
+// Usage refreshes do not edit configuration. Rebase counters onto the current
+// rows while keeping typed values, additions and deletions. A configuration
+// change still replaces the draft with the authoritative server snapshot.
+function reconcileKeyUsage(draft: ProxyKeyDraft[], next: ProxyKeyDraft[], previous: ProxyKeyDraft[]): ProxyKeyDraft[] {
+  const configuration = (rows: ProxyKeyDraft[]) => JSON.stringify(rows.map((row) => [
+    row.id, row.name, row.enabled, row.accountId, row.spendLimitUsd, row.note, row.createdAt, row.keyPreview, row.hasKey,
+  ]))
+  if (configuration(next) !== configuration(previous)) return next
+  const byID = new Map(next.map((row) => [row.id, row]))
+  return draft.map((row) => {
+    const saved = byID.get(row.id)
+    return saved ? { ...row, requests: saved.requests, spentUsd: saved.spentUsd, lastUsed: saved.lastUsed } : row
+  })
+}
+
 // Cents once the amount reaches a dime, more digits below that so a handful of
 // cheap requests does not read as $0.00; trailing zeros past the cents go.
 function formatSpend(value: number): string {
@@ -136,7 +151,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
     () => data.keys.map((item) => toDraft(item, "")),
     [data],
   )
-  const [draft, setDraft] = useDraft<ProxyKeyDraft[]>(source)
+  const [draft, setDraft] = useDraft<ProxyKeyDraft[]>(source, reconcileKeyUsage)
   const [saving, setSaving] = useState(false)
   const [revealing, setRevealing] = useState(false)
   // Revealing is a view of stored secrets, not a replacement of the draft.
@@ -233,8 +248,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
     if (isDraftId(row.id)) return
     setResetting(row.id)
     try {
-      const response = await onReset(row.id)
-      setDraft(response.keys.map((item) => toDraft(item, "")))
+      await onReset(row.id)
       setReveal(null)
       toast.success("已重置该密钥的用量")
     } catch (error) {
