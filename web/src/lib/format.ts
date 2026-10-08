@@ -115,14 +115,6 @@ export function pipelineLabel(pipeline?: string): string {
   return "未识别"
 }
 
-// The value a password field shows in place of a stored secret. The field
-// renders one dot per character, so the mask has to be as long as the key
-// itself; a fixed width would report a length the key does not have. Falls back
-// to the old fixed width only when the server did not send a length.
-export function keyMask(length?: number): string {
-  return "0".repeat(length && length > 0 ? length : 20)
-}
-
 // Gateway provider slugs that are not a marketplace vendor but a private
 // endpoint Cline wired into the gateway. The raw slug is too long for a table
 // chip and says nothing to the reader; keep it for the tooltip.

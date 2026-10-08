@@ -36,7 +36,6 @@ import {
   formatQuotaUSD,
   formatResetTime,
   formatTime,
-  keyMask,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
@@ -53,6 +52,10 @@ import type {
 const draftIdPrefix = "draft_"
 const isDraftId = (id: string) => id.startsWith(draftIdPrefix)
 
+// Shown in a password field so a stored key looks like dots, not a truncated
+// preview. The string never reaches account.key or the save payload.
+const storedKeyMask = "00000000000000000000"
+
 function keyFieldValue(
   account: Account,
   showKeys: boolean,
@@ -61,9 +64,7 @@ function keyFieldValue(
 ): string {
   if (showKeys) return account.key || revealed[account.id] || ""
   if (account.key) return account.key
-  // Password fields paint one dot per character, so the mask carries the
-  // stored key's length: the string never reaches account.key or the payload.
-  if (account.hasKey && !focused) return keyMask(account.keyLength)
+  if (account.hasKey && !focused) return storedKeyMask
   return ""
 }
 

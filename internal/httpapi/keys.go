@@ -21,7 +21,6 @@ type proxyKeyView struct {
 	Name          string  `json:"name,omitempty"`
 	Key           string  `json:"key,omitempty"`
 	KeyPreview    string  `json:"keyPreview,omitempty"`
-	KeyLength     int     `json:"keyLength"`
 	HasKey        bool    `json:"hasKey"`
 	Enabled       bool    `json:"enabled"`
 	AccountID     string  `json:"accountId,omitempty"`
@@ -44,7 +43,6 @@ func proxyKeyViews(grants []model.ProxyKeyGrant, usage map[string]model.KeyUsage
 			ID:            grant.ID,
 			Name:          grant.Name,
 			KeyPreview:    keyPreview(grant.Key),
-			KeyLength:     keyLength(grant.Key),
 			HasKey:        grant.Key != "",
 			Enabled:       grant.Enabled,
 			AccountID:     grant.AccountID,

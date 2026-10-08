@@ -16,7 +16,6 @@ type accountView struct {
 	Name       string `json:"name"`
 	Key        string `json:"key"`
 	KeyPreview string `json:"keyPreview"`
-	KeyLength  int    `json:"keyLength"`
 	HasKey     bool   `json:"hasKey"`
 	Enabled    bool   `json:"enabled"`
 }
@@ -28,7 +27,6 @@ func accountViews(accounts []model.Account, reveal bool) []accountView {
 			ID:         account.ID,
 			Name:       account.Name,
 			KeyPreview: keyPreview(account.Key),
-			KeyLength:  keyLength(account.Key),
 			HasKey:     account.Key != "",
 			Enabled:    account.Enabled,
 		}
@@ -40,23 +38,10 @@ func accountViews(accounts []model.Account, reveal bool) []accountView {
 	return views
 }
 
-// keyRunes is how the console measures a stored key: trimmed, as characters
-// rather than bytes, so a masked field can show the length without the secret.
-func keyRunes(key string) []rune {
-	return []rune(strings.TrimSpace(key))
-}
-
-// keyLength is the number of characters a masked field has to paint, since a
-// password input renders one dot per character: a fixed-width mask would
-// misreport how long the stored key is.
-func keyLength(key string) int {
-	return len(keyRunes(key))
-}
-
 // keyPreview keeps a short hint so two stored keys can be told apart without
 // the API handing out the key itself.
 func keyPreview(key string) string {
-	runes := keyRunes(key)
+	runes := []rune(strings.TrimSpace(key))
 	switch {
 	case len(runes) == 0:
 		return ""
