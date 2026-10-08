@@ -36,6 +36,7 @@ import {
   formatQuotaUSD,
   formatResetTime,
   formatTime,
+  keyMask,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type {
@@ -52,20 +53,21 @@ import type {
 const draftIdPrefix = "draft_"
 const isDraftId = (id: string) => id.startsWith(draftIdPrefix)
 
-// Shown in a password field so a stored key looks like dots, not a truncated
-// preview. The string never reaches account.key or the save payload.
-const storedKeyMask = "00000000000000000000"
-
 function keyFieldValue(
   account: Account,
   showKeys: boolean,
   revealed: Record<string, string>,
   focused: boolean,
-): string {
-  if (showKeys) return account.key || revealed[account.id] || ""
-  if (account.key) return account.key
-  if (account.hasKey && !focused) return storedKeyMask
-  return ""
+): { value: string; type: "text" | "password" } {
+  // The stored key rests as dots painted in the field's own monospace font, so
+  // the row is exactly as long as the key the eye toggle shows. A password
+  // input draws its own bullet glyph instead, and its width is the browser's
+  // choice, which is why the masked row never lined up with the key. Anything
+  // that is a real secret stays in a password input.
+  if (showKeys) return { value: account.key || revealed[account.id] || "", type: "text" }
+  if (account.key) return { value: account.key, type: "password" }
+  if (account.hasKey && !focused) return { value: keyMask(account.keyLength), type: "text" }
+  return { value: "", type: "password" }
 }
 
 // selectionIndex maps the currently selected account onto a new list. Rows are
@@ -342,6 +344,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
               const isActive = draft.mode === "single" && draft.active === index
               const inPool = draft.mode === "roundrobin" && account.enabled
               const rowKey = account.id || `new-${index}`
+              const keyField = keyFieldValue(account, showKeys, revealed, keyFocused === rowKey)
               return (
                 <article
                   key={account.id || `new-${index}`}
@@ -366,8 +369,8 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                       <div className="flex gap-1.5">
                         <Input
                           id={`${rowKey}-key`}
-                          value={keyFieldValue(account, showKeys, revealed, keyFocused === rowKey)}
-                          type={showKeys ? "text" : "password"}
+                          value={keyField.value}
+                          type={keyField.type}
                           autoComplete="off"
                           spellCheck={false}
                           placeholder={account.hasKey ? "" : "sk_..."}
@@ -376,7 +379,7 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
                           onFocus={() => setKeyFocused(rowKey)}
                           onBlur={() => setKeyFocused((current) => (current === rowKey ? null : current))}
                           onChange={(event) => updateAccount(index, { key: event.target.value })}
-                          className={cn("font-mono text-xs", !showKeys && "tracking-[0.18em]")}
+                          className="font-mono text-xs"
                         />
                         <Button
                           variant="outline"

@@ -115,6 +115,16 @@ export function pipelineLabel(pipeline?: string): string {
   return "未识别"
 }
 
+// What a resting key field shows instead of the secret: one dot per character,
+// painted in the field's own monospace font so the row is exactly as long as
+// the key it stands in for. A password input would draw its own bullet glyph
+// instead, and its width is the browser's choice, which is why a masked field
+// could not be lined up with the very same key once revealed. Falls back to the
+// old fixed width only when the server did not send a length.
+export function keyMask(length?: number): string {
+  return "•".repeat(length && length > 0 ? length : 20)
+}
+
 // Gateway provider slugs that are not a marketplace vendor but a private
 // endpoint Cline wired into the gateway. The raw slug is too long for a table
 // chip and says nothing to the reader; keep it for the tooltip.

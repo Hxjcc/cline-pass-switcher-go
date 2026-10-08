@@ -6,6 +6,8 @@ export interface Account {
   /** Empty means "keep the stored key"; only filled in when the user types one. */
   key: string
   keyPreview: string
+  /** Characters in the stored key, for sizing the mask. Absent means unknown. */
+  keyLength?: number
   hasKey: boolean
   enabled: boolean
 }
@@ -155,6 +157,8 @@ export interface ProxyKeyItem {
   /** Only present when the list was fetched with reveal=1. */
   key?: string
   keyPreview?: string
+  /** Characters in the stored key, for sizing the mask. Absent means unknown. */
+  keyLength?: number
   hasKey: boolean
   enabled: boolean
   accountId?: string
@@ -186,6 +190,7 @@ export interface ProxyKeyDraft {
   spentUsd: number
   lastUsed?: number
   keyPreview?: string
+  keyLength?: number
   hasKey: boolean
   dirty: boolean
 }

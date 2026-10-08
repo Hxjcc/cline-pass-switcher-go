@@ -59,7 +59,10 @@ function renderPanel(options: { reveal?: AccountsResponse; quota?: QuotaResponse
 test("keeps the stored key out of the page until it is revealed", () => {
   renderPanel()
   const input = screen.getByLabelText("API Key") as HTMLInputElement
-  expect(input.type).toBe("password")
+  // The resting field is plain text, but it carries nothing except the dots we
+  // painted ourselves, so the stored key is still nowhere in the page.
+  expect(input.type).toBe("text")
+  expect(input.value).toMatch(/^•+$/)
   expect(input.value).not.toContain("sk_")
   expect(input.value.length).toBeGreaterThan(0)
   expect(input.placeholder).toBe("")
@@ -78,7 +81,8 @@ test("reveals stored keys only while the eye is on", async () => {
   expect(onReveal).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole("button", { name: "隐藏密钥" }))
   const hidden = screen.getByLabelText("API Key") as HTMLInputElement
-  expect(hidden.type).toBe("password")
+  expect(hidden.type).toBe("text")
+  expect(hidden.value).toMatch(/^•+$/)
   expect(hidden.value).not.toContain("sk_live")
 })
 
@@ -187,7 +191,8 @@ test("drops revealed keys when a new snapshot arrives", async () => {
   fireEvent.click(screen.getByRole("button", { name: "切换快照" }))
   await waitFor(() => {
     const input = screen.getByLabelText("API Key") as HTMLInputElement
-    expect(input.type).toBe("password")
+    expect(input.type).toBe("text")
+    expect(input.value).toMatch(/^•+$/)
     expect(input.value).not.toContain("sk_live")
     expect(input.placeholder).not.toContain("new")
   })

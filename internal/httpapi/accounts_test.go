@@ -73,6 +73,11 @@ func TestAccountListMasksStoredKeys(t *testing.T) {
 	if strings.Contains(view.KeyPreview, "ef1234567890") {
 		t.Fatalf("preview exposes too much of the key: %q", view.KeyPreview)
 	}
+	// The console paints one dot per character over a stored key, so it needs
+	// the length even though the secret itself stays out of the response.
+	if view.KeyLength != len(key) {
+		t.Fatalf("keyLength = %d, want %d", view.KeyLength, len(key))
+	}
 
 	revealed := accountsRequest(t, server, http.MethodGet, "/api/accounts?reveal=1", "")
 	accounts = decodeAccounts(t, revealed)

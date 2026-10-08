@@ -4,6 +4,7 @@ import {
   formatQuotaUSD,
   formatTokenCount,
   isPinDisabled,
+  keyMask,
   normalizeModelConfig,
   pinReasonLabel,
   pipelineLabel,
@@ -79,6 +80,17 @@ test("pinReasonLabel maps the backend probe reasons", () => {
   expect(pinReasonLabel("single_provider")).toBe("仅有一个候选渠道，无需钉住")
   expect(pinReasonLabel("probe_failed")).toBe("无法确认网关是否支持钉住")
   expect(pinReasonLabel(undefined)).toBe("当前不可钉住")
+})
+
+test("keyMask is as long as the stored key", () => {
+  // The mask is painted text, not a password field's own bullets, so it has to
+  // carry both the key's length and a glyph the field's monospace font draws at
+  // the same width as a character of the key itself.
+  expect(keyMask(3)).toBe("•••")
+  expect(keyMask(67)).toHaveLength(67)
+  expect(keyMask(5)).toHaveLength(5)
+  expect(keyMask(undefined)).toHaveLength(20)
+  expect(keyMask(0)).toHaveLength(20)
 })
 
 test("isPinDisabled accepts either the explicit false or the legacy reason", () => {

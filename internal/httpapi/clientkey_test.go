@@ -277,6 +277,9 @@ func TestKeysApiSavesRevealsAndResets(t *testing.T) {
 	if len(view.Keys) != 1 || view.Keys[0]["keyPreview"] == "" || view.Keys[0]["key"] != nil {
 		t.Fatalf("the list must preview the key without handing it out: %#v", view.Keys)
 	}
+	if length, _ := view.Keys[0]["keyLength"].(float64); int(length) != len(saved[0].Key) {
+		t.Fatalf("keyLength = %v, want %d", view.Keys[0]["keyLength"], len(saved[0].Key))
+	}
 
 	revealed := httptest.NewRecorder()
 	getWithAdminKey(server, "/api/keys?reveal=1", "console", revealed)

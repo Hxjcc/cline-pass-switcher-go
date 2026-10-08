@@ -48,12 +48,16 @@ test("saves the draft in the shape the API expects", async () => {
     },
   ])
   const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
-  expect(input.type).toBe("password")
-  expect(input.value).toMatch(/^0+$/)
+  // Resting on a stored key shows the dots we paint; the moment the field is
+  // focused it goes back to a password input so a typed key stays hidden.
+  expect(input.type).toBe("text")
+  expect(input.value).toMatch(/^•+$/)
   fireEvent.focus(input)
+  expect(input.type).toBe("password")
   expect(input.value).toBe("")
   fireEvent.blur(input)
-  expect(input.value).toMatch(/^0+$/)
+  expect(input.type).toBe("text")
+  expect(input.value).toMatch(/^•+$/)
   fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
   await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
   const payload = onSave.mock.calls[0][0]
@@ -109,16 +113,38 @@ test("reveals stored secrets on demand and masks them again", async () => {
     />,
   )
   const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
-  expect(input.type).toBe("password")
-  expect(input.value).toMatch(/^0+$/)
+  expect(input.type).toBe("text")
+  expect(input.value).toMatch(/^•+$/)
 
   fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
   await vi.waitFor(() => expect(input.value).toBe("sk-plain"))
   expect(input.type).toBe("text")
 
   fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
-  expect(input.type).toBe("password")
-  expect(input.value).toMatch(/^0+$/)
+  expect(input.type).toBe("text")
+  expect(input.value).toMatch(/^•+$/)
+})
+
+test("sizes the mask over a stored key to the key's length", () => {
+  // The dots are painted text in the field's own font, so the row is as long as
+  // the key: the length has to match, and the field must not be a password
+  // input, which would substitute the browser's own bullet glyph instead.
+  renderPanel([
+    {
+      id: "key_1",
+      name: "ci",
+      keyPreview: "sk-12…cdef",
+      keyLength: 67,
+      hasKey: true,
+      enabled: true,
+      requests: 0,
+      spentUsd: 0,
+    },
+  ])
+  const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
+  expect(input.type).toBe("text")
+  expect(input.value).toBe("•".repeat(67))
+  expect(input.value).toHaveLength(67)
 })
 
 test("revealing keys preserves edits, new rows, deletions and typed secrets", async () => {
@@ -164,7 +190,7 @@ test("hiding a revealed key preserves a name edit and keeps the stored secret ou
   fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
   await vi.waitFor(() => expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toBe("sk-stored"))
   fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
-  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^0+$/)
+  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^•+$/)
   fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
   await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
   expect(onSave.mock.calls[0][0][0]).toMatchObject({ name: "renamed", key: "" })
@@ -180,7 +206,7 @@ test("a late reveal cannot expose a credential from an earlier server snapshot",
   panel.rerender(<KeysPanel {...props} data={{ keys: [{ ...stored, keyPreview: "sk-new…key" }] }} />)
   finish({ keys: [{ ...stored, key: "sk-old-secret" }] })
   await vi.waitFor(() => expect(screen.getByRole("button", { name: /显示密钥/ }).hasAttribute("disabled")).toBe(false))
-  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^0+$/)
+  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^•+$/)
   expect(screen.queryByRole("button", { name: /隐藏密钥/ })).toBeNull()
 })
 
