@@ -824,6 +824,7 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 		}
 	}
 	root := jsonx.Map(raw)
+	output := responseBody(root)
 	if details, found := apierr.FromBody(root, status); found && !hasChoices(root) {
 		s.noteAccountStatus(account, details.Status)
 		s.observeStick(ctx, account, attempt.Upstream, details.Status)
@@ -833,6 +834,7 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 			NetErr:  details.Message,
 			Routing: Routing{},
 			Account: account,
+			Usage:   output["usage"],
 			// A pinned key has no second account to move to, so repeating the
 			// same rejected credential only burns time: report it once.
 			Fatal: pinBlocksFailover(ctx, details.Status),
@@ -840,12 +842,12 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 	}
 	s.noteAccountStatus(account, http.StatusOK)
 	s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
-	output := responseBody(root)
 	return AttemptResult{
 		Status:  http.StatusOK,
 		Out:     output,
 		Routing: s.RoutingFor(modelID, root),
 		Account: account,
+		Usage:   output["usage"],
 	}
 }
 

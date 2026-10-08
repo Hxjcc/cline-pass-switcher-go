@@ -34,6 +34,10 @@ const ANY_ACCOUNT_LABEL = "不限定（自动选择）"
 const draftIdPrefix = "draft_"
 const isDraftId = (id: string) => id.startsWith(draftIdPrefix)
 
+// This is only a password-field display value, never part of the draft or
+// save payload. It matches the account panel's hidden stored credential.
+const storedKeyMask = "00000000000000000000"
+
 // Both rows of a key share one column template, so every field lines up with
 // the one above it.
 const fieldGridClass =
@@ -135,7 +139,12 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
   const [draft, setDraft] = useDraft<ProxyKeyDraft[]>(source)
   const [saving, setSaving] = useState(false)
   const [revealing, setRevealing] = useState(false)
-  const [revealed, setRevealed] = useState(false)
+  // Revealing is a view of stored secrets, not a replacement of the draft.
+  // A changed server snapshot invalidates that view, including late replies.
+  const [reveal, setReveal] = useState<{ source: ProxyKeyDraft[]; keys: Record<string, string> } | null>(null)
+  const revealed = reveal !== null && reveal.source === source
+  const revealedKeys = revealed ? reveal.keys : {}
+  const [keyFocused, setKeyFocused] = useState<string | null>(null)
   const [resetting, setResetting] = useState<string | null>(null)
 
   const enabledAccounts = accounts.accounts.filter((account) => account.enabled)
@@ -185,16 +194,13 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
 
   const toggleReveal = async () => {
     if (revealed) {
-      // Edited rows keep what the operator typed; the others go back to masked.
-      setDraft((current) => current.map((row) => (row.dirty ? row : { ...row, key: "" })))
-      setRevealed(false)
+      setReveal(null)
       return
     }
     setRevealing(true)
     try {
       const response = await onReveal()
-      setDraft(response.keys.map((item) => toDraft(item, item.key ?? "")))
-      setRevealed(true)
+      setReveal({ source, keys: Object.fromEntries(response.keys.map((item) => [item.id, item.key ?? ""])) })
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -214,7 +220,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
       }))
       const response = await onSave(payload)
       setDraft(response.keys.map((item) => toDraft(item, "")))
-      setRevealed(false)
+      setReveal(null)
       toast.success("代理密钥已保存")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -229,7 +235,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
     try {
       const response = await onReset(row.id)
       setDraft(response.keys.map((item) => toDraft(item, "")))
-      setRevealed(false)
+      setReveal(null)
       toast.success("已重置该密钥的用量")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -317,6 +323,10 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
           <div className="space-y-3">
             {draft.map((row, index) => {
               const draftRow = isDraftId(row.id)
+              const visibleKey = row.key || revealedKeys[row.id] || ""
+              const fieldKey = revealed || row.key
+                ? visibleKey
+                : row.hasKey && keyFocused !== row.id ? storedKeyMask : ""
               const exhausted = row.spendLimitUsd > 0 && row.spentUsd >= row.spendLimitUsd
               const bindingBroken = row.accountId !== ANY_ACCOUNT && !accountUsable(row.accountId)
               const ids = {
@@ -349,14 +359,17 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
                         <div className="flex gap-1.5">
                           <Input
                             id={ids.key}
-                            value={row.key}
+                            type={revealed ? "text" : "password"}
+                            value={fieldKey}
+                            onFocus={() => setKeyFocused(row.id)}
+                            onBlur={() => setKeyFocused((current) => current === row.id ? null : current)}
                             onChange={(event) => update(index, { key: event.target.value })}
-                            placeholder={row.hasKey ? row.keyPreview || "已保存" : "sk-..."}
+                            placeholder={row.hasKey ? "" : "sk-..."}
                             aria-label="客户端密钥"
                             data-secret="1"
                             autoComplete="off"
                             spellCheck={false}
-                            className="font-mono text-xs"
+                            className={cn("font-mono text-xs", !revealed && "tracking-[0.18em]")}
                           />
                           <IconAction
                             label="生成新的随机密钥"
@@ -364,7 +377,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
                           >
                             <Dices />
                           </IconAction>
-                          <IconAction label="复制密钥" onClick={() => void copyKey(row.key)}>
+                          <IconAction label="复制密钥" onClick={() => void copyKey(visibleKey)}>
                             <Copy />
                           </IconAction>
                         </div>
@@ -519,7 +532,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
             </li>
             <li>绑定账号后，该密钥仅使用指定账号；账号不可用时请求直接失败，不会切换到其他账号。</li>
             <li>累计消费以上游返回的实际费用为准，达到额度上限后请求返回 HTTP 429；留空表示不限额。</li>
-            <li>保存后的密钥仅显示首尾几位，点击「显示密钥」可查看完整内容；删除或停用需保存后生效。</li>
+            <li>保存后的密钥默认显示为圆点，点击「显示密钥」可查看完整内容；删除或停用需保存后生效。</li>
         </NoteList>
       </CardContent>
     </Card>

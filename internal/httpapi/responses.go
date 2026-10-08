@@ -97,13 +97,14 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	targets := attemptTargets(s.requestAttempts(request.Context(), modelID, modelConfig, upstreamBody))
-	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if result.Status != http.StatusOK {
+		setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 		message := chainErrorMessage(result)
 		s.record(request.Context(), model.HistoryEntry{
 			TS: time.Now().UnixMilli(), Model: modelID, MS: time.Since(result.Started).Milliseconds(),
 			Stream: stream, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
+			Usage:           result.Usage,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
@@ -116,6 +117,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	if err != nil && strictStructured {
 		result, response, err = s.repairStructuredOutput(request.Context(), modelID, modelConfig, upstreamBody, bridgeContext, result, err)
 	}
+	setResponsesHeaders(writer, targets, result, bridgeContext.MappedReasoningEffort)
 	if err != nil {
 		message := err.Error()
 		s.record(request.Context(), model.HistoryEntry{
@@ -123,6 +125,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 			Canonical: result.Routing.CanonicalSlug, MS: time.Since(result.Started).Milliseconds(),
 			Stream: stream, Kind: "responses", Effort: recordedEffort(bridgeContext.MappedReasoningEffort, chatBody),
 			RequestedEffort: bridgeContext.RequestedReasoningEffort,
+			Usage:           result.Usage,
 			Error:           &message, Account: result.Account.Name, AccountID: result.Account.ID,
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
@@ -143,6 +146,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	applyReasoningEffort(&entry, bridgeContext.MappedReasoningEffort, bridgeContext.RequestedReasoningEffort, chatBody)
 	applyChatStats(&entry, result.Out, entry.MS)
+	entry.Usage = result.Usage
 	applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	s.record(request.Context(), entry)
 	if stream {
@@ -183,6 +187,8 @@ func (s *Server) repairStructuredOutput(
 		}
 	}
 	repaired := s.runNonStreamChain(ctx, modelID, responsesbridge.StructuredRepairBody(chatBody, text, schema), modelConfig, s.upstream.NonStreamTimeout())
+	result.Usage = addUsage(result.Usage, repaired.Usage)
+	result.Trace = append(result.Trace, repaired.Trace...)
 	if repaired.Out == nil || repaired.Status != http.StatusOK {
 		return result, nil, failure
 	}
@@ -190,6 +196,9 @@ func (s *Server) repairStructuredOutput(
 	if err != nil {
 		return result, nil, failure
 	}
+	repaired.Usage = result.Usage
+	repaired.Trace = result.Trace
+	repaired.Started = result.Started
 	return repaired, response, nil
 }
 
@@ -453,7 +462,6 @@ func (s *Server) runCompactionChain(
 	degrade compactionDegrade,
 ) (chainResult, map[string]any, error) {
 	result := s.runNonStreamChain(ctx, modelID, chatBody, modelConfig, s.upstream.NonStreamTimeout())
-	result.Usage = usageFromValue(result.Out["usage"])
 	compaction, err := convertCompaction(result, bridgeContext, convert)
 	if err == nil {
 		return result, compaction, nil
@@ -468,7 +476,7 @@ func (s *Server) runCompactionChain(
 			bridgeContext.MappedReasoningEffort = effort
 		}
 		escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
-		escalated.Usage = addUsage(result.Usage, usageFromValue(escalated.Out["usage"]))
+		escalated.Usage = addUsage(result.Usage, escalated.Usage)
 		escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
 		compaction, err = convertCompaction(escalated, bridgeContext, convert)
 		if err == nil {

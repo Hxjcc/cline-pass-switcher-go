@@ -41,12 +41,18 @@ test("issuing a client key keeps the secret out of the boot frame", async ({ pag
   await page.reload()
   await page.getByRole("tab", { name: "代理密钥" }).click()
   const stored = page.getByLabel("客户端密钥")
+  await expect(stored).toHaveAttribute("type", "password")
+  await expect(stored).toHaveValue(/^0+$/)
+  await stored.focus()
   await expect(stored).toHaveValue("")
+  await stored.blur()
+  await expect(stored).toHaveValue(/^0+$/)
   await expect(page.getByPlaceholder("使用者或用途")).toHaveValue("e2e")
 
   // Revealing it puts the plaintext into the DOM; the boot frame written on
   // pagehide must still not contain it.
   await page.getByRole("button", { name: /显示密钥/ }).click()
+  await expect(stored).toHaveAttribute("type", "text")
   await expect(stored).toHaveValue(minted)
   await page.evaluate(() => window.dispatchEvent(new Event("pagehide")))
   const snapshot = await page.evaluate(
@@ -67,6 +73,32 @@ test("the access panel reports where each runtime value came from", async ({ pag
   const enforce = page.getByText("强制改写工具 shell 参数").locator("..")
   await expect(enforce).toContainText("false")
   await expect(enforce).toContainText("内置默认")
+})
+
+test("revealing client keys keeps an unsaved rename and a new row", async ({ page }) => {
+  await signIn(page)
+  await page.getByRole("tab", { name: "代理密钥", exact: true }).click()
+  await page.getByRole("button", { name: /新增客户端密钥/ }).click()
+  await page.getByPlaceholder("使用者或用途").last().fill("reveal draft fixture")
+  await page.getByRole("button", { name: /^保存$/ }).click()
+  await expect(page.getByText("代理密钥已保存")).toBeVisible()
+  const saved = page.getByRole("article", { name: "reveal draft fixture", exact: true })
+  const nameId = await saved.getByPlaceholder("使用者或用途").getAttribute("id")
+  const keyId = await saved.getByLabel("客户端密钥", { exact: true }).getAttribute("id")
+  const existing = page.locator(`[id=${JSON.stringify(nameId)}]`)
+  await existing.fill("unsaved rename")
+  await page.getByRole("button", { name: /新增客户端密钥/ }).click()
+  await page.getByPlaceholder("使用者或用途").last().fill("unsaved new key")
+  const minted = await page.getByLabel("客户端密钥", { exact: true }).last().inputValue()
+  await page.getByRole("button", { name: /显示密钥/ }).click()
+  await expect(page.getByRole("button", { name: /隐藏密钥/ })).toBeVisible()
+  await expect(existing).toHaveValue("unsaved rename")
+  await expect(page.getByPlaceholder("使用者或用途").last()).toHaveValue("unsaved new key")
+  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
+  await page.getByRole("button", { name: /隐藏密钥/ }).click()
+  await expect(page.locator(`[id=${JSON.stringify(keyId)}]`)).toHaveValue(/^0+$/)
+  await expect(existing).toHaveValue("unsaved rename")
+  await expect(page.getByLabel("客户端密钥", { exact: true }).last()).toHaveValue(minted)
 })
 
 test("storage faults refresh after login and clear after recovery", async ({ page }) => {

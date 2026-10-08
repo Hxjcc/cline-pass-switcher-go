@@ -225,9 +225,13 @@ func writeSpendError(writer http.ResponseWriter, err error) {
 		message := "该代理密钥的额度已用尽（限额 " + formatUSD(limit.LimitUSD) +
 			"，已用 " + formatUSD(limit.Usage.SpentUSD()) + "），请联系管理员提额或改用新密钥"
 		if limit.Reason == "reserved" {
-			message = "该代理密钥的额度即将用尽（限额 " + formatUSD(limit.LimitUSD) +
-				"，已用 " + formatUSD(limit.Usage.SpentUSD()) + "，另有 " + strconv.Itoa(limit.Running) +
-				" 个请求进行中，预计还会花费约 " + formatUSD(float64(limit.ExpectedMicroUSD)/1e6) + "），请等这些请求结束后再试"
+			if limit.ExpectedMicroUSD == 0 {
+				message = "该代理密钥尚无可用的单次费用记录，暂时只允许一个请求进行中，请等当前请求结束后再试"
+			} else {
+				message = "该代理密钥的额度即将用尽（限额 " + formatUSD(limit.LimitUSD) +
+					"，已用 " + formatUSD(limit.Usage.SpentUSD()) + "，另有 " + strconv.Itoa(limit.Running) +
+					" 个请求进行中，预计还会花费约 " + formatUSD(float64(limit.ExpectedMicroUSD)/1e6) + "），请等这些请求结束后再试"
+			}
 		}
 		writeKeyLimit(writer, limit.Reason, message)
 		return

@@ -10,6 +10,8 @@ services:
     environment:
       - DATA_DIR=/data
       - BIND_HOST=0.0.0.0
+      - PUID=${PUID:-10001}
+      - PGID=${PGID:-10001}
       # 端口只映射到宿主机回环（见下面的 ports），但容器内看到的来源地址
       # 是网桥网关而不是回环地址，所以这里显式声明这层边界。若把 ports 改
       # 成对外暴露，请删除本行并设置 PROXY_KEY。

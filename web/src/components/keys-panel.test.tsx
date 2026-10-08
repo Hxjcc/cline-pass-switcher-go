@@ -47,6 +47,13 @@ test("saves the draft in the shape the API expects", async () => {
       spentUsd: 1.25,
     },
   ])
+  const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
+  expect(input.type).toBe("password")
+  expect(input.value).toMatch(/^0+$/)
+  fireEvent.focus(input)
+  expect(input.value).toBe("")
+  fireEvent.blur(input)
+  expect(input.value).toMatch(/^0+$/)
   fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
   await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
   const payload = onSave.mock.calls[0][0]
@@ -102,13 +109,79 @@ test("reveals stored secrets on demand and masks them again", async () => {
     />,
   )
   const input = screen.getByLabelText("客户端密钥") as HTMLInputElement
-  expect(input.value).toBe("")
+  expect(input.type).toBe("password")
+  expect(input.value).toMatch(/^0+$/)
 
   fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
   await vi.waitFor(() => expect(input.value).toBe("sk-plain"))
+  expect(input.type).toBe("text")
 
   fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
-  expect(input.value).toBe("")
+  expect(input.type).toBe("password")
+  expect(input.value).toMatch(/^0+$/)
+})
+
+test("revealing keys preserves edits, new rows, deletions and typed secrets", async () => {
+  const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
+  const removed = { ...stored, id: "key_2", name: "removed" }
+  const onReveal = vi.fn(async (): Promise<KeysResponse> => ({
+    keys: [{ ...stored, key: "sk-stored" }, { ...removed, key: "sk-removed" }],
+  }))
+  const onSave = vi.fn(async (_value: ProxyKeyDraft[]): Promise<KeysResponse> => ({ keys: [stored] }))
+  render(<KeysPanel data={{ keys: [stored, removed] }} accounts={accounts} onSave={onSave} onReveal={onReveal} onReset={vi.fn()} />)
+
+  fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[0], { target: { value: "renamed" } })
+  fireEvent.change(screen.getAllByLabelText("额度上限（USD）")[0], { target: { value: "2.5" } })
+  fireEvent.change(screen.getAllByPlaceholderText("可选")[0], { target: { value: "keep this note" } })
+  fireEvent.change(screen.getAllByLabelText("客户端密钥")[0], { target: { value: "sk-replacement" } })
+  fireEvent.click(within(screen.getByRole("article", { name: "removed" })).getByRole("button", { name: "删除密钥" }))
+  fireEvent.click(screen.getByRole("button", { name: /新增客户端密钥/ }))
+  fireEvent.change(screen.getAllByPlaceholderText("使用者或用途")[1], { target: { value: "new draft" } })
+  const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
+
+  fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
+  await vi.waitFor(() => expect(screen.getByRole("button", { name: /隐藏密钥/ })).toBeTruthy())
+  expect(screen.getAllByRole("article")).toHaveLength(2)
+  expect(screen.queryByRole("article", { name: "removed" })).toBeNull()
+  expect((screen.getAllByLabelText("客户端密钥")[0] as HTMLInputElement).value).toBe("sk-replacement")
+  fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
+  expect((screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value).toBe(minted)
+
+  fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
+  await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
+  const payload = onSave.mock.calls[0][0]
+  expect(payload).toHaveLength(2)
+  expect(payload[0]).toMatchObject({ id: "key_1", name: "renamed", note: "keep this note", spendLimitUsd: 2.5, key: "sk-replacement", dirty: true })
+  expect(payload[1]).toMatchObject({ name: "new draft", key: minted, dirty: true })
+})
+
+test("hiding a revealed key preserves a name edit and keeps the stored secret out of the draft", async () => {
+  const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
+  const onReveal = vi.fn(async (): Promise<KeysResponse> => ({ keys: [{ ...stored, key: "sk-stored" }] }))
+  const onSave = vi.fn(async (_value: ProxyKeyDraft[]): Promise<KeysResponse> => ({ keys: [stored] }))
+  render(<KeysPanel data={{ keys: [stored] }} accounts={accounts} onSave={onSave} onReveal={onReveal} onReset={vi.fn()} />)
+  fireEvent.change(screen.getByPlaceholderText("使用者或用途"), { target: { value: "renamed" } })
+  fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
+  await vi.waitFor(() => expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toBe("sk-stored"))
+  fireEvent.click(screen.getByRole("button", { name: /隐藏密钥/ }))
+  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^0+$/)
+  fireEvent.click(screen.getByRole("button", { name: /^保存$/ }))
+  await vi.waitFor(() => expect(onSave).toHaveBeenCalled())
+  expect(onSave.mock.calls[0][0][0]).toMatchObject({ name: "renamed", key: "" })
+})
+
+test("a late reveal cannot expose a credential from an earlier server snapshot", async () => {
+  const stored = { id: "key_1", name: "saved", hasKey: true, enabled: true, requests: 0, spentUsd: 0 }
+  let finish!: (value: KeysResponse) => void
+  const onReveal = vi.fn(() => new Promise<KeysResponse>((resolve) => { finish = resolve }))
+  const props = { accounts, onSave: vi.fn(), onReveal, onReset: vi.fn() }
+  const panel = render(<KeysPanel {...props} data={{ keys: [stored] }} />)
+  fireEvent.click(screen.getByRole("button", { name: /显示密钥/ }))
+  panel.rerender(<KeysPanel {...props} data={{ keys: [{ ...stored, keyPreview: "sk-new…key" }] }} />)
+  finish({ keys: [{ ...stored, key: "sk-old-secret" }] })
+  await vi.waitFor(() => expect(screen.getByRole("button", { name: /显示密钥/ }).hasAttribute("disabled")).toBe(false))
+  expect((screen.getByLabelText("客户端密钥") as HTMLInputElement).value).toMatch(/^0+$/)
+  expect(screen.queryByRole("button", { name: /隐藏密钥/ })).toBeNull()
 })
 
 test("shows spend against the limit with readable amounts", () => {

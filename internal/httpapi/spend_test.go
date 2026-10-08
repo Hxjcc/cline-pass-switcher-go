@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,6 +215,80 @@ func TestConcurrentRequestsCannotOverrunSpendLimit(t *testing.T) {
 	// 1.85 spent and nothing running: the key may continue.
 	if response := postChat(server, "issued"); response.Code != http.StatusOK {
 		t.Fatalf("request after the first finished: %d %s", response.Code, response.Body)
+	}
+}
+
+func TestFreshLimitedKeyRefusesConcurrentGeneration(t *testing.T) {
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/responses/compact"} {
+		t.Run(path, func(t *testing.T) {
+			proceed, started := make(chan struct{}), make(chan struct{}, 8)
+			var calls atomic.Int32
+			us := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/users/me/plan") {
+					http.NotFound(w, r)
+					return
+				}
+				calls.Add(1)
+				started <- struct{}{}
+				select {
+				case <-proceed:
+				case <-r.Context().Done():
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, costedCompletion)
+			}))
+			defer us.Close()
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(proceed) }) }
+			defer release()
+			st, server := newTestServer(t)
+			configureKeys(t, st, us.URL, func(c *model.Config) {
+				c.ProxyKey = "master"
+				c.ProxyKeys = []model.ProxyKeyGrant{{ID: "k", Key: "issued", Enabled: true, SpendLimitUSD: 0.5}}
+			})
+			body := `{"model":"cline-pass/test","input":"hello"}`
+			if path == "/v1/chat/completions" {
+				body = `{"model":"cline-pass/test","messages":[{"role":"user","content":"hello"}]}`
+			}
+			send := func() *httptest.ResponseRecorder {
+				r := localRequest(http.MethodPost, path, strings.NewReader(body))
+				r.Header.Set("Authorization", "Bearer issued")
+				w := httptest.NewRecorder()
+				server.ServeHTTP(w, r)
+				return w
+			}
+			first := make(chan *httptest.ResponseRecorder, 1)
+			go func() { first <- send() }()
+			waitFor(t, "the first upstream call", started)
+			for range 5 {
+				if refused := send(); refused.Code != http.StatusTooManyRequests || refused.Header().Get("X-Cline-Key-Limit") != "reserved" || !strings.Contains(refused.Body.String(), "尚无可用的单次费用记录") {
+					t.Fatalf("fresh key admitted concurrent spend: %d %s", refused.Code, refused.Body)
+				}
+			}
+			// Looking up models neither reserves spend nor inherits the pricing
+			// restriction on a generation already in progress.
+			r := localRequest(http.MethodGet, "/v1/models", nil)
+			r.Header.Set("Authorization", "Bearer issued")
+			models := httptest.NewRecorder()
+			server.ServeHTTP(models, r)
+			if models.Code != http.StatusOK || calls.Load() != 1 {
+				t.Fatalf("models were blocked or extra generations reached upstream: %d; calls=%d", models.Code, calls.Load())
+			}
+			release()
+			if w := <-first; w.Code != http.StatusOK {
+				t.Fatalf("first request failed: %d %s", w.Code, w.Body)
+			}
+			if w := send(); w.Code != http.StatusOK {
+				t.Fatalf("completed request did not release its reservation: %d %s", w.Code, w.Body)
+			}
+			if w := send(); w.Code != http.StatusTooManyRequests || calls.Load() != 2 {
+				t.Fatalf("spent-out key generated again: %d %s; calls=%d", w.Code, w.Body, calls.Load())
+			}
+			if usage := st.KeyUsage()["k"]; usage.Requests != 2 || usage.SpentMicroUSD != 500_000 {
+				t.Fatalf("wrong key usage: %+v", usage)
+			}
+		})
 	}
 }
 

@@ -47,8 +47,8 @@ type chainResult struct {
 	Trace   []model.Trace
 	NetErr  string
 	Started time.Time
-	// Usage retains all compaction passes, including a discarded summary or
-	// a failed retry, independently of the response returned to the client.
+	// Usage retains every buffered upstream attempt and repair pass,
+	// independently of the response returned to the client.
 	Usage *model.UsageStats
 	// Degraded marks a compaction that was returned as a fallback item after
 	// the summarizer failed. The client still sees a successful turn, so the
@@ -767,6 +767,7 @@ func (s *Server) runNonStreamChain(ctx context.Context, modelID string, body map
 			})
 			result.Status = response.Status
 			result.Out = response.Out
+			result.Usage = addUsage(result.Usage, usageFromValue(response.Usage))
 			result.Routing = response.Routing
 			result.Account = response.Account
 			result.NetErr = response.NetErr
@@ -900,9 +901,11 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		AccountID: result.Account.ID,
 		Attempts:  traceUpstreams(result.Trace),
 		Trace:     result.Trace,
+		Usage:     result.Usage,
 	}
 	if result.Status == http.StatusOK {
 		applyChatStats(&entry, result.Out, entry.MS)
+		entry.Usage = result.Usage
 		applyGatewayMeta(&entry, upstream.ParseMeta(result.Out), modelConfig)
 	}
 	s.record(request.Context(), entry)

@@ -66,8 +66,19 @@ func (s *Store) ReserveSpend(grant model.ProxyKeyGrant) (*SpendReservation, erro
 		refused.Reason = "exceeded"
 		return nil, refused
 	}
-	if running > 0 && usage.Requests > 0 {
-		refused.ExpectedMicroUSD = usage.SpentMicroUSD / usage.Requests * int64(running)
+	if running > 0 {
+		average := int64(0)
+		if usage.Requests > 0 {
+			average = usage.SpentMicroUSD / usage.Requests
+		}
+		// A fresh/reset key, missing costs or a zero rounded average cannot
+		// price a concurrent request. Learn from one request at a time rather
+		// than admitting an unlimited first burst or inventing a ledger charge.
+		if average <= 0 {
+			refused.Reason = "reserved"
+			return nil, refused
+		}
+		refused.ExpectedMicroUSD = average * int64(running)
 		if float64(usage.SpentMicroUSD+refused.ExpectedMicroUSD)/1e6 >= grant.SpendLimitUSD {
 			refused.Reason = "reserved"
 			return nil, refused

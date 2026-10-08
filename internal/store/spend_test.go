@@ -45,7 +45,19 @@ func TestSpendReservationUsesCurrentLedgerAndRetainsSharedRun(t *testing.T) {
 	if err := s.ResetKeyUsage("k", false); err != nil {
 		t.Fatal(err)
 	}
-	// Keep the existing estimation policy for keys without any history.
+	// A reset discards the pricing history, so allow one request to establish
+	// a new average before admitting concurrent spend again.
+	hold, err := s.ReserveSpend(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRefused("reserved")
+	hold.Release()
+	if err := s.Record(model.HistoryEntry{KeyID: "k", Usage: &model.UsageStats{Cost: &cost}}); err != nil {
+		t.Fatal(err)
+	}
+	// Once a positive average is known, the existing concurrent estimation
+	// policy applies again while there is enough unreserved balance.
 	for range 3 {
 		hold, err := s.ReserveSpend(grant)
 		if err != nil {
@@ -86,5 +98,54 @@ func TestAdmissionWaitingForLedgerCommitSeesCompletedCharge(t *testing.T) {
 	var limit *SpendLimitError
 	if err := <-result; !errors.As(err, &limit) || limit.Reason != "exceeded" {
 		t.Fatalf("admission used a stale balance: %v", err)
+	}
+}
+
+func TestUnpricedLimitedKeysAllowOnlyOneRunningRequest(t *testing.T) {
+	for _, history := range []string{"fresh", "unknown-cost", "zero-cost", "rounded-down-average", "reset"} {
+		t.Run(history, func(t *testing.T) {
+			s, _ := testStore(t)
+			grant := model.ProxyKeyGrant{ID: "k", SpendLimitUSD: 0.5}
+			if history != "fresh" {
+				entry := model.HistoryEntry{KeyID: "k"}
+				if history != "unknown-cost" {
+					cost := 0.0
+					if history == "reset" {
+						cost = 0.25
+					} else if history == "rounded-down-average" {
+						cost = 0.000001
+					}
+					entry.Usage = &model.UsageStats{Cost: &cost}
+				}
+				if err := s.Record(entry); err != nil {
+					t.Fatal(err)
+				}
+				if history == "rounded-down-average" {
+					if err := s.Record(model.HistoryEntry{KeyID: "k"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if history == "reset" {
+					if err := s.ResetKeyUsage("k", false); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			first, err := s.ReserveSpend(grant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Release()
+			for range 5 {
+				hold, err := s.ReserveSpend(grant)
+				var limit *SpendLimitError
+				if hold != nil || !errors.As(err, &limit) || limit.Reason != "reserved" || limit.Running != 1 {
+					t.Fatalf("unpriced key admitted another request: %v, %v", hold, err)
+				}
+			}
+			if usage := s.KeyUsage()["k"]; usage.SpentMicroUSD != 0 && history != "rounded-down-average" {
+				t.Fatalf("admission invented a charge: %+v", usage)
+			}
+		})
 	}
 }

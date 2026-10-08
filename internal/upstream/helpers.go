@@ -280,6 +280,9 @@ type AttemptResult struct {
 	Routing Routing
 	NetErr  string
 	Account model.Account
+	// Usage survives error normalization; a rejected response may still report
+	// a billed generation even though its public body only contains an error.
+	Usage any
 	// Fatal marks a failure no other channel or account can fix: a missing
 	// account or a routing configuration that excludes every channel.
 	Fatal bool
