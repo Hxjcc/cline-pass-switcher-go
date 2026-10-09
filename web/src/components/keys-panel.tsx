@@ -25,7 +25,6 @@ import { Switch } from "@/components/ui/switch"
 import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCompactTime, formatTime, keyMask } from "@/lib/format"
-import { KEYS_PANEL_COPY } from "@/lib/panel-copy"
 import { useDraft } from "@/lib/use-draft"
 import { cn } from "@/lib/utils"
 import type { AccountsResponse, KeysResponse, ProxyKeyDraft } from "@/types"
@@ -318,8 +317,10 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{KEYS_PANEL_COPY.title}</CardTitle>
-        <CardDescription>{KEYS_PANEL_COPY.description}</CardDescription>
+        <CardTitle>代理密钥</CardTitle>
+        <CardDescription>
+          为下游客户端签发独立的访问密钥，可分别限定使用的账号与累计消费上限。
+        </CardDescription>
         <CardAction className={cardActionClass}>
           <Button
             variant="outline"

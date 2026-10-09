@@ -35,7 +35,6 @@ import {
   upstreamLabels,
   upstreamRank,
 } from "@/lib/format"
-import { TEST_BENCH_COPY } from "@/lib/panel-copy"
 import type { SubscriptionModel, TestResponse, UpstreamState } from "@/types"
 
 interface TestBenchProps {
@@ -107,8 +106,8 @@ export function TestBench({ models, onTest }: TestBenchProps) {
     <div className="grid items-start gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
       <Card>
         <CardHeader>
-          <CardTitle>{TEST_BENCH_COPY.title}</CardTitle>
-          <CardDescription>{TEST_BENCH_COPY.description}</CardDescription>
+          <CardTitle>测试台</CardTitle>
+          <CardDescription>向指定模型发送一条最小请求，确认实际命中的上游渠道。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Field label="模型" labelId="test-model-label">

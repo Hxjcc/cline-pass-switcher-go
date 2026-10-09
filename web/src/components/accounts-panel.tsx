@@ -38,7 +38,6 @@ import {
   formatTime,
   keyMask,
 } from "@/lib/format"
-import { ACCOUNTS_PANEL_COPY } from "@/lib/panel-copy"
 import { cn } from "@/lib/utils"
 import type {
   Account,
@@ -243,8 +242,10 @@ export function AccountsPanel({ data, onSave, onTest, onReveal, onQuota }: Accou
   return (
     <Card className="@container/accounts">
       <CardHeader>
-        <CardTitle>{ACCOUNTS_PANEL_COPY.title}</CardTitle>
-        <CardDescription>{ACCOUNTS_PANEL_COPY.description}</CardDescription>
+        <CardTitle>账号池</CardTitle>
+        <CardDescription>
+          管理 Cline Pass 账号与调度方式，并查看各周期的套餐用量；用量已满的账号在有其他可用账号时会被跳过。
+        </CardDescription>
         <CardAction className={cardActionClass}>
           <Tooltip>
             <TooltipTrigger

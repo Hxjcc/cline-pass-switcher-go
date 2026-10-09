@@ -25,7 +25,6 @@ import { ModelRow } from "@/components/model-row"
 import { errorMessage } from "@/lib/api"
 import { cardActionClass, modelColumnClass } from "@/lib/console-styles"
 import { formatCompactTime } from "@/lib/format"
-import { MODELS_PANEL_COPY } from "@/lib/panel-copy"
 import { cn } from "@/lib/utils"
 import type { ProbeBatchResult } from "@/lib/probe-batch"
 import type {
@@ -126,8 +125,10 @@ export function ModelsPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{MODELS_PANEL_COPY.title}</CardTitle>
-        <CardDescription>{MODELS_PANEL_COPY.description}</CardDescription>
+        <CardTitle>订阅模型</CardTitle>
+        <CardDescription>
+          管理已订阅的模型及其上游渠道偏好。客户端通过 /v1/models 获取的即为此列表。
+        </CardDescription>
         <CardAction className={cardActionClass}>
           <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
             <RefreshCw className={refreshing ? "animate-spin" : ""} data-icon="inline-start" />
