@@ -447,10 +447,12 @@ function App() {
           <div className="flex min-w-0 flex-1 items-center gap-3 max-sm:w-full">
             <BrandMark className="size-9 shrink-0" />
             <div className="min-w-0 space-y-1">
-              {/* Chinese bold faces (Microsoft YaHei in particular) read as
-                  blocky at 16px, so the heading keeps a medium weight: the
-                  Latin brand still stands out, the Chinese stays legible. */}
-              <h1 className="truncate text-base leading-5 font-medium">Cline Pass 上游控制台</h1>
+              {/* The Latin brand and the Chinese name come from different
+                  families, and only regular weight exists on both sides
+                  (Segoe UI has medium/semibold faces, Microsoft YaHei does
+                  not), so a heavier heading reads as two different weights on
+                  one line. Keep the whole title regular. */}
+              <h1 className="truncate text-base leading-5 font-normal">Cline Pass 上游控制台</h1>
               <div className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs leading-6">
                 {meta && (
                   <>
