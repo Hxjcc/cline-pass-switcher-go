@@ -35,8 +35,7 @@
   --font-heading: var(--font-sans);
   --font-sans:
     "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
-    "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Source Han Sans SC",
-    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-mono:
     ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono",
     monospace;
