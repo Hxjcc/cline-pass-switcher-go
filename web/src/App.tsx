@@ -176,7 +176,17 @@ function App() {
   }, [tab])
 
   const login = async (key: string, remember = false) => {
-    await api<ModelsResponse>("/api/models", { key })
+    // Checking the key and filling the first screen are one step, so the
+    // overview is already complete when the dialog closes. Validating with
+    // /api/models alone used to leave the rows to pop in behind the dialog.
+    // The key check stays a single protected call: a typo must not spend the
+    // whole failed-attempt budget of the login throttle.
+    const [nextModels, nextMeta] = await Promise.all([
+      api<ModelsResponse>("/api/models", { key }),
+      api<MetaResponse>("/api/meta", { key }),
+    ])
+    setModels(nextModels)
+    setMeta(nextMeta)
     storeAdminKey(key, remember)
     setAuthKey(key)
   }

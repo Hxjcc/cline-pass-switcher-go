@@ -29,3 +29,22 @@ test("asks before persisting the key on this device", async () => {
   fireEvent.click(screen.getByRole("button", { name: "进入控制台" }))
   await waitFor(() => expect(onLogin).toHaveBeenCalledWith("fake-key", true))
 })
+
+// The console seeds its first paint from the login call, so the dialog has to
+// stay open for the whole of it. Closing early would put the panels back to
+// filling in behind a dialog that already disappeared.
+test("stays open until the handler has loaded the first paint", async () => {
+  let release: () => void = () => {}
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const onLogin = vi.fn().mockReturnValue(pending)
+  const onOpenChange = vi.fn()
+  render(<LoginDialog open onLogin={onLogin} onOpenChange={onOpenChange} />)
+  fireEvent.change(screen.getByLabelText("管理密钥"), { target: { value: "fake-key" } })
+  fireEvent.click(screen.getByRole("button", { name: "进入控制台" }))
+  expect(onLogin).toHaveBeenCalledWith("fake-key", false)
+  expect(onOpenChange).not.toHaveBeenCalled()
+  release()
+  await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+})
