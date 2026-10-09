@@ -22,6 +22,7 @@ import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
 import { ModelsPanel } from "@/components/models-panel"
+import { PanelSkeleton } from "@/components/panel-skeleton"
 import { SecurityPanel } from "@/components/security-panel"
 import { StorageAlert } from "@/components/storage-alert"
 import { TestBench } from "@/components/test-bench"
@@ -33,6 +34,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api, errorMessage, UnauthorizedError } from "@/lib/api"
 import { readAdminKey, readPersistentAdminKey, storeAdminKey } from "@/lib/admin-key"
 import { fetchSnapshot, readSnapshot, writeSnapshot, type ConsoleSnapshot } from "@/lib/console-snapshot"
+import {
+  ACCOUNTS_PANEL_COPY,
+  KEYS_PANEL_COPY,
+  MODELS_PANEL_COPY,
+  TEST_BENCH_COPY,
+} from "@/lib/panel-copy"
 import { useHistory } from "@/lib/use-history"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import { cn } from "@/lib/utils"
@@ -572,7 +579,7 @@ function App() {
                 icon={RadioTower}
               />
             </div>
-            {models && (
+            {models ? (
               <ModelsPanel
                 data={models}
                 onRefresh={async () => {
@@ -588,17 +595,29 @@ function App() {
                 onFetchOfficial={fetchOfficial}
                 onRemove={removeModel}
               />
+            ) : (
+              <PanelSkeleton
+                title={MODELS_PANEL_COPY.title}
+                description={MODELS_PANEL_COPY.description}
+                rows={4}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="accounts" keepMounted={visitedTabs.has("accounts")}>
-            {accounts && (
+            {accounts ? (
               <AccountsPanel
                 data={accounts}
                 onSave={saveAccounts}
                 onTest={testAccount}
                 onReveal={revealAccounts}
                 onQuota={loadQuota}
+              />
+            ) : (
+              <PanelSkeleton
+                title={ACCOUNTS_PANEL_COPY.title}
+                description={ACCOUNTS_PANEL_COPY.description}
+                rows={3}
               />
             )}
           </TabsContent>
@@ -610,7 +629,7 @@ function App() {
           </TabsContent>
 
           <TabsContent value="keys" keepMounted={visitedTabs.has("keys")}>
-            {keys && accounts && (
+            {keys && accounts ? (
               <KeysPanel
                 data={keys}
                 accounts={accounts}
@@ -619,11 +638,27 @@ function App() {
                 onReveal={revealKeys}
                 onReset={resetKeyUsage}
               />
+            ) : (
+              <PanelSkeleton
+                title={KEYS_PANEL_COPY.title}
+                description={KEYS_PANEL_COPY.description}
+                rows={3}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="test">
-            {models && <TestBench models={models.subscription} onTest={testModel} />}
+            {models ? (
+              <TestBench models={models.subscription} onTest={testModel} />
+            ) : (
+              <PanelSkeleton
+                title={TEST_BENCH_COPY.title}
+                description={TEST_BENCH_COPY.description}
+                body="form"
+                rows={4}
+                actions={0}
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="history">
