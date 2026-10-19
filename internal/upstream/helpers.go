@@ -361,6 +361,33 @@ func parseModelCapability(value map[string]any, updatedAt int64) model.ModelMeta
 	return result
 }
 
+// recommendedModelCapability carries the display fields Cline publishes for a
+// subscription model. CapabilitiesKnown stays false because the recommended
+// list does not describe context limits or reasoning tiers.
+func recommendedModelCapability(value map[string]any) model.ModelMeta {
+	return model.ModelMeta{
+		DisplayName: getString(value, "name"),
+		Description: getString(value, "description"),
+	}
+}
+
+// datedModelBase recognizes snapshot IDs such as
+// cline-pass/deepseek-v4.1-flash-1017. The four-digit suffix is the release
+// date (MMDD), not part of the model family name.
+func datedModelBase(modelID string) (base, suffix string, ok bool) {
+	dash := strings.LastIndexByte(modelID, '-')
+	if dash < 0 || len(modelID)-dash-1 != 4 {
+		return "", "", false
+	}
+	suffix = modelID[dash+1:]
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return "", "", false
+		}
+	}
+	return modelID[:dash], suffix, true
+}
+
 func normalizeModelCapability(modelID string, capability model.ModelMeta) model.ModelMeta {
 	// Some generated Cline Pass rows currently expose a generic OpenAI effort
 	// list instead of the model's distinct wire-level tiers. Compatibility

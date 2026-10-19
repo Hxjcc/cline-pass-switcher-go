@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -157,14 +158,21 @@ func TestTestAccountCanAddressStoredKeyByIdentity(t *testing.T) {
 func TestFetchOfficialModelsAlwaysReturnsAddedArray(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/recommended" {
+			_, _ = io.WriteString(writer, `{"clinePass":[]}`)
+			return
+		}
 		_, _ = io.WriteString(writer, `{"providers":{"cline-pass":{"models":{"cline-pass/known":{},"cline-pass/also-known":{}}}}}`)
 	}))
 	defer upstreamServer.Close()
 
 	previous := officialModelsDevURL
+	previousRecommended := officialRecommendedModelsURL
 	officialModelsDevURL = upstreamServer.URL + "/models-dev"
+	officialRecommendedModelsURL = upstreamServer.URL + "/recommended"
 	t.Cleanup(func() {
 		officialModelsDevURL = previous
+		officialRecommendedModelsURL = previousRecommended
 	})
 
 	st, err := store.Open(t.TempDir())
@@ -197,8 +205,71 @@ func TestFetchOfficialModelsAlwaysReturnsAddedArray(t *testing.T) {
 	}
 }
 
-// models.dev is the only directory source now, so a failed fetch must surface
-// as an error: silently reporting "nothing new" would hide an outage.
+func TestFetchOfficialModelsAddsRecommendedSnapshot(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/recommended":
+			_, _ = io.WriteString(writer, `{"clinePass":[
+				{"id":"cline-pass/deepseek-v4.1-flash-1017","name":"cline-pass/deepseek-v4.1-flash-1017"},
+				{"id":"cline-pass/deepseek-v4.1-flash","name":"DeepSeek V4.1 Flash"}
+			]}`)
+		default:
+			_, _ = io.WriteString(writer, `{"cline-pass":{"models":{"deepseek-v4.1-flash":{
+				"name":"DeepSeek V4.1 Flash",
+				"reasoning":true,
+				"reasoning_options":[{"type":"effort","values":["none","low","high","max"]}],
+				"limit":{"context":1000000,"output":384000}
+			}}}}`)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	previous := officialModelsDevURL
+	previousRecommended := officialRecommendedModelsURL
+	officialModelsDevURL = upstreamServer.URL + "/models-dev"
+	officialRecommendedModelsURL = upstreamServer.URL + "/recommended"
+	t.Cleanup(func() {
+		officialModelsDevURL = previous
+		officialRecommendedModelsURL = previousRecommended
+	})
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	const snapshot = "cline-pass/deepseek-v4.1-flash-1017"
+	result, err := New(st).FetchOfficialModels(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, id := range result.Added {
+		if id == snapshot {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("recommended dated snapshot was not added: %#v", result.Added)
+	}
+	meta := st.ModelMeta(snapshot)
+	if !meta.CapabilitiesKnown || meta.ContextWindow != 1000000 || meta.OutputLimit != 384000 {
+		t.Fatalf("snapshot did not inherit base capabilities: %#v", meta)
+	}
+	if meta.DisplayName != "DeepSeek V4.1 Flash 1017" {
+		t.Fatalf("snapshot display name = %q", meta.DisplayName)
+	}
+	if !slices.Contains(meta.ReasoningEfforts, "max") {
+		t.Fatalf("snapshot lost reasoning tiers: %#v", meta.ReasoningEfforts)
+	}
+}
+
+// models.dev supplies the capability rows, so a failed fetch must surface as an
+// error instead of looking like "nothing new"; the recommended-list fetch above
+// it is best effort.
 func TestFetchOfficialModelsReportsAFailedDirectory(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "upstream down", http.StatusBadGateway)
@@ -206,9 +277,12 @@ func TestFetchOfficialModelsReportsAFailedDirectory(t *testing.T) {
 	defer upstreamServer.Close()
 
 	previous := officialModelsDevURL
+	previousRecommended := officialRecommendedModelsURL
 	officialModelsDevURL = upstreamServer.URL + "/models-dev"
+	officialRecommendedModelsURL = upstreamServer.URL + "/recommended"
 	t.Cleanup(func() {
 		officialModelsDevURL = previous
+		officialRecommendedModelsURL = previousRecommended
 	})
 
 	st, err := store.Open(t.TempDir())

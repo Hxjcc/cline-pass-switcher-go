@@ -184,7 +184,7 @@ export function ModelsPanel({
           <EmptyState
             icon={Boxes}
             title="尚未订阅模型"
-            description="点击「拉取模型目录」从 models.dev 同步 Cline Pass 当前提供的模型；客户端用过的模型也会自动加入。"
+            description="点击「拉取模型目录」从 Cline 推荐目录和 models.dev 同步 Cline Pass 当前提供的模型；客户端用过的模型也会自动加入。"
           />
         ) : (
           // On a phone the row actions and the pin column are wider than the
