@@ -32,7 +32,8 @@ Files, directories, endpoints or config keys that matter, one line each.
 Keep every fact another model needs to continue accurately; drop small talk. Thinking alone is not a summary.`
 
 const (
-	// maxCompactionRecentMessageRunes caps one verbatim message.
+	// maxCompactionRecentMessageRunes caps one ordinary user/assistant message.
+	// Tool results use the recency-aware budgets in compaction_output.go.
 	maxCompactionRecentMessageRunes = 2000
 	// maxCompactionRecentTotalRunes caps the whole verbatim tail so the
 	// envelope stays small enough to send back on every request.
@@ -102,6 +103,9 @@ func normalizeSectionText(value string) string {
 type CompactionRecentMessage struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
+	// toolResult is set only while building a fresh tail. It is deliberately
+	// unexported so envelopes stay compatible with older payloads.
+	toolResult bool
 }
 
 // CompactionPayload is what the ocx1: envelope carries. Older envelopes hold
@@ -246,7 +250,7 @@ func buildCompactionGroups(messages []any) []compactionGroup {
 					}
 					label += "]\n"
 					recent = append(recent, CompactionRecentMessage{
-						Role: "user", Text: label + truncateText(toolText, maxCompactionRecentMessageRunes),
+						Role: "user", Text: label + cleanCompactionToolOutput(toolText), toolResult: true,
 					})
 					next++
 				}
@@ -266,6 +270,16 @@ func buildCompactionGroups(messages []any) []compactionGroup {
 		}
 		if role == "user" {
 			if text := strings.TrimSpace(collectPartText(message["content"])); text != "" {
+				if isCompactionToolResultText(text) {
+					groups = append(groups, compactionGroup{
+						start: index,
+						messages: []CompactionRecentMessage{{
+							Role: "user", Text: cleanCompactionToolOutput(text), toolResult: true,
+						}},
+					})
+					index++
+					continue
+				}
 				groups = append(groups, compactionGroup{
 					start: index, messages: []CompactionRecentMessage{{Role: "user", Text: truncateText(text, maxCompactionRecentMessageRunes)}},
 				})
@@ -287,12 +301,13 @@ func buildCompactionGroups(messages []any) []compactionGroup {
 			groups = append(groups, compactionGroup{
 				start: index,
 				messages: []CompactionRecentMessage{{
-					Role: "user", Text: label + truncateText(toolText, maxCompactionRecentMessageRunes),
+					Role: "user", Text: label + cleanCompactionToolOutput(toolText), toolResult: true,
 				}},
 			})
 		}
 		index++
 	}
+	applyCompactionToolBudgets(groups)
 	return groups
 }
 
@@ -347,7 +362,7 @@ func selectCompactionTailWithCut(messages []any, budgetTokens int) ([]Compaction
 
 func compactionGroupHasToolResult(group compactionGroup) bool {
 	for _, message := range group.messages {
-		if message.Role == "user" && strings.HasPrefix(strings.TrimSpace(message.Text), "[tool result") {
+		if message.toolResult {
 			return true
 		}
 	}
@@ -407,7 +422,7 @@ func compactionToolTranscript(messages []any) string {
 			if callID != "" {
 				label += " (" + callID + ")"
 			}
-			line := label + ": " + truncateText(text, maxLineRunes)
+			line := label + ": " + compactToolOutput(text, maxLineRunes)
 			if total+len([]rune(line)) > maxTotalRunes {
 				return strings.Join(lines, "\n")
 			}

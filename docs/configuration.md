@@ -78,7 +78,7 @@
 
 | 环境变量 | `config.json` 字段 | 默认值 | 取值 | 说明 |
 |---|---|---|---|---|
-| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 0–64000 | 压缩时原样保留的最近对话量（估算 token）。摘要只覆盖更早的部分。`0` 表示不保留原文。 |
+| `COMPACTION_RECENT_TOKENS` | `compactionRecentTokens` | `16000` | 0–64000 | 压缩时原样保留的最近对话量（估算 token），同时受 32000 字符总上限约束。工具结果会优先保留报错行和尾部。摘要只覆盖更早的部分。`0` 表示不保留原文。 |
 | `COMPACTION_REASONING_EFFORT` | `compactionReasoningEffort` | `max` | `auto`、`max`、`xhigh`、`high`、`medium`、`low`、`minimal`、`none` | 压缩请求使用的推理档位，会映射到模型实际支持的档位；`auto` 取模型支持的最高档位。无法识别的值按 `max` 处理。 |
 | `COMPACTION_MIN_OUTPUT_TOKENS` | `compactionMinOutputTokens` | `16384` | 1024–32768 | 压缩请求的输出预算下限。小于 1024 时回到 `16384`，大于 32768 时按 32768 计；实际下限不低于 4096。 |
 
