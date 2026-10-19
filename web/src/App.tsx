@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   Boxes,
@@ -15,11 +15,16 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { AccountsPanel } from "@/components/accounts-panel"
 import { BrandMark } from "@/components/brand-mark"
+import { HistoryPanel } from "@/components/history-panel"
+import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
 import { ModelsPanel } from "@/components/models-panel"
+import { SecurityPanel } from "@/components/security-panel"
 import { StorageAlert } from "@/components/storage-alert"
+import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -48,26 +53,6 @@ import type {
 } from "@/types"
 
 const TAB_STORAGE = "cline-pass-switcher-tab"
-
-const AccountsPanel = lazy(() =>
-  import("@/components/accounts-panel").then(({ AccountsPanel: panel }) => ({ default: panel })),
-)
-const HistoryPanel = lazy(() =>
-  import("@/components/history-panel").then(({ HistoryPanel: panel }) => ({ default: panel })),
-)
-const KeysPanel = lazy(() =>
-  import("@/components/keys-panel").then(({ KeysPanel: panel }) => ({ default: panel })),
-)
-const SecurityPanel = lazy(() =>
-  import("@/components/security-panel").then(({ SecurityPanel: panel }) => ({ default: panel })),
-)
-const TestBench = lazy(() =>
-  import("@/components/test-bench").then(({ TestBench: panel }) => ({ default: panel })),
-)
-
-function PanelFallback() {
-  return <div className="text-muted-foreground py-10 text-center text-sm">加载中…</div>
-}
 
 const TABS = [
   { value: "overview", label: "模型与上游", icon: Boxes },
@@ -626,75 +611,63 @@ function App() {
 
           <TabsContent value="accounts" keepMounted={visitedTabs.has("accounts")}>
             {accounts && (
-              <Suspense fallback={<PanelFallback />}>
-                <AccountsPanel
-                  data={accounts}
-                  onSave={saveAccounts}
-                  onTest={testAccount}
-                  onReveal={revealAccounts}
-                  onQuota={loadQuota}
-                />
-              </Suspense>
+              <AccountsPanel
+                data={accounts}
+                onSave={saveAccounts}
+                onTest={testAccount}
+                onReveal={revealAccounts}
+                onQuota={loadQuota}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="security" keepMounted={visitedTabs.has("security")}>
             {security && (
-              <Suspense fallback={<PanelFallback />}>
-                <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
-              </Suspense>
+              <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
             )}
           </TabsContent>
 
           <TabsContent value="keys" keepMounted={visitedTabs.has("keys")}>
             {keys && accounts && (
-              <Suspense fallback={<PanelFallback />}>
-                <KeysPanel
-                  data={keys}
-                  accounts={accounts}
-                  proxyBase={proxyBase}
-                  onSave={saveKeys}
-                  onReveal={revealKeys}
-                  onReset={resetKeyUsage}
-                />
-              </Suspense>
+              <KeysPanel
+                data={keys}
+                accounts={accounts}
+                proxyBase={proxyBase}
+                onSave={saveKeys}
+                onReveal={revealKeys}
+                onReset={resetKeyUsage}
+              />
             )}
           </TabsContent>
 
           <TabsContent value="test">
-            {models && (
-              <Suspense fallback={<PanelFallback />}>
-                <TestBench models={models.subscription} onTest={testModel} />
-              </Suspense>
-            )}
+            {models && <TestBench models={models.subscription} onTest={testModel} />}
           </TabsContent>
 
           <TabsContent value="history">
-            <Suspense fallback={<PanelFallback />}>
-              <HistoryPanel
-                history={history}
-                total={historyTotal}
-                hasMore={historyHasMore}
-                pending={historyPending}
-                query={historyQuery}
-                onQueryChange={applyHistoryQuery}
-                onRefresh={async () => {
-                  try {
-                    await refreshHistory()
-                  } catch (error) {
-                    handleError(error)
-                  }
-                }}
-                onLoadMore={async () => {
-                  try {
-                    await loadMoreHistory()
-                  } catch (error) {
-                    handleError(error)
-                  }
-                }}
-                onClear={clearHistory}
-              />
-            </Suspense>
+            <HistoryPanel
+              history={history}
+              total={historyTotal}
+              hasMore={historyHasMore}
+              pending={historyPending}
+              query={historyQuery}
+              onQueryChange={applyHistoryQuery}
+              onRefresh={async () => {
+                try {
+                  await refreshHistory()
+                } catch (error) {
+                  handleError(error)
+                }
+              }}
+              onLoadMore={async () => {
+                try {
+                  await loadMoreHistory()
+                } catch (error) {
+                  handleError(error)
+                }
+              }}
+              onClear={clearHistory}
+            />
           </TabsContent>
         </Tabs>
       </main>
