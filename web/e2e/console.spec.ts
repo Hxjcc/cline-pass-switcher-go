@@ -23,6 +23,25 @@ test("a fresh browser reaches the sign-in dialog instead of the auth throttle", 
   expect(responses.filter((status) => status === 401).length).toBeLessThan(5)
 })
 
+test("a stale stored key returns to login without exhausting the throttle", async ({ page }) => {
+  const responses: number[] = []
+  page.on("response", (response) => {
+    if (response.url().includes("/api/")) responses.push(response.status())
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem("cline-pass-switcher-admin-key", "sk-stale-credential")
+  })
+
+  await page.goto("/")
+  await expect(page.getByLabel("管理密钥")).toBeVisible()
+  expect(responses.filter((status) => status === 401).length).toBeLessThan(5)
+  expect(responses).not.toContain(429)
+
+  await page.getByLabel("管理密钥").fill(ADMIN_KEY)
+  await page.getByRole("button", { name: "进入控制台" }).click()
+  await expect(page.getByRole("tab", { name: "代理密钥" })).toBeVisible()
+})
+
 test("issuing a client key keeps the secret out of the boot frame", async ({ page }) => {
   await signIn(page)
   await page.getByRole("tab", { name: "代理密钥" }).click()
@@ -116,7 +135,7 @@ test("revealing client keys keeps an unsaved rename and a new row", async ({ pag
 test("storage faults refresh after login and clear after recovery", async ({ page }) => {
   await page.clock.install()
   let storage = { status: "ok", message: "", detail: "" }
-  await page.route("**/api/meta", async (route) => {
+  await page.route("**/api/status", async (route) => {
     const response = await route.fetch()
     const payload = await response.json()
     if (route.request().headers()["x-admin-key"] === ADMIN_KEY) payload.storage = storage

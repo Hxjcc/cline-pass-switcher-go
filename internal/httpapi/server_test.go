@@ -49,6 +49,93 @@ func TestMetaIsPublicAndProtectedRoutesRequireKey(t *testing.T) {
 	}
 }
 
+// /api/meta is the pre-login probe, so its body must not depend on whether the
+// caller guessed the admin key. Authenticated detail belongs to /api/status.
+func TestMetaNeverRevealsAuthenticatedDetails(t *testing.T) {
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.ProxyKey = "proxy-secret"
+		config.AdminKey = "admin-secret"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(key string) *httptest.ResponseRecorder {
+		request := localRequest(http.MethodGet, "/api/meta", nil)
+		request.Header.Set("X-Admin-Key", key)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	response := send("wrong-secret")
+	if response.Code != http.StatusOK {
+		t.Fatalf("meta should be public, got %d", response.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := payload["proxyBase"]; found {
+		t.Fatalf("meta leaked proxyBase: %#v", payload)
+	}
+	if _, found := payload["storage"]; found {
+		t.Fatalf("meta leaked storage: %#v", payload)
+	}
+	if authenticated := send("admin-secret"); authenticated.Body.String() != response.Body.String() {
+		t.Fatalf("meta differed for a correct key: wrong=%s right=%s", response.Body.String(), authenticated.Body.String())
+	}
+}
+
+func TestStatusRequiresAuthenticationAndReturnsStorage(t *testing.T) {
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.AdminKey = "admin-secret"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, localRequest(http.MethodGet, "/api/status", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("status should require the admin key, got %d", unauthorized.Code)
+	}
+
+	request := localRequest(http.MethodGet, "/api/status", nil)
+	request.Header.Set("X-Admin-Key", "admin-secret")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authorized status failed: %d %s", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	proxyBase, _ := payload["proxyBase"].(string)
+	if payload["authRequired"] != true || proxyBase == "" {
+		t.Fatalf("status payload incomplete: %#v", payload)
+	}
+	storage, ok := payload["storage"].(map[string]any)
+	if !ok || storage["status"] != "ok" {
+		t.Fatalf("status did not include storage health: %#v", payload)
+	}
+}
+
+func TestMissingStaticAssetIsNotFoundInsteadOfCachedSPA(t *testing.T) {
+	_, server := newTestServer(t)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, localRequest(http.MethodGet, "/assets/missing.js", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing asset should be 404, got %d %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("missing asset must not be immutable-cacheable: %q", response.Header().Get("Cache-Control"))
+	}
+	if strings.Contains(strings.ToLower(response.Body.String()), "<!doctype") {
+		t.Fatalf("missing asset served the SPA: %s", response.Body.String())
+	}
+}
+
 func TestServerFallsBackAcrossUpstreamsAndRecordsTrace(t *testing.T) {
 	var requests atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -65,10 +65,6 @@ func textFromParts(content any) string {
 	return builder.String()
 }
 
-func usageToResponses(value any) any {
-	return reportedUsage(value, 1, 0)
-}
-
 // reportedUsage is the usage object Codex uses to decide whether the context
 // window is full. Each gateway server tool (a search, for example) runs its own
 // internal leg and adds that leg's prompt tokens onto the final usage, so the
@@ -206,13 +202,6 @@ func intValue(value any) int64 {
 	default:
 		return 0
 	}
-}
-
-func intValueWithFallback(value any, fallback int64) int64 {
-	if result := intValue(value); result != 0 {
-		return result
-	}
-	return fallback
 }
 
 func (context *Context) responseOutputItemFromTool(toolCall map[string]any, status string) map[string]any {

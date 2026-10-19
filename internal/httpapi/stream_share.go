@@ -76,6 +76,10 @@ func responsesShareKey(ctx context.Context, modelID string, requestBody, chatBod
 		"model": modelID, "responses": withoutTransport(requestBody),
 		"chat": withoutTransport(chatBody), "routing": modelConfig,
 		"key_id": caller.ID, "account_pin": accountPin,
+		// Header-only affinity clients have no prompt_cache_key in the body.
+		// Two different conversations must not join one upstream stream just
+		// because their JSON bodies happen to match.
+		"session": upstream.SessionKeyFor(ctx, modelID, chatBody),
 	}
 	raw, _ := json.Marshal(view)
 	sum := sha256.Sum256(raw)
@@ -523,6 +527,9 @@ func (s *Server) runSharedResponses(
 				// A terminal sentinel may have been buffered without its trailing
 				// delimiter when cancellation arrived. Finish can still validate it.
 				job.aborted = false
+			}
+			if job.outcome.Status == "completed" && readErr == nil && !job.aborted {
+				s.upstream.ObserveStreamSuccess(ctx, job.last.Account, attempt.Upstream)
 			}
 			meta := job.stats.Gateway()
 			if meta.Empty() {

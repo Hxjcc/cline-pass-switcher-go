@@ -80,7 +80,7 @@ func TestAccountingFailureStopsLimitedGenerationButKeepsInventoryAndDiagnostics(
 		}
 	}
 	admin := httptest.NewRecorder()
-	getWithAdminKey(server, "/api/meta", "admin", admin)
+	getWithAdminKey(server, "/api/status", "admin", admin)
 	var meta struct {
 		Storage struct{ Status, Detail string }
 	}
@@ -91,9 +91,9 @@ func TestAccountingFailureStopsLimitedGenerationButKeepsInventoryAndDiagnostics(
 		t.Fatalf("admin did not receive diagnostics: %s", admin.Body)
 	}
 	client := httptest.NewRecorder()
-	getWithAdminKey(server, "/api/meta", "limited", client)
-	if strings.Contains(client.Body.String(), "storage") {
-		t.Fatalf("client key saw admin-only diagnostics: %s", client.Body)
+	getWithAdminKey(server, "/api/status", "limited", client)
+	if client.Code != http.StatusUnauthorized || strings.Contains(client.Body.String(), "storage") {
+		t.Fatalf("client key saw admin-only diagnostics: %d %s", client.Code, client.Body)
 	}
 	// Fixing the path alone must not silently forgive the missing record.
 	if err := os.Remove(journal); err != nil {

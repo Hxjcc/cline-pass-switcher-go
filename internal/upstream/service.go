@@ -19,6 +19,7 @@ import (
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/sse"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
@@ -1019,7 +1020,9 @@ func firstSSEPayload(raw []byte, includeTrailing bool) (string, bool) {
 }
 
 func readSSEHead(reader io.Reader) ([]byte, string, error) {
-	const maxHead = 32 << 10
+	// The first event is part of the normal SSE event budget. Bound it by the
+	// same limit the parser enforces, not by an undocumented smaller head cap.
+	const maxHead = sse.MaxEventBytes
 	result := make([]byte, 0, 4096)
 	buffer := make([]byte, 4096)
 	for len(result) < maxHead {
@@ -1043,7 +1046,7 @@ func readSSEHead(reader io.Reader) ([]byte, string, error) {
 			return result, "", err
 		}
 	}
-	return result, "", errors.New("stream head exceeds 32 KiB before first data event")
+	return result, "", errors.New("stream head exceeds 8 MiB before first data event")
 }
 
 func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body map[string]any, attempt Attempt) StreamAttemptResult {
@@ -1163,7 +1166,9 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 	guard.Commit()
 	handedOff = true
 	s.noteAccountStatus(account, http.StatusOK)
-	s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
+	// Affinity is finalized by the caller after the stream reaches a clean
+	// terminal. Committing the account/channel here would make a truncated
+	// stream sticky even though the request did not succeed.
 	return StreamAttemptResult{
 		SSE:        true,
 		Status:     http.StatusOK,

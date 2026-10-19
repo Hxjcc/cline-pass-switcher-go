@@ -161,6 +161,9 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 			}
 			applyStreamStats(&entry, stats)
 			applyGatewayMeta(&entry, meta, modelConfig)
+			if errorMessage == nil {
+				s.upstream.ObserveStreamSuccess(ctx, result.Account, attempt.Upstream)
+			}
 			s.record(ctx, entry)
 			streamed = true
 			break

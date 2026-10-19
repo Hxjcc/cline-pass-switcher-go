@@ -276,6 +276,14 @@ func (s *Service) observeStick(ctx context.Context, account model.Account, upstr
 	}
 }
 
+// ObserveStreamSuccess records the account and channel for a stream that has
+// already reached a clean terminal. StartStreamAttempt cannot do this when the
+// first event arrives: a later truncation must not make the failed combination
+// sticky for the next turn.
+func (s *Service) ObserveStreamSuccess(ctx context.Context, account model.Account, upstream string) {
+	s.observeStick(ctx, account, upstream, http.StatusOK)
+}
+
 // PreferAttempt moves the conversation's last pinned channel to the front of
 // the failover list. Auto routes have a single empty attempt, so this is a
 // no-op there.

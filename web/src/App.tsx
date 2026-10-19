@@ -92,9 +92,16 @@ function App() {
   const [proxyBaseCopied, setProxyBaseCopied] = useState(false)
   const [batchProbe, setBatchProbe] = useState<{ done: number; total: number } | null>(null)
   const batchProbeAbort = useRef<AbortController | null>(null)
+  // A storage snapshot proves the admin surface was readable without a key
+  // (local onboarding), so the background poll can keep using /api/status.
+  const statusAvailable = Boolean(meta?.storage)
 
   const handleError = useCallback((error: unknown) => {
     if (error instanceof UnauthorizedError) {
+      // A rotated or revoked console key must not keep firing protected
+      // requests in the background: clear it and return to the login dialog.
+      storeAdminKey("", false)
+      setAuthKey("")
       setLoginOpen(true)
       return
     }
@@ -121,21 +128,28 @@ function App() {
   }, [])
 
   const loadAll = async () => {
-    await Promise.all([fetchSnapshot(authKey).then(applySnapshot), refreshHistory()])
+    const snapshot = await fetchSnapshot(authKey)
+    applySnapshot(snapshot)
+    await refreshHistory()
   }
 
   useEffect(() => {
     let active = true
     const load = async () => {
       // With no credential stored, ask the public /api/meta first: firing the
-      // five protected calls of a fresh page load counts as failed attempts on
-      // the server and locked the operator out of his own console for a while.
+      // protected calls of a fresh page load counts as failed attempts on the
+      // server and locked the operator out of his own console for a while.
       if (!authKey) {
         const probe = await api<MetaResponse>("/api/meta")
-        if (probe.authRequired) return
+        if (probe.authRequired) {
+          setLoginOpen(true)
+          return
+        }
       }
-      const [snapshot] = await Promise.all([fetchSnapshot(authKey), refreshHistory()])
-      if (active) applySnapshot(snapshot)
+      const snapshot = await fetchSnapshot(authKey)
+      if (!active) return
+      applySnapshot(snapshot)
+      await refreshHistory()
     }
     void load().catch((error: unknown) => { if (active) handleError(error) })
     return () => { active = false }
@@ -149,14 +163,27 @@ function App() {
     const poll = async () => {
       let loginRequired = false
       try {
-        const response = await api<MetaResponse>("/api/meta", { key: authKey, signal: controller.signal })
+        const response = await api<MetaResponse>(
+          authKey || statusAvailable ? "/api/status" : "/api/meta",
+          { key: authKey, signal: controller.signal },
+        )
         if (!active) return
-        setMeta(response)
+        setMeta((current) => ({
+          ...response,
+          proxyBase: response.proxyBase ?? current?.proxyBase,
+          storage: response.storage ?? current?.storage,
+        }))
         loginRequired = response.authRequired && !authKey
         if (loginRequired) setLoginOpen(true)
       } catch (error: unknown) {
-        // Keep the last known storage fault visible during network trouble.
-        if (active && first) handleError(error)
+        if (!active) return
+        if (error instanceof UnauthorizedError) {
+          loginRequired = true
+          handleError(error)
+        } else if (first) {
+          // Keep the last known storage fault visible during network trouble.
+          handleError(error)
+        }
       } finally {
         first = false
         if (active && !loginRequired) timer = setTimeout(() => void poll(), 15_000)
@@ -168,7 +195,7 @@ function App() {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [authKey, handleError])
+  }, [authKey, handleError, statusAvailable])
 
   useEffect(() => {
     if (!models || !meta || !accounts || !keys || !security) return
@@ -191,10 +218,14 @@ function App() {
     // whole failed-attempt budget of the login throttle.
     const [nextModels, nextMeta] = await Promise.all([
       api<ModelsResponse>("/api/models", { key }),
-      api<MetaResponse>("/api/meta", { key }),
+      api<MetaResponse>("/api/meta"),
     ])
     setModels(nextModels)
-    setMeta(nextMeta)
+    setMeta((current) => ({
+      ...nextMeta,
+      proxyBase: nextMeta.proxyBase ?? current?.proxyBase,
+      storage: nextMeta.storage ?? current?.storage,
+    }))
     storeAdminKey(key, remember)
     setAuthKey(key)
   }
@@ -640,7 +671,7 @@ function App() {
             )}
           </TabsContent>
 
-          <TabsContent value="test">
+          <TabsContent value="test" keepMounted={visitedTabs.has("test")}>
             {models && <TestBench models={models.subscription} onTest={testModel} />}
           </TabsContent>
 

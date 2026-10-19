@@ -3,6 +3,7 @@ package upstream
 import (
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
@@ -33,6 +34,20 @@ func TestReadSSEHeadHandlesCommentsAndBytewiseChunks(t *testing.T) {
 	}
 	if len(raw) == 0 {
 		t.Fatal("expected buffered stream head")
+	}
+}
+
+func TestReadSSEHeadAcceptsLargeFirstEvent(t *testing.T) {
+	payload := `{"choices":[{"delta":{"content":"` + strings.Repeat("x", 64<<10) + `"},"finish_reason":null}]}`
+	raw, got, err := readSSEHead(strings.NewReader("data: " + payload + "\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != payload {
+		t.Fatalf("large first payload changed: got %d bytes", len(got))
+	}
+	if len(raw) <= 32<<10 {
+		t.Fatalf("test payload did not cross the old head cap: %d bytes", len(raw))
 	}
 }
 

@@ -108,7 +108,8 @@
 
 - `GET /healthz`：进程存活检查，返回 200 和 `{"ok":true}`。
 - `GET /readyz`：已配置可用账号且未检测到记账不可用时返回 200，否则返回 503。响应含 `ok` 和 `storage`（`ok`、`degraded`、`unavailable`）；只出现快照合并故障时仍可就绪。该接口不调用真实上游，也不保证账号余额或上游此刻可用。
-- `GET /api/meta`：认证成功的管理员额外获得 `storage` 对象，包含状态、处理建议和故障详情；匿名调用及普通客户端密钥不返回这些诊断信息。控制台约每 15 秒刷新一次状态。
+- `GET /api/meta`：无需认证，只返回 `authRequired` 和 `configured`。它的响应不随请求携带的密钥变化，避免成为管理密钥的探测接口。
+- `GET /api/status`：走管理接口认证（未配置管理密钥时仅本机可读），返回 `proxyBase` 和 `storage`（状态、处理建议和故障详情），供已登录控制台约每 15 秒刷新一次；不返回任何密钥。
 
 以上接口仍执行现有来源与本机访问检查。恢复步骤见[运维说明](operations.md#存储故障与恢复)。
 
@@ -129,7 +130,8 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/meta` | **无需认证。** 返回 `authRequired`（是否设置了管理密钥）和 `configured`（是否有可用账号）；认证通过时还返回 `proxyBase`。 |
+| `GET` | `/api/meta` | **无需认证。** 返回 `authRequired`（是否设置了管理密钥）和 `configured`（是否有可用账号）；不根据请求密钥返回额外信息。 |
+| `GET` | `/api/status` | 管理接口认证（未配置管理密钥时仅本机可读）。返回 `authRequired`、`configured`、`proxyBase` 和 `storage`，供控制台显示运行与存储状态。 |
 | `GET` | `/api/models` | 订阅模型及其渠道设置、探测信息。 |
 | `POST` | `/api/models/remove` | 移除订阅模型。请求体 `{"model": "..."}`。 |
 | `POST` | `/api/fetch-official-models` | 从 Cline 推荐目录和 models.dev 拉取 Cline Pass 模型列表，把新模型加入订阅。models.dev 拉取失败返回 500，不会伪装成「没有新模型」。 |

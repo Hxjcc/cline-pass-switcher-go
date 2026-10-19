@@ -36,9 +36,12 @@ export type ConsoleSnapshot = Omit<CachedSnapshot, "history" | "historyTotal" | 
 // History has its own request coordinator; a general refresh must not write
 // unfiltered rows over a newer history query.
 export async function fetchSnapshot(key: string): Promise<ConsoleSnapshot> {
-  const [meta, models, accounts, keys, security] = await Promise.all([
-    api<MetaResponse>("/api/meta", { key }),
-    api<ModelsResponse>("/api/models", { key }),
+  // Validate the credential with one protected request before fanning out.
+  // A stale key must not burn the five-request auth-failure budget and lock
+  // the operator out of the login dialog.
+  const models = await api<ModelsResponse>("/api/models", { key })
+  const [meta, accounts, keys, security] = await Promise.all([
+    api<MetaResponse>("/api/status", { key }),
     api<AccountsResponse>("/api/accounts", { key }),
     api<KeysResponse>("/api/keys", { key }),
     api<SecurityResponse>("/api/security", { key }),

@@ -337,10 +337,9 @@ func TestKeysApiRejectsAnUnknownPinnedAccount(t *testing.T) {
 	}
 }
 
-// /api/meta has to answer before login (the console uses it to decide whether
-// to ask for a key), but the deployment's public address is only handed to a
-// caller that already presented the console key.
-func TestMetaHidesThePublicAddressBeforeLogin(t *testing.T) {
+// /api/meta has to answer before login, but it never reveals deployment
+// detail. The authenticated /api/status call supplies the console base URL.
+func TestMetaNeverRevealsThePublicAddress(t *testing.T) {
 	st, server := newTestServer(t)
 	if err := st.UpdateConfig(func(config *model.Config) {
 		config.AdminKey = "console"
@@ -361,7 +360,7 @@ func TestMetaHidesThePublicAddressBeforeLogin(t *testing.T) {
 	}
 
 	authenticated := httptest.NewRecorder()
-	getWithAdminKey(server, "/api/meta", "console", authenticated)
+	getWithAdminKey(server, "/api/status", "console", authenticated)
 	if !strings.Contains(authenticated.Body.String(), "console.example") {
 		t.Fatalf("the console needs its own base URL after login: %s", authenticated.Body)
 	}

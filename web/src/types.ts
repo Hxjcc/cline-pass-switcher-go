@@ -197,7 +197,8 @@ export interface ProxyKeyDraft {
 
 export interface MetaResponse {
   authRequired: boolean
-  proxyBase: string
+  /** Authenticated /api/status only. The public /api/meta omits it. */
+  proxyBase?: string
   configured: boolean
   storage?: StorageHealth
 }

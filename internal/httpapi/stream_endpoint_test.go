@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 func TestStreamingResponsesEndpointEmitsResponsesEvents(t *testing.T) {
@@ -205,6 +206,59 @@ func TestResponsesShareKeyCoversSamplingParameters(t *testing.T) {
 	}
 }
 
+func TestResponsesShareKeyCoversSessionHints(t *testing.T) {
+	body := map[string]any{"messages": []any{"same prompt"}, "stream": true}
+	key := func(session string) string {
+		return responsesShareKey(
+			upstream.WithSessionHint(context.Background(), session),
+			"cline-pass/test", body, body, model.PerModelConfig{},
+		)
+	}
+	if key("session-a") == key("session-b") {
+		t.Fatal("different header-only conversations must not share an upstream stream")
+	}
+	stable := key("session-a")
+	if stable != key("session-a") {
+		t.Fatal("the same conversation should keep a stable share key")
+	}
+}
+
+func TestTruncatedResponsesStreamDoesNotBecomeSticky(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")
+	}))
+	defer upstreamServer.Close()
+
+	st, server := newTestServer(t)
+	if err := st.UpdateConfig(func(config *model.Config) {
+		config.UpstreamBase = upstreamServer.URL
+		config.AccountMode = "roundrobin"
+		config.Accounts = []model.Account{
+			{Name: "a", Key: "key-a", Enabled: true},
+			{Name: "b", Key: "key-b", Enabled: true},
+		}
+		config.KnownModels = []string{"cline-pass/test"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := map[string]any{"prompt_cache_key": "truncated-session"}
+	request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(
+		`{"model":"cline-pass/test","stream":true,"prompt_cache_key":"truncated-session","input":"hi"}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "response.failed") {
+		t.Fatalf("truncated stream should end as a failed Responses event: %d %s", response.Code, response.Body.String())
+	}
+	session := upstream.SessionKey("cline-pass/test", body)
+	if accountID, channel := server.upstream.LookupStick(session); accountID != "" || channel != "" {
+		t.Fatalf("truncated stream became sticky: %q/%q", accountID, channel)
+	}
+}
+
 func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 	var hits atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -237,7 +291,7 @@ func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			request := localRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
-			  "model":"cline-pass/test","input":"share-me","stream":true,"reasoning":{"effort":"low"}
+			  "model":"cline-pass/test","input":"share-me","stream":true,"prompt_cache_key":"shared-session","reasoning":{"effort":"low"}
 			}`))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
@@ -264,6 +318,11 @@ func TestSharedResponsesStreamCoalescesDuplicateClients(t *testing.T) {
 	}
 	if stats := accountStats(t, st, "main"); stats.Requests != 1 {
 		t.Fatalf("account request count should not be inflated by attached clients: %#v", stats)
+	}
+	server.shares.running.Wait()
+	session := upstream.SessionKey("cline-pass/test", map[string]any{"prompt_cache_key": "shared-session"})
+	if accountID, channel := server.upstream.LookupStick(session); accountID == "" {
+		t.Fatalf("a completed shared stream should become sticky: %q/%q", accountID, channel)
 	}
 }
 

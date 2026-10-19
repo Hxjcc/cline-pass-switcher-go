@@ -149,19 +149,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/meta" {
-		cfg := s.store.Config()
-		payload := map[string]any{
-			"authRequired": s.store.AdminKey() != "",
-			"configured":   s.store.IsConfigured(),
-		}
 		// The console asks for this before login, so it must stay reachable
-		// without a credential - but the deployment's public address is only
-		// handed to a caller that either has the key or does not need one.
-		if s.adminRequestAuthorized(request) {
-			payload["proxyBase"] = s.publicProxyBase(cfg)
-			payload["storage"] = s.store.Health()
-		}
-		writeJSON(writer, http.StatusOK, payload)
+		// without a credential. Keep the response independent of the presented
+		// key: a conditional payload would be an unthrottled key oracle.
+		s.handleMeta(writer)
 		return
 	}
 	// Client endpoints and the console answer to different credentials. A key
@@ -204,6 +195,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleTestAccount(writer, request)
 	case request.Method == http.MethodGet && path == "/api/accounts/quota":
 		s.handleAccountQuota(writer, request)
+	case request.Method == http.MethodGet && path == "/api/status":
+		s.handleStatus(writer)
 	case request.Method == http.MethodGet && path == "/api/security":
 		s.handleGetSecurity(writer)
 	case request.Method == http.MethodPost && path == "/api/security":
@@ -267,6 +260,28 @@ func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request)
 		"subscription":  subscription,
 		"proxyBase":     publicProxyBaseFor(snapshot.PublicBase, snapshot.Port),
 		"officialFetch": snapshot.Official,
+	})
+}
+
+// handleMeta is the pre-login probe. It intentionally carries no authenticated
+// detail: the same response must be returned whether or not the caller knows
+// the admin key. Authenticated runtime status lives in /api/status.
+func (s *Server) handleMeta(writer http.ResponseWriter) {
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"authRequired": s.store.AdminKey() != "",
+		"configured":   s.store.IsConfigured(),
+	})
+}
+
+// handleStatus is the small authenticated status payload the console polls for
+// storage health and the public proxy base. It never includes secrets.
+func (s *Server) handleStatus(writer http.ResponseWriter) {
+	cfg := s.store.Config()
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"authRequired": s.store.AdminKey() != "",
+		"configured":   s.store.IsConfigured(),
+		"proxyBase":    s.publicProxyBase(cfg),
+		"storage":      s.store.Health(),
 	})
 }
 
@@ -956,25 +971,15 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 
 func (s *Server) serveStatic(writer http.ResponseWriter, request *http.Request) {
 	path := strings.TrimPrefix(request.URL.Path, "/")
-	if strings.HasPrefix(path, "assets/") {
-		writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	} else {
-		writer.Header().Set("Cache-Control", "no-cache")
-	}
-	if compressibleStatic(path) {
-		writer.Header().Add("Vary", "Accept-Encoding")
-	}
-	compress := request.Method == http.MethodGet &&
-		request.Header.Get("Range") == "" &&
-		compressibleStatic(path) &&
-		acceptsGzip(request)
-	if compress {
-		writer.Header().Set("Content-Encoding", "gzip")
-		compressor := gzip.NewWriter(writer)
-		defer func() { _ = compressor.Close() }()
-		writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
-	}
 	if path == "" {
+		writer.Header().Set("Cache-Control", "no-cache")
+		writer.Header().Add("Vary", "Accept-Encoding")
+		if request.Method == http.MethodGet && acceptsGzip(request) {
+			writer.Header().Set("Content-Encoding", "gzip")
+			compressor := gzip.NewWriter(writer)
+			defer func() { _ = compressor.Close() }()
+			writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
+		}
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		writer.WriteHeader(http.StatusOK)
 		if request.Method != http.MethodHead {
@@ -983,8 +988,44 @@ func (s *Server) serveStatic(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if info, err := fs.Stat(s.assets, path); err == nil && !info.IsDir() {
+		if strings.HasPrefix(path, "assets/") {
+			writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			writer.Header().Set("Cache-Control", "no-cache")
+		}
+		if compressibleStatic(path) {
+			writer.Header().Add("Vary", "Accept-Encoding")
+		}
+		if request.Method == http.MethodGet &&
+			request.Header.Get("Range") == "" &&
+			compressibleStatic(path) &&
+			acceptsGzip(request) {
+			writer.Header().Set("Content-Encoding", "gzip")
+			compressor := gzip.NewWriter(writer)
+			defer func() { _ = compressor.Close() }()
+			writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
+		}
 		s.file.ServeHTTP(writer, request)
 		return
+	}
+	// A missing hashed asset is a broken deployment, not a client-side route.
+	// Serving index.html with an immutable cache header would poison the browser
+	// cache for a year and hide the real 404.
+	if strings.HasPrefix(path, "assets/") {
+		writer.Header().Set("Cache-Control", "no-store")
+		http.NotFound(writer, request)
+		return
+	}
+	writer.Header().Set("Cache-Control", "no-cache")
+	if compressibleStatic(path) {
+		writer.Header().Add("Vary", "Accept-Encoding")
+	}
+	if request.Method == http.MethodGet && request.Header.Get("Range") == "" &&
+		compressibleStatic(path) && acceptsGzip(request) {
+		writer.Header().Set("Content-Encoding", "gzip")
+		compressor := gzip.NewWriter(writer)
+		defer func() { _ = compressor.Close() }()
+		writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)

@@ -147,12 +147,16 @@ func TestLimitedResponsesConcurrentDuplicatesReserveOneRun(t *testing.T) {
 		if response == nil {
 			continue
 		}
-		defer response.Body.Close()
 		all = append(all, response)
 		if response.StatusCode != http.StatusOK {
 			t.Errorf("duplicate rejected: %d", response.StatusCode)
 		}
 	}
+	t.Cleanup(func() {
+		for _, response := range all {
+			_ = response.Body.Close()
+		}
+	})
 	if len(all) != subscribers || t.Failed() {
 		release()
 		return

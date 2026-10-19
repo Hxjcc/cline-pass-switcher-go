@@ -1,8 +1,21 @@
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 
-import { readSnapshot, writeSnapshot } from "./console-snapshot"
+import { fetchSnapshot, readSnapshot, writeSnapshot } from "./console-snapshot"
+import { UnauthorizedError } from "./api"
 
-afterEach(() => sessionStorage.clear())
+afterEach(() => {
+  sessionStorage.clear()
+  vi.unstubAllGlobals()
+})
+
+test("validates a stored credential with one request before fanning out", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response("", { status: 401 }))
+  vi.stubGlobal("fetch", fetch)
+
+  await expect(fetchSnapshot("stale-key")).rejects.toBeInstanceOf(UnauthorizedError)
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(fetch.mock.calls[0][0]).toBe("/api/models")
+})
 
 test("keeps master credentials out of the reload cache", () => {
   writeSnapshot({

@@ -72,9 +72,27 @@ func TestPartialKeyConfigurationKeepsUncredentialedAPILocal(t *testing.T) {
 				if meta["authRequired"] != adminOnly {
 					t.Fatalf("login must follow the console credential: %v", meta)
 				}
-				_, showsBase := meta["proxyBase"]
-				if showsBase != (local && !adminOnly) {
-					t.Fatalf("unexpected public address disclosure: local=%v meta=%v", local, meta)
+				if _, showsBase := meta["proxyBase"]; showsBase {
+					t.Fatalf("public meta must not disclose the base URL: local=%v meta=%v", local, meta)
+				}
+
+				statusRequest := localRequest(http.MethodGet, "/api/status", nil)
+				if !local {
+					statusRequest.RemoteAddr = "198.51.100.15:1234"
+				}
+				status := httptest.NewRecorder()
+				server.ServeHTTP(status, statusRequest)
+				wantStatus := http.StatusForbidden
+				if adminOnly {
+					wantStatus = http.StatusUnauthorized
+				} else if local {
+					wantStatus = http.StatusOK
+				}
+				if status.Code != wantStatus {
+					t.Fatalf("local=%v adminOnly=%v status=%d, want %d: %s", local, adminOnly, status.Code, wantStatus, status.Body)
+				}
+				if status.Code == http.StatusOK && !strings.Contains(status.Body.String(), `"proxyBase"`) {
+					t.Fatalf("authenticated status needs the base URL: %s", status.Body)
 				}
 			}
 		})
