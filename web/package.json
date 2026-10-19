@@ -22,9 +22,12 @@
     "sonner": "^2.0.8"
   },
   "devDependencies": {
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
     "@playwright/test": "^1.63.0",
     "@testing-library/react": "^16.3.3",
     "@tailwindcss/vite": "^4.3.3",
+    "@tybys/wasm-util": "^0.10.2",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
