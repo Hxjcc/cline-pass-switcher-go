@@ -106,8 +106,8 @@ type Config struct {
 	// survive the compaction exactly. Zero disables the verbatim tail.
 	CompactionRecentTokens int `json:"compactionRecentTokens,omitempty"`
 	// CompactionReasoningEffort is the reasoning level compaction turns run at
-	// (one of the model's advertised levels, or "auto" to pick the closest to
-	// high). Reasoning models that starve on a smaller level answer "empty
+	// (one of the model's advertised levels, or "auto" to pick the strongest
+	// advertised level). Reasoning models that starve on a smaller level answer "empty
 	// response content", which costs a wasted pass plus a retry.
 	CompactionReasoningEffort string `json:"compactionReasoningEffort,omitempty"`
 	// CompactionMinOutputTokens is the output floor for compaction turns.

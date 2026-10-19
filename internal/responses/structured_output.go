@@ -84,7 +84,7 @@ func (state *StreamState) validateStructuredOutput() error {
 	for _, item := range state.outputItems() {
 		output := jsonx.Map(item)
 		switch jsonx.String(output["type"]) {
-		case "function_call", "custom_tool_call", "tool_search_call":
+		case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call":
 			return nil
 		case "message":
 			for _, raw := range jsonx.Slice(output["content"]) {
@@ -98,7 +98,9 @@ func (state *StreamState) validateStructuredOutput() error {
 			}
 		}
 	}
-	value, err := jsonschema.UnmarshalJSON(strings.NewReader(text.String()))
+	rawText := strings.TrimSpace(text.String())
+	rawText = strings.TrimSpace(strings.TrimPrefix(rawText, "\uFEFF"))
+	value, err := jsonschema.UnmarshalJSON(strings.NewReader(rawText))
 	if err != nil {
 		return errors.New("upstream structured output is not a single valid JSON value: " + describeStructuredFailure(text.String()))
 	}

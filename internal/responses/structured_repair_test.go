@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func schemaDocument(t *testing.T, raw string) any {
@@ -28,6 +29,8 @@ func TestWrapPlainTextForSchema(t *testing.T) {
 		{"ascii prose", "I cannot help with that request.", titleSchema, `{"title":"I cannot help with that request."}`, true},
 		{"truncated json", `{"title":"broken`, titleSchema, "", false},
 		{"json object", `{"title":"ok"}`, titleSchema, "", false},
+		{"markdown fence", "```json\n{\"title\":\"ok\"}\n```", titleSchema, "", false},
+		{"bom title", "\uFEFFhello", titleSchema, `{"title":"hello"}`, true},
 		{"empty", "   ", titleSchema, "", false},
 		{"two properties", "hello", `{"type":"object","properties":{"title":{"type":"string"},"id":{"type":"string"}},"required":["title"]}`, "", false},
 		{"non string property", "hello", `{"type":"object","properties":{"title":{"type":"integer"}},"required":["title"]}`, "", false},
@@ -43,6 +46,41 @@ func TestWrapPlainTextForSchema(t *testing.T) {
 	}
 }
 
+func TestStructuredRepairBodyMapsEffortAndPreservesUTF8(t *testing.T) {
+	text := strings.Repeat("中", 8001)
+	body := StructuredRepairBody(
+		map[string]any{"model": "test"},
+		text,
+		map[string]any{"type": "object"},
+		[]string{"none", "max"},
+	)
+	if body["reasoning_effort"] != "max" {
+		t.Fatalf("repair effort = %#v, want max for a model that only supports none/max", body["reasoning_effort"])
+	}
+	messages := body["messages"].([]any)
+	prompt := messages[0].(map[string]any)["content"].(string)
+	if !utf8.ValidString(prompt) {
+		t.Fatal("repair prompt cut through a UTF-8 sequence")
+	}
+	if strings.Count(prompt, "中") > 8000 {
+		t.Fatal("repair prompt was not truncated")
+	}
+}
+
+func TestStructuredRepairBodyStripsMarkdownFence(t *testing.T) {
+	body := StructuredRepairBody(
+		map[string]any{"model": "test"},
+		"```json\n{\"answer\":\"ok\"}\n```",
+		map[string]any{"type": "object"},
+		nil,
+	)
+	messages := body["messages"].([]any)
+	prompt := messages[0].(map[string]any)["content"].(string)
+	if strings.Contains(prompt, "```") || !strings.Contains(prompt, `{"answer":"ok"}`) {
+		t.Fatalf("repair prompt did not strip the fence: %s", prompt)
+	}
+}
+
 func TestStructuredRepairBodyKeepsOnlyTextAndSchema(t *testing.T) {
 	chatBody := map[string]any{
 		"model":           "cline-pass/glm-5.3-flash",
@@ -50,7 +88,7 @@ func TestStructuredRepairBodyKeepsOnlyTextAndSchema(t *testing.T) {
 		"response_format": map[string]any{"type": "json_schema"},
 		"stream":          true,
 	}
-	body := StructuredRepairBody(chatBody, "抱歉，我无法协助这个请求。", map[string]any{"type": "object"})
+	body := StructuredRepairBody(chatBody, "抱歉，我无法协助这个请求。", map[string]any{"type": "object"}, nil)
 	if body["stream"] != false {
 		t.Fatalf("repair stream = %#v", body["stream"])
 	}

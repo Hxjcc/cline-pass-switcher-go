@@ -2,6 +2,7 @@ package responses
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
@@ -32,13 +33,18 @@ func validateRequestCapabilities(body map[string]any) error {
 	}
 	if choice := jsonx.Map(body["tool_choice"]); choice != nil {
 		switch kind := jsonx.String(choice["type"]); kind {
-		case "function", "custom", "tool_search":
-		case "web_search", "web_search_preview", "web_search_preview_2025_03_11":
-			// A forced hosted search is honoured only when the request also
-			// declared the tool and the proxy mapped it onto a gateway search
-			// tool; the bridge refuses the request otherwise.
+		case "function", "custom":
+			if strings.TrimSpace(jsonx.String(choice["name"])) == "" {
+				return unsupported("tool_choice.name", "forced "+kind+" tool without a name")
+			}
+		case "tool_search", "local_shell":
 		default:
-			return unsupported("tool_choice.type", "tool choice type "+kind)
+			if !isWebSearchToolType(kind) {
+				// A forced hosted search is honoured only when the request also
+				// declared the tool and the proxy mapped it onto a gateway search
+				// tool; the bridge refuses the request otherwise.
+				return unsupported("tool_choice.type", "tool choice type "+kind)
+			}
 		}
 	}
 	for index, raw := range jsonx.Slice(body["input"]) {
@@ -61,7 +67,14 @@ func validateRequestCapabilities(body map[string]any) error {
 			if err := validateToolOutputMedia(item["output"], path+".output", 0); err != nil {
 				return err
 			}
-		case "additional_tools", "tool_search_output":
+		case "additional_tools":
+			if err := validateToolDefinitions(item["tools"], path+".tools", 0); err != nil {
+				return err
+			}
+		case "tool_search_output":
+			if isHostedToolSearchItem(item) {
+				continue
+			}
 			if err := validateToolDefinitions(item["tools"], path+".tools", 0); err != nil {
 				return err
 			}
@@ -80,6 +93,17 @@ func validateRequestCapabilities(body map[string]any) error {
 			// Remote multi-agent v2 envelope (task assignment, teammate
 			// reply, error report). Its content mixes readable text with
 			// payload blobs; the bridge folds it into a single user turn.
+		case "web_search_call", "image_generation_call", "other":
+			// Output-only Codex history items from other providers. They have
+			// no Chat Completions equivalent; dropping them keeps a persisted
+			// thread resumable instead of rejecting the whole request.
+		case "local_shell_call", "local_shell_call_output":
+			// Legacy local-shell items are replayed as plain text, not as
+			// Chat tool messages, so old threads remain readable.
+		case "context_compaction":
+			// Older Codex builds emitted this item instead of compaction. The
+			// bridge decodes it when it carries our readable envelope and
+			// otherwise ignores it.
 		default:
 			return unsupported(path+".type", "input item type "+kind)
 		}
@@ -101,7 +125,7 @@ func validateToolDefinitions(value any, path string, depth int) error {
 		}
 		field := fmt.Sprintf("%s[%d]", path, index)
 		switch kind := jsonx.String(tool["type"]); kind {
-		case "", "function", "custom":
+		case "", "function", "custom", "local_shell":
 		case "namespace":
 			if err := validateToolDefinitions(tool["tools"], field+".tools", depth+1); err != nil {
 				return err

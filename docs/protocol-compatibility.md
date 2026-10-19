@@ -36,12 +36,13 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 | `custom` | 函数工具，只有一个字符串参数 `input`；原始定义（包括 grammar）附在工具描述里，上游不会按 grammar 约束采样。 |
 | `namespace` 下的工具 | 函数工具，名称为 `命名空间__工具名`，超长时截断到 64 个字符；返回给客户端时还原成原来的命名空间和名称。 |
 | 客户端执行的 `tool_search` | 名为 `tool_search` 的函数工具。 |
+| `local_shell` | 名为 `local_shell` 的函数工具；模型调用后还原为 `local_shell_call`，action 作为 JSON 参数。 |
 | `web_search`、`web_search_preview` 等 | 按 `WEB_SEARCH_UPSTREAM` 映射为网关执行的搜索工具，未配置时忽略；客户端用 `tool_choice` 强制选择它时翻译成 `tool_choice:"required"`（未配置搜索工具则返回 400），见[联网搜索与网页抓取](#联网搜索与网页抓取)。 |
 | `file_search`、`code_interpreter`、`image_generation`、`computer*`、`mcp`、服务端执行的 `tool_search` | 忽略。 |
 
 客户端经常在普通对话里也附带整份工具清单，所以"声明了"不等于"要求使用"：被忽略的工具不会导致请求失败。只有用 `tool_choice` **强制**选择一个无法转发的工具（可映射的 `web_search` 会转成 `tool_choice:"required"`），或者 `tool_choice` 为 `required` 但过滤后没有任何可用工具时，才返回 400。
 
-`tool_choice` 支持 `auto`、`none`、`required`，以及指定一个 `function`、`custom` 或 `tool_search` 工具。请求里没有可用工具时，`tool_choice` 和 `parallel_tool_calls` 会被去掉。
+`tool_choice` 支持 `auto`、`none`、`required`，以及指定一个 `function`、`custom`、`tool_search` 或 `local_shell` 工具。请求里没有可用工具时，`tool_choice` 和 `parallel_tool_calls` 会被去掉。
 
 ### 推理与缓存
 
@@ -57,6 +58,8 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 - 只有加密内容、没有可读文本的思考项；不是本网关生成、无法解读的压缩项。
 - 未知的输入项类型、内容类型或工具类型（上面工具表以外的类型）；嵌套超过 16 层的工具命名空间。
 - 强制使用无法转发的工具（见上文）。
+
+为了能继续打开其他 provider 产生的旧 Codex 线程，`local_shell` 工具会映射成同名函数工具，`local_shell_call` / `local_shell_call_output` 按工具调用和 tool 消息往返；`web_search_call`、`image_generation_call` 和 `other` 历史项会把可读载荷保留成文本；可读的 `context_compaction` 按压缩项处理，不可读时忽略。
 
 错误格式：
 
@@ -169,9 +172,11 @@ wire_api = "responses"
 压缩结果由两部分组成：
 
 1. **摘要**，覆盖较早的对话。网关要求模型按四个固定段落输出：`## Objective`、`## Work State`、`## Next Move`、`## Relevant Files`。
-2. **最近的原文**，默认约 16000 token（`COMPACTION_RECENT_TOKENS`），只包含用户和助手的文字，单条最多 2000 字符、总计最多 32000 字符。这样最近的路径、命令和报错不会在摘要中被改写。
+2. **最近的原文**，默认约 16000 token（`COMPACTION_RECENT_TOKENS`），包含用户/助手文字，以及工具调用和工具结果的可读文本（带 `call_id` 标识），单条最多 2000 字符、总计最多 32000 字符。这样最近的路径、命令和报错不会在摘要中被改写；摘要请求还会附带一份工具活动摘录，避免摘要声称已经执行过的命令没执行。
 
 两部分一起放在 `compaction` 项的 `encrypted_content` 中，以 `ocx1:` 开头、base64 编码。客户端下一轮把它带回来时，网关按「摘要 → 最近原文 → 本轮新输入」的顺序放回对话。
+
+独立 `/responses/compact` 的 `output` 已经原样保留 user 消息，因此它不会把这些 user 文本再放进 `recent`；远端 compaction v2 没有额外的 user 输出，`recent` 会连同工具文本一起带上。
 
 ### 预算与重试
 

@@ -34,6 +34,11 @@ type Context struct {
 	Temperature              any
 	TopP                     any
 	Metadata                 map[string]any
+	Truncation               any
+	ServiceTier              any
+	PromptCacheKey           string
+	SafetyIdentifier         any
+	MaxToolCalls             any
 	RequestedReasoningEffort string
 	MappedReasoningEffort    string
 	RawReasoning             bool
@@ -53,13 +58,18 @@ type Context struct {
 	// the client's own schema untouched.
 	shellCompat        string
 	shellCompatEnforce bool
-	providerTools      map[string]struct{}
-	bindings           map[string]toolBinding
-	originalToChat     map[string]string
-	chatTools          []any
-	toolNames          map[string]struct{}
-	compactionUsers    []any
-	outputSchema       *jsonschema.Schema
+	// webSearchReplaced records that a client function named web_search was
+	// replaced by a gateway provider search tool. A forced choice for that
+	// original function has to become "required" because the function itself
+	// no longer exists in the forwarded tool list.
+	webSearchReplaced bool
+	providerTools     map[string]struct{}
+	bindings          map[string]toolBinding
+	originalToChat    map[string]string
+	chatTools         []any
+	toolNames         map[string]struct{}
+	compactionUsers   []any
+	outputSchema      *jsonschema.Schema
 	// InputTokenCap is the model's context window. Reported input tokens are
 	// clamped to it so a summed upstream usage cannot look larger than the
 	// window. Zero leaves the number uncapped.
@@ -95,7 +105,7 @@ type Options struct {
 	// compaction items. Zero disables it: the item then carries the summary only.
 	RecentCompactionTokens int
 	// CompactionReasoningEffort is the level compaction turns run at, or "auto"
-	// to pick the one closest to high.
+	// to pick the strongest level the model advertises.
 	CompactionReasoningEffort string
 	// ShellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value (for example "powershell") and marks it
@@ -161,6 +171,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		Temperature:        body["temperature"],
 		TopP:               body["top_p"],
 		Metadata:           metadata,
+		Truncation:         body["truncation"],
+		ServiceTier:        body["service_tier"],
+		PromptCacheKey:     strings.TrimSpace(jsonx.String(body["prompt_cache_key"])),
+		SafetyIdentifier:   body["safety_identifier"],
+		MaxToolCalls:       body["max_tool_calls"],
 		RawReasoning:       options.RawReasoning,
 		webSearchTool:      NormaliseWebSearchTool(options.WebSearchUpstream),
 		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
@@ -187,19 +202,18 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	for _, tool := range responseTools {
 		context.addResponseTool(tool, "")
 	}
-	context.collectDeclaredInputTools(body["input"], 0)
+	context.collectDeclaredInputTools(body["input"])
+	if err := context.validateToolChoice(); err != nil {
+		return nil, nil, err
+	}
 	if context.providerToolsAvailable() && context.webFetchTool != "" && requestHasUserURL(body["input"]) {
 		context.addProviderTool(context.webFetchTool)
 	}
 	if jsonx.String(context.ResponseToolChoice) == "required" && len(context.chatTools) == 0 {
 		return nil, nil, unsupported("tool_choice", "required tool execution when no client-executable tools are available")
 	}
-	if jsonx.String(jsonx.Map(context.ResponseToolChoice)["type"]) == "tool_search" && context.bindings[toolSearchName].Kind != "tool_search" {
-		return nil, nil, unsupported("tool_choice", "forced tool search without a client-executable tool_search declaration")
-	}
-
 	messages := make([]any, 0, 16)
-	prefixMessages := make([]any, 0, 2)
+	instructionMessages := make([]any, 0, 2)
 	webSearchPolicy := context.webSearchPolicy()
 	if instructions := body["instructions"]; instructions != nil {
 		text := jsonx.String(instructions)
@@ -211,10 +225,10 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			text = strings.TrimSpace(text + "\n\n" + webSearchPolicy)
 		}
 		if text != "" {
-			prefixMessages = append(prefixMessages, map[string]any{"role": "system", "content": text})
+			instructionMessages = append(instructionMessages, map[string]any{"role": "system", "content": text})
 		}
 	} else if webSearchPolicy != "" {
-		prefixMessages = append(prefixMessages, map[string]any{"role": "system", "content": webSearchPolicy})
+		instructionMessages = append(instructionMessages, map[string]any{"role": "system", "content": webSearchPolicy})
 	}
 	input := jsonx.Slice(body["input"])
 	if input == nil {
@@ -401,7 +415,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		switch jsonx.String(item["type"]) {
 		case "reasoning":
 			appendReasoning(reasoningTextFromItem(item))
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "local_shell_call":
 			if !toolGroupOpen() {
 				flushAfterToolGroup()
 			}
@@ -414,7 +428,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 				flushAfterToolGroup()
 			}
 			pendingToolCalls = append(pendingToolCalls, functionCallFromResponseItem(item, context))
-		case "function_call_output", "custom_tool_call_output":
+		case "function_call_output", "custom_tool_call_output", "local_shell_call_output":
 			flushToolCalls()
 			callID := jsonx.String(item["call_id"])
 			if callID == "" {
@@ -471,6 +485,18 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			} else {
 				compactionSummaries = append(compactionSummaries, "Earlier conversation was compacted, but its details are not readable by this provider.")
 			}
+		case "context_compaction":
+			if payload, ok := compactionPayloadFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
+				compactionSummaries = append(compactionSummaries, payload.Summary)
+				for _, message := range payload.Recent {
+					role := strings.TrimSpace(message.Role)
+					text := strings.TrimSpace(message.Text)
+					if (role != "user" && role != "assistant") || text == "" {
+						continue
+					}
+					compactionRecent = append(compactionRecent, CompactionRecentMessage{Role: role, Text: text})
+				}
+			}
 		case "additional_tools":
 			// Responses Lite carries dynamic tool declarations here; they are
 			// not Chat messages and must not be replayed as user text.
@@ -484,6 +510,18 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			// so it replays as a plain user turn.
 			if text := agentMessageText(item); text != "" {
 				queueOrAppend(map[string]any{"role": "user", "content": text})
+			}
+		case "web_search_call":
+			if text := legacyOutputText(item, "web search call"); text != "" {
+				queueOrAppend(map[string]any{"role": "assistant", "content": text})
+			}
+		case "image_generation_call":
+			if text := legacyOutputText(item, "image generation call"); text != "" {
+				queueOrAppend(map[string]any{"role": "assistant", "content": text})
+			}
+		case "other":
+			if text := legacyOutputText(item, "provider history item"); text != "" {
+				queueOrAppend(map[string]any{"role": "assistant", "content": text})
 			}
 		default:
 			if item["role"] != nil || jsonx.String(item["type"]) == "message" || item["type"] == nil {
@@ -502,20 +540,32 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	} else {
 		pendingReasoning = ""
 	}
+	compactionPrefix := make([]any, 0, len(compactionRecent)+1)
 	if len(compactionSummaries) > 0 {
-		prefixMessages = append(prefixMessages, map[string]any{
+		compactionPrefix = append(compactionPrefix, map[string]any{
 			"role":    "system",
 			"content": "Earlier conversation was compacted. Summary:\n" + strings.Join(compactionSummaries, "\n\n"),
 		})
 	}
 	// Replay the verbatim tail right after the summary so the next model sees
 	// the exact recent turns before the new user message.
-	for _, message := range compactionRecent {
-		prefixMessages = append(prefixMessages, map[string]any{
+	for _, message := range filterCompactionRecent(compactionRecent, messages) {
+		compactionPrefix = append(compactionPrefix, map[string]any{
 			"role": message.Role, "content": message.Text,
 		})
 	}
-	messages = append(prefixMessages, messages...)
+	if len(instructionMessages) > 0 || len(compactionPrefix) > 0 {
+		leading := 0
+		for leading < len(messages) && jsonx.String(jsonx.Map(messages[leading])["role"]) == "system" {
+			leading++
+		}
+		merged := make([]any, 0, len(instructionMessages)+len(messages)+len(compactionPrefix))
+		merged = append(merged, instructionMessages...)
+		merged = append(merged, messages[:leading]...)
+		merged = append(merged, compactionPrefix...)
+		merged = append(merged, messages[leading:]...)
+		messages = merged
+	}
 	if err := validateChatToolHistory(messages); err != nil {
 		return nil, nil, err
 	}
@@ -600,6 +650,73 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	return chat, context, nil
 }
 
+func (context *Context) validateToolChoice() error {
+	choice := context.ResponseToolChoice
+	if text, ok := choice.(string); ok {
+		switch strings.TrimSpace(text) {
+		case "auto", "none", "required":
+			return nil
+		default:
+			return unsupported("tool_choice", "tool choice "+text)
+		}
+	}
+	if choice == nil {
+		return nil
+	}
+	value := jsonx.Map(choice)
+	if value == nil {
+		return unsupported("tool_choice", "tool choice must be a string or object")
+	}
+	switch kind := jsonx.String(value["type"]); kind {
+	case "function", "custom":
+		name := strings.TrimSpace(jsonx.String(value["name"]))
+		if name == "" {
+			return unsupported("tool_choice.name", "forced "+kind+" tool without a name")
+		}
+		namespace := jsonx.String(value["namespace"])
+		if context.originalToChat[originalToolKey(namespace, name)] != "" ||
+			(namespace == "" && context.originalToChat[name] != "") {
+			return nil
+		}
+		if context.webSearchReplaced && clientFunctionWebSearchName(name) {
+			return nil
+		}
+		if context.hasForwardedToolName(context.chatToolName(name, namespace)) {
+			return nil
+		}
+		return unsupported("tool_choice.name", "forced "+kind+" tool "+name+" is not declared")
+	case "tool_search":
+		if context.bindings[toolSearchName].Kind != "tool_search" {
+			return unsupported("tool_choice", "forced tool search without a client-executable tool_search declaration")
+		}
+		return nil
+	case "local_shell":
+		name := strings.TrimSpace(jsonx.String(value["name"]))
+		if name == "" {
+			name = "local_shell"
+		}
+		chatName := context.chatToolName(name, jsonx.String(value["namespace"]))
+		if context.bindings[chatName].Kind != "local_shell" {
+			return unsupported("tool_choice", "forced local shell without a local_shell declaration")
+		}
+		return nil
+	default:
+		if isWebSearchToolType(kind) {
+			return nil
+		}
+		return unsupported("tool_choice.type", "tool choice type "+kind)
+	}
+}
+
+func (context *Context) hasForwardedToolName(name string) bool {
+	for _, raw := range context.chatTools {
+		if jsonx.String(jsonx.Map(jsonx.Map(raw)["function"])["name"]) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func validateChatToolHistory(messages []any) error {
 	awaiting := map[string]struct{}{}
 	missing := func(before string) error {
@@ -667,15 +784,34 @@ func parseArgumentsObject(value string) any {
 }
 
 func customInputFromArguments(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
 	var parsed any
-	if json.Unmarshal([]byte(value), &parsed) == nil {
+	if json.Unmarshal([]byte(trimmed), &parsed) == nil {
 		if object, ok := parsed.(map[string]any); ok {
-			if input := jsonx.String(object[customToolInputKey]); input != "" {
-				return input
+			if input, found := object[customToolInputKey]; found {
+				if text, ok := input.(string); ok {
+					return text
+				}
+				if input == nil {
+					return ""
+				}
+				if raw, err := json.Marshal(input); err == nil {
+					return string(raw)
+				}
+				return ""
+			}
+			if len(object) == 0 {
+				return ""
 			}
 		}
 		if text, ok := parsed.(string); ok {
 			return text
+		}
+		if parsed == nil {
+			return ""
 		}
 	}
 	return value

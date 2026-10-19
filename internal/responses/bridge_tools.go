@@ -48,6 +48,10 @@ func (context *Context) allocateToolName(namespace, name string) string {
 			if namespace == "" {
 				context.originalToChat[name] = candidate
 			}
+			// A provider tool may have registered its short name (for example
+			// exa_search). A real client tool with that name owns the call; do
+			// not let the provider filter swallow it.
+			delete(context.providerTools, candidate)
 			return candidate
 		}
 		suffix := fmt.Sprintf("_%d", index)
@@ -91,8 +95,11 @@ func defaultToolSearchParameters() map[string]any {
 }
 
 func isServerHostedToolType(typeName string) bool {
+	if isWebSearchToolType(typeName) {
+		return true
+	}
 	switch typeName {
-	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "file_search", "code_interpreter",
+	case "file_search", "code_interpreter",
 		"image_generation", "computer", "computer_use", "computer_use_preview", "mcp":
 		return true
 	default:
@@ -147,6 +154,23 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	if tool == nil {
 		return
 	}
+	if jsonx.String(tool["type"]) == "local_shell" {
+		name := strings.TrimSpace(jsonx.String(tool["name"]))
+		if name == "" {
+			name = "local_shell"
+		}
+		if context.alreadyBound(namespace, name) {
+			return
+		}
+		chatName := context.allocateToolName(namespace, name)
+		parameters := tool["parameters"]
+		if parameters == nil {
+			parameters = defaultLocalShellParameters()
+		}
+		context.bindings[chatName] = toolBinding{Kind: "local_shell", Name: name, Namespace: namespace}
+		context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, nil))
+		return
+	}
 	if isWebSearchToolType(jsonx.String(tool["type"])) {
 		context.addProviderWebSearch()
 		return
@@ -158,6 +182,7 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	// With no configured search the client keeps its own tool, and a client
 	// that declares nothing searches not at all — the Codex contract.
 	if isClientFunctionWebSearch(tool) && context.providerToolsAvailable() && context.webSearchTool != "" {
+		context.webSearchReplaced = true
 		context.addProviderWebSearch()
 		return
 	}
@@ -220,6 +245,22 @@ func (context *Context) addResponseTool(value any, namespace string) {
 	}
 	parameters = context.lockToolShell(parameters)
 	context.chatTools = append(context.chatTools, functionTool(chatName, jsonx.String(tool["description"]), parameters, tool["strict"]))
+}
+
+func defaultLocalShellParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type":       map[string]any{"type": "string"},
+			"command":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"timeout_ms": map[string]any{"type": "number"},
+			"env":        map[string]any{"type": "object"},
+			"user":       map[string]any{"type": "string"},
+			"workdir":    map[string]any{"type": "string"},
+		},
+		"required":             []any{"type", "command"},
+		"additionalProperties": true,
+	}
 }
 
 // lockToolShell restricts a forwarded tool schema's "shell" property to the
@@ -325,12 +366,9 @@ func (context *Context) rewriteToolShell(name, arguments string) (string, bool) 
 // isWebSearchToolType reports whether the client declared OpenAI's hosted web
 // search. The other hosted tools (file_search, computer, ...) stay unsupported.
 func isWebSearchToolType(typeName string) bool {
-	switch typeName {
-	case "web_search", "web_search_preview", "web_search_preview_2025_03_11":
-		return true
-	default:
-		return false
-	}
+	typeName = strings.ToLower(strings.TrimSpace(typeName))
+	return typeName == "web_search" || typeName == "web_search_preview" ||
+		strings.HasPrefix(typeName, "web_search_") || strings.HasPrefix(typeName, "web_search_preview_")
 }
 
 // isClientFunctionWebSearch reports whether a client declared its own search
@@ -390,7 +428,10 @@ func (context *Context) addProviderTool(tool string) {
 	context.providerTools[tool] = struct{}{}
 	context.chatTools = append(context.chatTools, map[string]any{"type": tool})
 	if index := strings.LastIndex(tool, ":"); index >= 0 {
-		context.providerTools[tool[index+1:]] = struct{}{}
+		short := tool[index+1:]
+		if _, clientOwned := context.toolNames[short]; !clientOwned {
+			context.providerTools[short] = struct{}{}
+		}
 	}
 }
 
@@ -469,32 +510,32 @@ func (context *Context) webSearchPolicy() string {
 	return GatewaySearchPolicy()
 }
 
-func (context *Context) collectDeclaredInputTools(value any, depth int) {
-	if depth > 16 {
-		return
-	}
-	switch typed := value.(type) {
-	case []any:
-		for _, child := range typed {
-			context.collectDeclaredInputTools(child, depth+1)
+func (context *Context) collectDeclaredInputTools(input any) {
+	// Tool declarations are top-level Responses input items. Do not recurse
+	// into tool output data: a business object with additional_tools or
+	// tool_search_output-like keys must not be able to inject tools.
+	for _, raw := range jsonx.Slice(input) {
+		item := jsonx.Map(raw)
+		if item == nil {
+			continue
 		}
-	case map[string]any:
-		switch jsonx.String(typed["type"]) {
+		var tools []any
+		switch jsonx.String(item["type"]) {
 		case "additional_tools":
-			tools := jsonx.Slice(typed["tools"])
-			if len(context.ResponseTools) == 0 && len(tools) > 0 {
-				context.ResponseTools = tools
-			}
-			for _, tool := range tools {
-				context.addResponseTool(tool, "")
-			}
+			tools = jsonx.Slice(item["tools"])
 		case "tool_search_output":
-			for _, tool := range jsonx.Slice(typed["tools"]) {
-				context.addResponseTool(tool, "")
+			if isHostedToolSearchItem(item) {
+				continue
 			}
+			tools = jsonx.Slice(item["tools"])
+		default:
+			continue
 		}
-		for _, child := range typed {
-			context.collectDeclaredInputTools(child, depth+1)
+		if len(context.ResponseTools) == 0 && len(tools) > 0 {
+			context.ResponseTools = tools
+		}
+		for _, tool := range tools {
+			context.addResponseTool(tool, "")
 		}
 	}
 }

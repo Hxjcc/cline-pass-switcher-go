@@ -99,6 +99,9 @@ func TestResponsesStrictSchemaEndToEnd(t *testing.T) {
 					if !valid && !strings.Contains(w.Body.String(), "upstream_schema_validation_failed") {
 						t.Fatal("stream failure has no schema error code")
 					}
+					if !valid && strings.Contains(w.Body.String(), "image_color") {
+						t.Fatal("invalid generated text leaked into the failed stream")
+					}
 				}
 				wantHits := int32(1)
 				if !valid {

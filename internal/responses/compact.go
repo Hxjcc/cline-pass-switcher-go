@@ -121,21 +121,42 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	messages := jsonx.Slice(chat["messages"])
 	leading := 0
 	for leading < len(messages) && jsonx.Map(messages[leading])["role"] == "system" {
+		// A previous compaction summary is source history, not a new system
+		// instruction. Move it into the history to be summarized again instead
+		// of keeping it outside and adding another summary beside it.
+		if strings.HasPrefix(jsonx.String(jsonx.Map(messages[leading])["content"]), "Earlier conversation was compacted. Summary:") {
+			break
+		}
 		leading++
 	}
 	// Keep the newest turns verbatim and summarize only what came before them:
 	// duplicating the same turns in both places would waste context and confuse
 	// the next model.
-	tail := selectCompactionTail(messages[leading:], options.RecentCompactionTokens)
-	context.compactionRecent = tail
 	history := messages[leading:]
-	if len(tail) > 0 && len(tail) < len(history) {
-		history = history[:len(history)-len(tail)]
+	tail, cut := selectCompactionTailWithCut(history, options.RecentCompactionTokens)
+	tailSelected := len(tail) > 0 && cut > 0
+	if cut < 0 || cut > len(history) {
+		cut = len(history)
+	}
+	summaryEnd := cut
+	if cut <= 0 {
+		// The tail covered the whole conversation. Keep it for exact replay and
+		// degraded fallback, but summarize the full history so a short session
+		// does not produce an empty or misleading summary.
+		summaryEnd = len(history)
+	}
+	context.compactionRecent = tail
+
+	summaryInstructions := compactionInstructions
+	if tailSelected {
+		if transcript := compactionToolTranscript(history); transcript != "" {
+			summaryInstructions += "\n\nTool activity transcript (use it for Work State; exact excerpts):\n" + transcript
+		}
 	}
 	prepared := make([]any, 0, len(messages)+2)
 	prepared = append(prepared, messages[:leading]...)
-	prepared = append(prepared, map[string]any{"role": "system", "content": compactionInstructions})
-	prepared = append(prepared, history...)
+	prepared = append(prepared, map[string]any{"role": "system", "content": summaryInstructions})
+	prepared = append(prepared, history[:summaryEnd]...)
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
 	// Compaction inherits the session's maximum reasoning by default: a capped
@@ -165,51 +186,266 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	return chat, context, nil
 }
 
-// selectCompactionTail walks the converted messages from the end and keeps the
-// newest user/assistant text until the estimated token budget runs out. Tool
-// results, reasoning and images are skipped: they are the bulkiest items and a
-// retained tool result without its call would be rejected on replay.
-func selectCompactionTail(messages []any, budgetTokens int) []CompactionRecentMessage {
+// compactionGroup keeps an assistant tool call together with its tool results
+// so the tail boundary never splits a tool-call group. The replay form is text:
+// a tool result replayed as a bare Chat tool message would be rejected when the
+// matching call is not part of the same request.
+type compactionGroup struct {
+	start    int
+	messages []CompactionRecentMessage
+}
+
+func buildCompactionGroups(messages []any) []compactionGroup {
+	groups := make([]compactionGroup, 0, len(messages))
+	for index := 0; index < len(messages); {
+		message := jsonx.Map(messages[index])
+		if message == nil {
+			index++
+			continue
+		}
+		role := jsonx.String(message["role"])
+		if role == "assistant" {
+			text := strings.TrimSpace(collectPartText(message["content"]))
+			calls := jsonx.Slice(message["tool_calls"])
+			if len(calls) > 0 {
+				parts := make([]string, 0, len(calls)+1)
+				if text != "" {
+					parts = append(parts, text)
+				}
+				for _, rawCall := range calls {
+					call := jsonx.Map(rawCall)
+					function := jsonx.Map(call["function"])
+					name := jsonx.String(function["name"])
+					if name == "" {
+						name = "unknown"
+					}
+					arguments := jsonx.String(function["arguments"])
+					if arguments == "" {
+						arguments = "{}"
+					}
+					parts = append(parts, "[tool call "+name+"] "+truncateText(arguments, 500))
+				}
+				recent := make([]CompactionRecentMessage, 0, 1)
+				if len(parts) > 0 {
+					recent = append(recent, CompactionRecentMessage{Role: "assistant", Text: strings.Join(parts, "\n")})
+				}
+				next := index + 1
+				for next < len(messages) {
+					tool := jsonx.Map(messages[next])
+					if jsonx.String(tool["role"]) != "tool" {
+						break
+					}
+					callID := strings.TrimSpace(jsonx.String(tool["tool_call_id"]))
+					toolText := strings.TrimSpace(collectPartText(tool["content"]))
+					if toolText == "" {
+						toolText = "(no output)"
+					}
+					label := "[tool result"
+					if callID != "" {
+						label += " " + callID
+					}
+					label += "]\n"
+					recent = append(recent, CompactionRecentMessage{
+						Role: "user", Text: label + truncateText(toolText, maxCompactionRecentMessageRunes),
+					})
+					next++
+				}
+				if len(recent) > 0 {
+					groups = append(groups, compactionGroup{start: index, messages: recent})
+				}
+				index = next
+				continue
+			}
+			if text != "" {
+				groups = append(groups, compactionGroup{
+					start: index, messages: []CompactionRecentMessage{{Role: "assistant", Text: truncateText(text, maxCompactionRecentMessageRunes)}},
+				})
+			}
+			index++
+			continue
+		}
+		if role == "user" {
+			if text := strings.TrimSpace(collectPartText(message["content"])); text != "" {
+				groups = append(groups, compactionGroup{
+					start: index, messages: []CompactionRecentMessage{{Role: "user", Text: truncateText(text, maxCompactionRecentMessageRunes)}},
+				})
+			}
+			index++
+			continue
+		}
+		if role == "tool" {
+			callID := strings.TrimSpace(jsonx.String(message["tool_call_id"]))
+			toolText := strings.TrimSpace(collectPartText(message["content"]))
+			if toolText == "" {
+				toolText = "(no output)"
+			}
+			label := "[tool result"
+			if callID != "" {
+				label += " " + callID
+			}
+			label += "]\n"
+			groups = append(groups, compactionGroup{
+				start: index,
+				messages: []CompactionRecentMessage{{
+					Role: "user", Text: label + truncateText(toolText, maxCompactionRecentMessageRunes),
+				}},
+			})
+		}
+		index++
+	}
+	return groups
+}
+
+func compactionGroupUsage(group compactionGroup) (tokens, runes int) {
+	for _, message := range group.messages {
+		tokens += estimateCompactionTokens(message.Text)
+		runes += len([]rune(message.Text))
+	}
+	return tokens, runes
+}
+
+func selectCompactionTailWithCut(messages []any, budgetTokens int) ([]CompactionRecentMessage, int) {
 	if budgetTokens <= 0 || len(messages) == 0 {
+		return nil, len(messages)
+	}
+	groups := buildCompactionGroups(messages)
+	if len(groups) == 0 {
+		return nil, len(messages)
+	}
+	selected := make([]compactionGroup, 0, len(groups))
+	tokens, runes := 0, 0
+	for index := len(groups) - 1; index >= 0; index-- {
+		group := groups[index]
+		groupTokens, groupRunes := compactionGroupUsage(group)
+		if len(selected) > 0 && (tokens+groupTokens > budgetTokens || runes+groupRunes > maxCompactionRecentTotalRunes) {
+			break
+		}
+		if len(selected) == 0 && groupRunes > maxCompactionRecentTotalRunes {
+			break
+		}
+		selected = append(selected, group)
+		tokens += groupTokens
+		runes += groupRunes
+	}
+	if len(selected) == 0 {
+		return nil, len(messages)
+	}
+	slices.Reverse(selected)
+	// Keep the oldest-first order and, when there is more than one group,
+	// start at a user turn so replay never begins with an answer to a dropped
+	// question. A single assistant answer is kept because it may be the only
+	// final output of the compacted turn.
+	for len(selected) > 1 && selected[0].messages[0].Role != "user" && !compactionGroupHasToolResult(selected[0]) {
+		selected = selected[1:]
+	}
+	recent := make([]CompactionRecentMessage, 0, len(messages))
+	for _, group := range selected {
+		recent = append(recent, group.messages...)
+	}
+	return recent, selected[0].start
+}
+
+func compactionGroupHasToolResult(group compactionGroup) bool {
+	for _, message := range group.messages {
+		if message.Role == "user" && strings.HasPrefix(strings.TrimSpace(message.Text), "[tool result") {
+			return true
+		}
+	}
+	return false
+}
+
+// selectCompactionTail is the compatibility wrapper used by tests and callers
+// that only need the replay text.
+func selectCompactionTail(messages []any, budgetTokens int) []CompactionRecentMessage {
+	tail, _ := selectCompactionTailWithCut(messages, budgetTokens)
+	return tail
+}
+
+// compactionToolTranscript gives the summarizer a compact, exact view of tool
+// calls and results. Those messages may be excluded from the summary prompt
+// because they belong to the verbatim tail; without this transcript a summary
+// could claim that a command was never executed.
+func compactionToolTranscript(messages []any) string {
+	const (
+		maxLineRunes  = 600
+		maxTotalRunes = 6000
+	)
+	lines := make([]string, 0, 8)
+	total := 0
+	for _, raw := range messages {
+		message := jsonx.Map(raw)
+		if message == nil {
+			continue
+		}
+		switch jsonx.String(message["role"]) {
+		case "assistant":
+			for _, rawCall := range jsonx.Slice(message["tool_calls"]) {
+				call := jsonx.Map(rawCall)
+				function := jsonx.Map(call["function"])
+				name := jsonx.String(function["name"])
+				if name == "" {
+					name = "unknown"
+				}
+				arguments := jsonx.String(function["arguments"])
+				if arguments == "" {
+					arguments = "{}"
+				}
+				line := "- assistant called " + name + " with arguments " + truncateText(arguments, maxLineRunes)
+				if total+len([]rune(line)) > maxTotalRunes {
+					return strings.Join(lines, "\n")
+				}
+				lines = append(lines, line)
+				total += len([]rune(line))
+			}
+		case "tool":
+			callID := strings.TrimSpace(jsonx.String(message["tool_call_id"]))
+			text := strings.TrimSpace(collectPartText(message["content"]))
+			if text == "" {
+				text = "(no output)"
+			}
+			label := "- tool result"
+			if callID != "" {
+				label += " (" + callID + ")"
+			}
+			line := label + ": " + truncateText(text, maxLineRunes)
+			if total+len([]rune(line)) > maxTotalRunes {
+				return strings.Join(lines, "\n")
+			}
+			lines = append(lines, line)
+			total += len([]rune(line))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// filterCompactionRecent drops recent text that is already present in the
+// current request. Codex replays retained user messages alongside a compaction
+// item, so without this filter environment and user messages would appear two
+// or three times in the next model call.
+func filterCompactionRecent(recent []CompactionRecentMessage, messages []any) []CompactionRecentMessage {
+	if len(recent) == 0 {
 		return nil
 	}
-	selected := make([]CompactionRecentMessage, 0, 4)
-	tokens, runes := 0, 0
-	for index := len(messages) - 1; index >= 0; index-- {
-		message := jsonx.Map(messages[index])
-		role := jsonx.String(message["role"])
-		if role != "user" && role != "assistant" {
+	current := make(map[string]struct{}, len(messages))
+	for _, raw := range messages {
+		message := jsonx.Map(raw)
+		if message == nil {
 			continue
 		}
 		text := strings.TrimSpace(collectPartText(message["content"]))
 		if text == "" {
 			continue
 		}
-		text = truncateText(text, maxCompactionRecentMessageRunes)
-		estimate := estimateCompactionTokens(text)
-		if len(selected) > 0 && tokens+estimate > budgetTokens {
-			break
+		current[jsonx.String(message["role"])+"\x00"+text] = struct{}{}
+	}
+	filtered := make([]CompactionRecentMessage, 0, len(recent))
+	for _, message := range recent {
+		if _, found := current[message.Role+"\x00"+strings.TrimSpace(message.Text)]; found {
+			continue
 		}
-		if runes+len([]rune(text)) > maxCompactionRecentTotalRunes {
-			break
-		}
-		selected = append(selected, CompactionRecentMessage{Role: role, Text: text})
-		tokens += estimate
-		runes += len([]rune(text))
+		filtered = append(filtered, message)
 	}
-	if len(selected) == 0 {
-		return nil
-	}
-	// Keep the oldest-first order and start at a user turn so replay never
-	// begins with an answer to a question that was dropped.
-	slices.Reverse(selected)
-	for len(selected) > 0 && selected[0].Role != "user" {
-		selected = selected[1:]
-	}
-	if len(selected) == 0 {
-		return nil
-	}
-	return selected
+	return filtered
 }
 
 // estimateCompactionTokens approximates the tokenizer closely enough to bound
@@ -228,8 +464,8 @@ func estimateCompactionTokens(text string) int {
 
 // compactionReasoningEffort resolves the level compaction runs at. The
 // configured preference wins when the model advertises it; "auto" (or an
-// unknown level) falls back to the closest to high, and only a model without a
-// real thinking level ends up at "none".
+// unknown level) falls back to the strongest advertised level, and only a
+// model without a real thinking level ends up at "none".
 func compactionReasoningEffort(efforts []string, configured string) string {
 	configured = strings.ToLower(strings.TrimSpace(configured))
 	if configured != "" && configured != "auto" {
@@ -325,8 +561,12 @@ func highestReasoningEffort(efforts []string) string {
 // summary could be produced: the client still receives a valid compaction
 // object, so the session keeps moving, at the cost of the older context.
 func DegradedCompactionResponse(context *Context, reason, partial string) map[string]any {
-	output := append([]any(nil), context.compactionUsers...)
-	output = append(output, degradedCompactionItem(context, reason, partial))
+	users := context.compactionUsers
+	summaryContext := *context
+	summaryContext.compactionUsers = nil
+	summaryContext.compactionRecent = filterCompactionRecent(context.compactionRecent, users)
+	output := append([]any(nil), users...)
+	output = append(output, degradedCompactionItem(&summaryContext, reason, partial))
 	return map[string]any{
 		"id": newID("resp"), "object": "response.compaction", "created_at": time.Now().Unix(),
 		"output": output, "usage": nil,
@@ -555,10 +795,11 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 		return nil, err
 	}
 	output := append([]any(nil), context.compactionUsers...)
+	recent := filterCompactionRecent(context.compactionRecent, context.compactionUsers)
 	output = append(output, map[string]any{
 		"id":                newID("cmp"),
 		"type":              "compaction",
-		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: recent}),
 	})
 	return map[string]any{
 		"id": response["id"], "object": "response.compaction", "created_at": response["created_at"],

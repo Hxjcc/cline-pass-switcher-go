@@ -704,6 +704,58 @@ func TestStreamAdapterMarksContentFilterIncomplete(t *testing.T) {
 	if jsonx.Map(response["incomplete_details"])["reason"] != "content_filter" {
 		t.Fatalf("unexpected incomplete details: %#v", response)
 	}
+	item := jsonx.Map(jsonx.Slice(response["output"])[0])
+	if item["status"] != "incomplete" {
+		t.Fatalf("incomplete message item kept status %#v", item["status"])
+	}
+}
+
+func TestStreamAdapterPreservesLeadingWhitespace(t *testing.T) {
+	_, context, err := ToChat(map[string]any{"model": "test", "input": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewStreamAdapter(context)
+	events := adapter.Feed([]byte(
+		"data: {\"choices\":[{\"delta\":{\"content\":\"    \"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{\"content\":\"code\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+	))
+	response := jsonx.Map(events[len(events)-1].Data["response"])
+	if got := textFromParts(jsonx.Map(jsonx.Slice(response["output"])[0])["content"]); got != "    code" {
+		t.Fatalf("leading whitespace was lost: %q", got)
+	}
+}
+
+func TestStreamAdapterKeepsPartialItemOnReadError(t *testing.T) {
+	_, context, err := ToChat(map[string]any{"model": "test", "input": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewStreamAdapter(context)
+	events := adapter.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+	events = append(events, adapter.Finish(errors.New("connection reset"))...)
+	last := events[len(events)-1]
+	if last.Type != "response.failed" {
+		t.Fatalf("read error did not fail the response: %#v", last)
+	}
+	response := jsonx.Map(last.Data["response"])
+	item := jsonx.Map(jsonx.Slice(response["output"])[0])
+	if item["status"] != "incomplete" || responseOutputText(response) != "partial" {
+		t.Fatalf("partial output was not retained: %#v", response)
+	}
+}
+
+func TestResponseBaseCarriesOptionalRequestFields(t *testing.T) {
+	context := &Context{
+		Model: "test", Truncation: "auto", ServiceTier: "flex",
+		PromptCacheKey: "cache-key", SafetyIdentifier: "safe-user", MaxToolCalls: 3,
+	}
+	response := context.responseBase("resp_1", 1, "test", "completed", []any{}, nil, nil, "")
+	if response["truncation"] != "auto" || response["service_tier"] != "flex" ||
+		response["prompt_cache_key"] != "cache-key" || response["safety_identifier"] != "safe-user" ||
+		response["max_tool_calls"] != 3 || response["background"] != false || response["completed_at"] == nil {
+		t.Fatalf("optional response fields missing: %#v", response)
+	}
 }
 
 func TestStreamAdapterFailsUnknownFinishReason(t *testing.T) {
@@ -902,6 +954,306 @@ func TestToChatRejectsIncompleteToolHistory(t *testing.T) {
 func TestCustomInputFromArgumentsAcceptsJSONString(t *testing.T) {
 	if got := customInputFromArguments(`"ls -la"`); got != "ls -la" {
 		t.Fatalf("custom tool JSON string was not unwrapped: %q", got)
+	}
+}
+
+func TestCustomInputFromArgumentsNormalizesEmptyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty object", input: `{}`, want: ""},
+		{name: "empty input", input: `{"input":""}`, want: ""},
+		{name: "null", input: `null`, want: ""},
+		{name: "missing input", input: `{"other":1}`, want: `{"other":1}`},
+		{name: "numeric input", input: `{"input":0}`, want: "0"},
+		{name: "object input", input: `{"input":"next"}`, want: "next"},
+		{name: "json string", input: `"next"`, want: "next"},
+		{name: "raw text", input: `next`, want: "next"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := customInputFromArguments(tc.input); got != tc.want {
+				t.Fatalf("custom input %s = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToChatMapsForcedToolSearchWithoutName(t *testing.T) {
+	body := map[string]any{
+		"model":       "test",
+		"input":       "hi",
+		"tools":       []any{map[string]any{"type": "tool_search", "execution": "client"}},
+		"tool_choice": map[string]any{"type": "tool_search"},
+	}
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice := jsonx.Map(chat["tool_choice"])
+	if choice["type"] != "function" || jsonx.Map(choice["function"])["name"] != toolSearchName {
+		t.Fatalf("forced tool_search lost its choice: %#v", chat["tool_choice"])
+	}
+}
+
+func TestToChatMapsForcedFunctionWebSearchToRequired(t *testing.T) {
+	body := map[string]any{
+		"model": "test",
+		"input": "hi",
+		"tools": []any{map[string]any{
+			"type": "function", "name": "web_search",
+			"parameters": map[string]any{"type": "object"},
+		}},
+		"tool_choice": map[string]any{"type": "function", "name": "web_search"},
+	}
+	chat, _, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat["tool_choice"] != "required" {
+		t.Fatalf("replaced web_search function choice = %#v, want required", chat["tool_choice"])
+	}
+	tools := jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
+		t.Fatalf("web_search was not replaced by the provider tool: %#v", chat["tools"])
+	}
+}
+
+func TestToChatRejectsForcedFunctionWithoutName(t *testing.T) {
+	_, _, err := ToChat(map[string]any{
+		"model": "test", "input": "hi",
+		"tools":       []any{map[string]any{"type": "function", "name": "exec"}},
+		"tool_choice": map[string]any{"type": "function"},
+	})
+	var unsupported *RequestError
+	if !errors.As(err, &unsupported) || unsupported.Param != "tool_choice.name" {
+		t.Fatalf("missing forced tool name error: %v", err)
+	}
+}
+
+func TestToChatRejectsUndeclaredForcedFunction(t *testing.T) {
+	_, _, err := ToChat(map[string]any{
+		"model": "test", "input": "hi",
+		"tools":       []any{map[string]any{"type": "function", "name": "exec"}},
+		"tool_choice": map[string]any{"type": "function", "name": "missing"},
+	})
+	var unsupported *RequestError
+	if !errors.As(err, &unsupported) || unsupported.Param != "tool_choice.name" {
+		t.Fatalf("undeclared forced tool error: %v", err)
+	}
+}
+
+func TestToChatRejectsUnknownToolChoiceString(t *testing.T) {
+	_, _, err := ToChat(map[string]any{
+		"model": "test", "input": "hi",
+		"tools":       []any{map[string]any{"type": "function", "name": "exec"}},
+		"tool_choice": "sometimes",
+	})
+	var unsupported *RequestError
+	if !errors.As(err, &unsupported) || unsupported.Param != "tool_choice" {
+		t.Fatalf("unknown tool_choice error: %v", err)
+	}
+}
+
+func TestToChatNormalizesHistoryArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args any
+		want string
+	}{
+		{name: "null", args: "null", want: "{}"},
+		{name: "array", args: "[]", want: "{}"},
+		{name: "scalar", args: "42", want: "{}"},
+		{name: "object", args: map[string]any{"cmd": "echo hi"}, want: `{"cmd":"echo hi"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chat, _, err := ToChat(map[string]any{
+				"model": "test",
+				"input": []any{
+					map[string]any{"type": "function_call", "name": "exec", "call_id": "call1", "arguments": tc.args},
+					map[string]any{"type": "function_call_output", "call_id": "call1", "output": "done"},
+				},
+				"tools": []any{map[string]any{"type": "function", "name": "exec"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := jsonx.Map(jsonx.Slice(jsonx.Map(jsonx.Slice(chat["messages"])[0])["tool_calls"])[0])
+			if got := jsonx.String(jsonx.Map(call["function"])["arguments"]); got != tc.want {
+				t.Fatalf("history arguments = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProviderToolShortNameDoesNotSwallowClientTool(t *testing.T) {
+	body := map[string]any{
+		"model": "test", "input": "hi",
+		"tools": []any{
+			map[string]any{"type": "web_search"},
+			map[string]any{"type": "function", "name": "exa_search", "parameters": map[string]any{"type": "object"}},
+		},
+	}
+	chat, context, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, raw := range jsonx.Slice(chat["tools"]) {
+		if jsonx.String(jsonx.Map(jsonx.Map(raw)["function"])["name"]) == "exa_search" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("client exa_search tool was lost: %#v", chat["tools"])
+	}
+	events, err := EventsFromChat(map[string]any{"choices": []any{map[string]any{
+		"message": map[string]any{"tool_calls": []any{map[string]any{
+			"id": "call1", "function": map[string]any{"name": "exa_search", "arguments": "{}"},
+		}}},
+		"finish_reason": "tool_calls",
+	}}}, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := jsonx.Map(events[len(events)-1].Data["response"])
+	item := jsonx.Map(jsonx.Slice(response["output"])[0])
+	if item["type"] != "function_call" || item["name"] != "exa_search" {
+		t.Fatalf("client tool call was filtered: %#v", item)
+	}
+}
+
+func TestToChatSkipsHostedToolSearchOutputTools(t *testing.T) {
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "hi"},
+			map[string]any{
+				"type": "tool_search_output", "execution": "server", "call_id": nil,
+				"tools": []any{
+					map[string]any{"type": "function", "name": "must_not_leak"},
+					map[string]any{"type": "future_hosted_tool"},
+				},
+			},
+		},
+	}
+	chat, context, err := ToChat(body)
+	if err != nil {
+		t.Fatalf("hosted tool search output must be ignored: %v", err)
+	}
+	if tools := jsonx.Slice(chat["tools"]); len(tools) != 0 {
+		t.Fatalf("hosted search output leaked tools: %#v", tools)
+	}
+	if len(context.chatTools) != 0 {
+		t.Fatalf("hosted search output leaked context tools: %#v", context.chatTools)
+	}
+}
+
+func TestToChatDoesNotInjectToolsFromToolOutputData(t *testing.T) {
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "function_call", "name": "exec", "call_id": "call1", "arguments": "{}"},
+			map[string]any{
+				"type": "function_call_output", "call_id": "call1",
+				"output": map[string]any{
+					"type":  "additional_tools",
+					"tools": []any{map[string]any{"type": "function", "name": "injected"}},
+				},
+			},
+		},
+	}
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools := jsonx.Slice(chat["tools"]); len(tools) != 0 {
+		t.Fatalf("tool output injected a declaration: %#v", tools)
+	}
+}
+
+func TestDatedWebSearchToolTypeIsAccepted(t *testing.T) {
+	body := map[string]any{
+		"model": "test", "input": "hi",
+		"tools": []any{map[string]any{"type": "web_search_2025_08_26"}},
+	}
+	chat, _, err := ToChatWithOptions(body, Options{WebSearchUpstream: "exa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := jsonx.Slice(chat["tools"])
+	if len(tools) != 1 || jsonx.String(jsonx.Map(tools[0])["type"]) != "vercel:exa_search" {
+		t.Fatalf("dated web_search was not mapped: %#v", chat["tools"])
+	}
+}
+
+func TestToChatAcceptsLegacyCodexHistoryItems(t *testing.T) {
+	chat, _, err := ToChat(map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "old thread"},
+			map[string]any{"type": "local_shell_call", "call_id": "call1", "action": map[string]any{
+				"type": "exec", "command": []any{"echo", "hi"},
+			}},
+			map[string]any{"type": "local_shell_call_output", "call_id": "call1", "output": "hi"},
+			map[string]any{"type": "web_search_call", "id": "ws1", "action": map[string]any{"query": "weather"}},
+			map[string]any{"type": "image_generation_call", "id": "ig1", "result": "generated-image"},
+			map[string]any{"type": "other", "id": "other1", "note": "legacy"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(chat["messages"])
+	for _, expected := range []string{"local_shell", "[web search call]", "weather", "[image generation call]", "generated-image", "[provider history item]", "legacy"} {
+		if !strings.Contains(string(raw), expected) {
+			t.Fatalf("legacy item was not preserved as text %q: %s", expected, raw)
+		}
+	}
+	foundTool := false
+	for _, rawMessage := range jsonx.Slice(chat["messages"]) {
+		message := jsonx.Map(rawMessage)
+		if jsonx.String(message["role"]) == "tool" {
+			foundTool = jsonx.String(message["content"]) == "hi" && jsonx.String(message["tool_call_id"]) == "call1"
+		}
+	}
+	if !foundTool {
+		t.Fatalf("legacy local shell did not become a paired tool turn: %s", raw)
+	}
+}
+
+func TestLocalShellToolRoundTrip(t *testing.T) {
+	chat, context, err := ToChat(map[string]any{
+		"model": "test", "input": "run it",
+		"tools":       []any{map[string]any{"type": "local_shell"}},
+		"tool_choice": map[string]any{"type": "local_shell"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	function := chatFunctionByName(t, chat, "local_shell")
+	if function["name"] != "local_shell" {
+		t.Fatalf("local_shell tool was not forwarded: %#v", function)
+	}
+	if choice := jsonx.Map(chat["tool_choice"]); jsonx.String(jsonx.Map(choice["function"])["name"]) != "local_shell" {
+		t.Fatalf("local_shell choice was not forwarded: %#v", chat["tool_choice"])
+	}
+	response, err := FromChat(map[string]any{"choices": []any{map[string]any{
+		"message": map[string]any{"tool_calls": []any{map[string]any{
+			"id": "call1", "function": map[string]any{
+				"name": "local_shell", "arguments": `{"type":"exec","command":["echo","hi"]}`,
+			},
+		}}},
+		"finish_reason": "tool_calls",
+	}}}, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := jsonx.Map(jsonx.Slice(response["output"])[0])
+	action := jsonx.Map(item["action"])
+	if item["type"] != "local_shell_call" || item["call_id"] != "call1" || action["type"] != "exec" {
+		t.Fatalf("local_shell response item was not restored: %#v", item)
 	}
 }
 
@@ -1658,11 +2010,201 @@ func TestCompactionTailHonoursBudgetAndTurnBoundary(t *testing.T) {
 		t.Fatalf("tail ignored its budget or kept tool output: %s", raw)
 	}
 	full := selectCompactionTail(messages, 8000)
-	if len(full) != 4 {
-		t.Fatalf("a generous budget should keep every user/assistant message: %#v", full)
+	if len(full) != 5 {
+		t.Fatalf("a generous budget should keep every message and the tool result: %#v", full)
+	}
+	if full[2].Role != "user" || !strings.Contains(full[2].Text, "[tool result call_1]") {
+		t.Fatalf("a tool result must stay in the verbatim tail: %#v", full)
 	}
 	if got := selectCompactionTail(messages, 0); got != nil {
 		t.Fatalf("zero disables the verbatim tail: %#v", got)
+	}
+}
+
+func TestCompactionTailKeepsToolGroupsAtomic(t *testing.T) {
+	messages := []any{
+		map[string]any{"role": "user", "content": "old"},
+		map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{
+			map[string]any{"id": "call1", "type": "function", "function": map[string]any{"name": "exec", "arguments": "{}"}},
+		}},
+		map[string]any{"role": "tool", "tool_call_id": "call1", "content": "TOOL-OUTPUT"},
+		map[string]any{"role": "user", "content": "recent question"},
+		map[string]any{"role": "assistant", "content": "recent answer"},
+	}
+	tail, cut := selectCompactionTailWithCut(messages, 12)
+	if cut != 3 || len(tail) == 0 || tail[0].Role != "user" || tail[0].Text != "recent question" {
+		t.Fatalf("tail split inside or after the wrong group: cut=%d tail=%#v", cut, tail)
+	}
+
+	tail, cut = selectCompactionTailWithCut(messages, 21)
+	if cut != 1 {
+		t.Fatalf("tool group cut = %d, want 1", cut)
+	}
+	raw, _ := json.Marshal(tail)
+	for _, expected := range []string{"[tool call exec]", "[tool result call1]", "TOOL-OUTPUT"} {
+		if !strings.Contains(string(raw), expected) {
+			t.Fatalf("tool group tail lost %q: %s", expected, raw)
+		}
+	}
+}
+
+func TestCompactionToolTranscriptIncludesCallsAndResults(t *testing.T) {
+	transcript := compactionToolTranscript([]any{
+		map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{
+			map[string]any{"id": "call1", "type": "function", "function": map[string]any{
+				"name": "exec", "arguments": `{"cmd":"echo hi"}`,
+			}},
+		}},
+		map[string]any{"role": "tool", "tool_call_id": "call1", "content": "hi"},
+	})
+	for _, expected := range []string{"assistant called exec", "tool result (call1)", "hi"} {
+		if !strings.Contains(transcript, expected) {
+			t.Fatalf("transcript missing %q: %s", expected, transcript)
+		}
+	}
+}
+
+func TestToChatDedupesCompactionRecentAndKeepsSystemFirst(t *testing.T) {
+	envelope := encodeCompactionPayload(CompactionPayload{
+		Summary: "## Objective\ncontinue",
+		Recent: []CompactionRecentMessage{
+			{Role: "user", Text: "<environment_context>cwd</environment_context>"},
+			{Role: "assistant", Text: "previous answer"},
+			{Role: "user", Text: "do work"},
+		},
+	})
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "developer", "content": []any{
+				map[string]any{"type": "input_text", "text": "base instructions"},
+			}},
+			map[string]any{"type": "message", "role": "user", "content": []any{
+				map[string]any{"type": "input_text", "text": "<environment_context>cwd</environment_context>"},
+			}},
+			map[string]any{"type": "message", "role": "user", "content": []any{
+				map[string]any{"type": "input_text", "text": "do work"},
+			}},
+			map[string]any{"type": "compaction", "encrypted_content": envelope},
+			map[string]any{"type": "message", "role": "user", "content": []any{
+				map[string]any{"type": "input_text", "text": "new input"},
+			}},
+		},
+	}
+	chat, _, err := ToChat(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	seenUser := false
+	for _, raw := range messages {
+		message := jsonx.Map(raw)
+		if jsonx.String(message["role"]) == "system" && seenUser {
+			t.Fatalf("system message moved after user content: %#v", messages)
+		}
+		if jsonx.String(message["role"]) == "user" {
+			seenUser = true
+		}
+	}
+	envCount, workCount := 0, 0
+	for _, raw := range messages {
+		switch jsonx.String(jsonx.Map(raw)["content"]) {
+		case "<environment_context>cwd</environment_context>":
+			envCount++
+		case "do work":
+			workCount++
+		}
+	}
+	if envCount != 1 || workCount != 1 {
+		t.Fatalf("compaction recent was not deduplicated: env=%d work=%d", envCount, workCount)
+	}
+	raw, _ := json.Marshal(messages)
+	if !strings.Contains(string(raw), "previous answer") {
+		t.Fatalf("recent assistant text was dropped: %s", raw)
+	}
+}
+
+func TestCompactionChatShortHistoryKeepsToolsForSummary(t *testing.T) {
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "run echo"},
+			map[string]any{"type": "function_call", "name": "exec", "call_id": "call1", "arguments": `{"cmd":"echo hi"}`},
+			map[string]any{"type": "function_call_output", "call_id": "call1", "output": "hi"},
+		},
+	}
+	chat, context, err := ToCompactionChatWithOptions(body, Options{RecentCompactionTokens: 16000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(chat["messages"])
+	for _, expected := range []string{"call1", "echo hi", `"role":"tool"`, "hi"} {
+		if !strings.Contains(string(raw), expected) {
+			t.Fatalf("short compaction prompt lost tool history %q: %s", expected, raw)
+		}
+	}
+	if len(context.compactionRecent) == 0 {
+		t.Fatal("short compaction lost its recent fallback tail")
+	}
+}
+
+func TestCompactionChatTreatsPreviousSummaryAsHistory(t *testing.T) {
+	envelope := encodeCompactionPayload(CompactionPayload{Summary: "OLD SUMMARY"})
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "developer", "content": "base instructions"},
+			map[string]any{"type": "message", "role": "user", "content": "old request"},
+			map[string]any{"type": "compaction", "encrypted_content": envelope},
+			map[string]any{"type": "message", "role": "user", "content": "new request"},
+		},
+	}
+	chat, _, err := ToCompactionChatWithOptions(body, Options{RecentCompactionTokens: 16000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := jsonx.Slice(chat["messages"])
+	if len(messages) < 3 || !strings.HasPrefix(jsonx.String(jsonx.Map(messages[1])["content"]), "Create a concise handoff summary") {
+		t.Fatalf("new summary instructions are not the first history boundary: %#v", messages)
+	}
+	foundOld := false
+	for _, raw := range messages[2:] {
+		content := jsonx.String(jsonx.Map(raw)["content"])
+		if strings.Contains(content, "OLD SUMMARY") {
+			foundOld = true
+		}
+	}
+	if !foundOld {
+		t.Fatalf("previous summary was dropped instead of being summarized again: %#v", messages)
+	}
+}
+
+func TestCompactionResponseDedupesRetainedUsers(t *testing.T) {
+	body := map[string]any{
+		"model": "test",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "old request"},
+			map[string]any{"type": "message", "role": "user", "content": "recent request"},
+		},
+	}
+	_, context, err := ToCompactionChatWithOptions(body, Options{RecentCompactionTokens: 16000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := CompactionResponse(map[string]any{"choices": []any{map[string]any{
+		"message": map[string]any{"content": "summary"}, "finish_reason": "stop",
+	}}}, context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := jsonx.Slice(response["output"])
+	item := jsonx.Map(output[len(output)-1])
+	payload, ok := DecodeCompactionEnvelope(jsonx.String(item["encrypted_content"]))
+	if !ok {
+		t.Fatal("compaction envelope did not decode")
+	}
+	if len(payload.Recent) != 0 {
+		t.Fatalf("retained users duplicated inside the envelope: %#v", payload.Recent)
 	}
 }
 

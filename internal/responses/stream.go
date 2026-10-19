@@ -158,6 +158,7 @@ type StreamState struct {
 	tools             map[int]*toolState
 	lastToolIndex     int
 	droppedTools      int
+	itemStatus        string
 	// rawUsage is the upstream usage object. The gateway tool counters are the
 	// legs it ran inside its own loop; the client-facing usage divides the
 	// summed prompt by those legs plus the final answer.
@@ -176,6 +177,7 @@ func NewStreamState(context *Context) *StreamState {
 		tools:           map[int]*toolState{},
 		lastToolIndex:   -1,
 		gatewayLegIndex: -1,
+		itemStatus:      "completed",
 	}
 }
 
@@ -256,11 +258,6 @@ func (state *StreamState) ensureReasoning() []Event {
 
 func (state *StreamState) pushReasoning(delta string) []Event {
 	if delta == "" {
-		return nil
-	}
-	// Whitespace inside an open item is a paragraph break; whitespace that
-	// would open a new item is noise.
-	if (state.reasoning == nil || state.reasoning.Done) && strings.TrimSpace(delta) == "" {
 		return nil
 	}
 	events := state.ensureReasoning()
@@ -361,9 +358,6 @@ func (state *StreamState) pushRefusal(delta string) []Event {
 
 func (state *StreamState) emitText(delta string) []Event {
 	if delta == "" {
-		return nil
-	}
-	if (state.message == nil || state.message.Done) && strings.TrimSpace(delta) == "" {
 		return nil
 	}
 	events := state.closeReasoning()
@@ -517,8 +511,12 @@ func (state *StreamState) closeMessage() []Event {
 	}
 	events := state.closeMessagePart()
 	state.message.Done = true
+	status := state.itemStatus
+	if status == "" {
+		status = "completed"
+	}
 	item := map[string]any{
-		"id": state.message.ItemID, "type": "message", "status": "completed", "role": "assistant", "content": state.message.Parts,
+		"id": state.message.ItemID, "type": "message", "status": status, "role": "assistant", "content": state.message.Parts,
 	}
 	if len(state.message.Parts) > 0 {
 		state.addOutput(state.message.OutputIndex, item)
@@ -637,10 +635,14 @@ func (state *StreamState) closeTools() []Event {
 				arguments = rewritten
 			}
 		}
+		status := state.itemStatus
+		if status == "" {
+			status = "completed"
+		}
 		base := state.context.responseOutputItemFromTool(map[string]any{
 			"id":       current.CallID,
 			"function": map[string]any{"name": current.ChatName, "arguments": arguments},
-		}, "completed")
+		}, status)
 		base["id"] = current.ItemID
 		switch jsonx.String(base["type"]) {
 		case "custom_tool_call":
@@ -678,22 +680,42 @@ func streamsFunctionArguments(kind string) bool {
 
 func toolArgumentsJSON(value any) string {
 	if text, ok := value.(string); ok {
-		if strings.TrimSpace(text) == "" {
-			return "{}"
+		if canonical, valid := canonicalToolArguments(text); valid {
+			return canonical
 		}
-		return text
+		return "{}"
 	}
 	raw, err := json.Marshal(value)
 	if err != nil || string(raw) == "null" {
 		return "{}"
 	}
-	return string(raw)
+	if canonical, valid := canonicalToolArguments(string(raw)); valid {
+		return canonical
+	}
+	return "{}"
 }
 
 func canonicalToolArguments(value string) (string, bool) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return "{}", true
+	}
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return "", false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return "", false
+	}
+	if decoded == nil {
+		return "{}", true
+	}
+	if _, ok := decoded.(map[string]any); !ok {
+		// Function tool arguments are an object on the wire. null is a
+		// tolerated empty payload; arrays, strings and numbers are not.
+		return "", false
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, []byte(trimmed)); err != nil {
@@ -814,11 +836,16 @@ func (state *StreamState) Fail(message, code string) []Event {
 	return state.failWithDetails(message, code, "upstream_error")
 }
 
+// FailWithDetails is the explicit-error variant used by buffered callers that
+// need to preserve an upstream error type without replaying partial text.
+func (state *StreamState) FailWithDetails(message, code, errorType string) []Event {
+	return state.failWithDetails(message, code, errorType)
+}
+
 func (state *StreamState) failWithDetails(message, code, errorType string) []Event {
 	if state.completed {
 		return nil
 	}
-	state.completed = true
 	if code == "" {
 		code = "upstream_error"
 	}
@@ -829,6 +856,12 @@ func (state *StreamState) failWithDetails(message, code, errorType string) []Eve
 	// OpenAI always opens the lifecycle before reporting failure, even when
 	// the very first upstream chunk is an error.
 	events := state.ensureStarted()
+	state.itemStatus = "incomplete"
+	events = append(events, state.flushInlineThink()...)
+	events = append(events, state.closeReasoning()...)
+	events = append(events, state.closeMessage()...)
+	events = append(events, state.closeTools()...)
+	state.completed = true
 	response := state.baseResponse("failed", responseError, "")
 	return append(events, event("response.failed", map[string]any{"response": response}))
 }
@@ -838,7 +871,26 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 		return nil
 	}
 	if readErr != nil {
-		return state.Fail(readErr.Error(), "stream_error")
+		state.itemStatus = "incomplete"
+		events := state.flushInlineThink()
+		events = append(events, state.closeReasoning()...)
+		events = append(events, state.closeMessage()...)
+		events = append(events, state.closeTools()...)
+		return append(events, state.Fail(readErr.Error(), "stream_error")...)
+	}
+	switch state.finishReason {
+	case "length", "content_filter":
+		state.itemStatus = "incomplete"
+	case "stop", "tool_calls", "function_call":
+		state.itemStatus = "completed"
+	case "":
+		if sawDone {
+			state.itemStatus = "completed"
+		} else {
+			state.itemStatus = "incomplete"
+		}
+	default:
+		state.itemStatus = "incomplete"
 	}
 	events := state.flushInlineThink()
 	events = append(events, state.closeReasoning()...)
@@ -860,7 +912,7 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 			if strings.TrimSpace(textFromParts(entry.item["content"])) != "" {
 				hasMessage = true
 			}
-		case "function_call", "custom_tool_call", "tool_search_call":
+		case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call":
 			hasToolCall = true
 		}
 	}

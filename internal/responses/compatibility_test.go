@@ -124,6 +124,23 @@ func TestUpstreamErrorImmediatelyEndsAdapter(t *testing.T) {
 	}
 }
 
+func TestUpstreamErrorAfterContentKeepsPartialOutput(t *testing.T) {
+	_, context, _ := ToChat(map[string]any{"model": "test", "input": "hi"})
+	adapter := NewStreamAdapter(context)
+	events := adapter.Feed([]byte(
+		"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" +
+			"data: {\"error\":{\"message\":\"overloaded\",\"code\":\"server_error\"}}\n\n",
+	))
+	outcome := OutcomeFromEvents(events)
+	if outcome.Status != "failed" || outcome.Code != "server_error" {
+		t.Fatalf("unexpected outcome: %#v", outcome)
+	}
+	response := jsonx.Map(events[len(events)-1].Data["response"])
+	if responseOutputText(response) != "partial" {
+		t.Fatalf("partial output was dropped: %#v", response)
+	}
+}
+
 func TestCompactionPreservesUsersAndOnlyVisibleSummary(t *testing.T) {
 	users := []any{
 		map[string]any{"role": "user", "content": "Build a page"},

@@ -351,19 +351,19 @@ func functionCallFromResponseItem(item map[string]any, context *Context) map[str
 	name := jsonx.String(item["name"])
 	namespace := jsonx.String(item["namespace"])
 	chatName := context.chatToolName(name, namespace)
-	arguments := jsonx.String(item["arguments"])
+	arguments := historyToolArguments(item["arguments"])
 	if typeName == "custom_tool_call" {
 		argumentsRaw, _ := json.Marshal(map[string]any{customToolInputKey: jsonx.String(item["input"])})
 		arguments = string(argumentsRaw)
+	} else if typeName == "local_shell_call" {
+		name := jsonx.String(item["name"])
+		if name == "" {
+			name = "local_shell"
+		}
+		chatName = context.chatToolName(name, jsonx.String(item["namespace"]))
+		arguments = historyToolArguments(item["action"])
 	} else if typeName == "tool_search_call" {
 		chatName = toolSearchName
-		if arguments == "" {
-			argumentsRaw, _ := json.Marshal(item["arguments"])
-			arguments = string(argumentsRaw)
-		}
-	}
-	if arguments == "" || arguments == "null" {
-		arguments = "{}"
 	}
 	return map[string]any{
 		"id":   callID,
@@ -372,6 +372,30 @@ func functionCallFromResponseItem(item map[string]any, context *Context) map[str
 			"name":      chatName,
 			"arguments": arguments,
 		},
+	}
+}
+
+// historyToolArguments normalizes replayed function arguments to the JSON
+// object shape Chat Completions expects. Input histories from other providers
+// occasionally contain null, arrays or serialized objects.
+func historyToolArguments(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return "{}"
+	case string:
+		if canonical, valid := canonicalToolArguments(typed); valid {
+			return canonical
+		}
+		return "{}"
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return "{}"
+		}
+		if canonical, valid := canonicalToolArguments(string(raw)); valid {
+			return canonical
+		}
+		return "{}"
 	}
 }
 
@@ -444,13 +468,60 @@ func (context *Context) toolChoiceToChat(value any) any {
 		// forced choice becomes "the model must call a tool" upstream.
 		return "required"
 	}
+	if jsonx.String(choice["type"]) == "local_shell" {
+		name := strings.TrimSpace(jsonx.String(choice["name"]))
+		if name == "" {
+			name = "local_shell"
+		}
+		return map[string]any{"type": "function", "function": map[string]any{"name": context.chatToolName(name, jsonx.String(choice["namespace"]))}}
+	}
 	name := jsonx.String(choice["name"])
 	if name == "" {
+		if jsonx.String(choice["type"]) == "tool_search" {
+			return map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": toolSearchName},
+			}
+		}
 		return nil
+	}
+	if jsonx.String(choice["type"]) != "tool_search" && context.webSearchReplaced && clientFunctionWebSearchName(name) {
+		// The original function was replaced by a provider tool, which cannot
+		// be named in a Chat function choice. "required" preserves the
+		// client's intent that this turn must call a tool.
+		return "required"
 	}
 	chatName := context.chatToolName(name, jsonx.String(choice["namespace"]))
 	if jsonx.String(choice["type"]) == "tool_search" {
 		chatName = toolSearchName
 	}
 	return map[string]any{"type": "function", "function": map[string]any{"name": chatName}}
+}
+
+func legacyOutputText(item map[string]any, label string) string {
+	payload := make(map[string]any, len(item))
+	for key, value := range item {
+		switch key {
+		case "type", "id", "call_id", "status", "execution":
+			continue
+		}
+		payload[key] = value
+	}
+	if len(payload) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return "[" + label + "]\n" + truncateText(string(raw), 4000)
+}
+
+func clientFunctionWebSearchName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "web_search", "web_search_preview":
+		return true
+	default:
+		return false
+	}
 }

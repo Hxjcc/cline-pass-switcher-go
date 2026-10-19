@@ -141,7 +141,11 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 			Attempts: traceUpstreams(result.Trace), Trace: result.Trace,
 		})
 		if stream {
-			s.writeBufferedResponsesStream(writer, result, bridgeContext)
+			if strictStructured {
+				writeResponsesFailureStream(writer, bridgeContext, err)
+			} else {
+				s.writeBufferedResponsesStream(writer, result, bridgeContext)
+			}
 			return
 		}
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": conversionErrorBody(err)})
@@ -197,7 +201,7 @@ func (s *Server) repairStructuredOutput(
 			return result, response, nil
 		}
 	}
-	repaired := s.runNonStreamChain(ctx, modelID, responsesbridge.StructuredRepairBody(chatBody, text, schema), modelConfig, s.upstream.NonStreamTimeout())
+	repaired := s.runNonStreamChain(ctx, modelID, responsesbridge.StructuredRepairBody(chatBody, text, schema, s.store.ModelMeta(modelID).ReasoningEfforts), modelConfig, s.upstream.NonStreamTimeout())
 	result.Usage = addUsage(result.Usage, repaired.Usage)
 	result.Trace = append(result.Trace, repaired.Trace...)
 	if repaired.Out == nil || repaired.Status != http.StatusOK {
@@ -259,14 +263,33 @@ func patchChatCompletionText(chat map[string]any, text string) map[string]any {
 
 // writeBufferedResponsesStream replays a buffered upstream turn as the full
 // Responses event sequence for clients that asked for SSE. Strict structured
-// requests take this path so a failed or repaired answer is never streamed
-// partially.
+// requests use this path after a successful validation or repair; failures use
+// writeResponsesFailureStream so invalid text is never replayed.
 func (s *Server) writeBufferedResponsesStream(writer http.ResponseWriter, result chainResult, bridgeContext *responsesbridge.Context) {
 	events, err := responsesbridge.EventsFromChat(result.Out, bridgeContext)
 	if err != nil {
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}})
 		return
 	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+	_ = writeResponseEvents(writer, responsesbridge.NewEventWriter(writer), events)
+}
+
+// writeResponsesFailureStream emits a clean failed lifecycle without replaying
+// the text that failed strict schema validation. The buffered state machine
+// already produced those deltas before validation, so re-running EventsFromChat
+// would leak invalid generated content to the client.
+func writeResponsesFailureStream(writer http.ResponseWriter, bridgeContext *responsesbridge.Context, err error) {
+	details := conversionErrorBody(err)
+	message := jsonx.String(details["message"])
+	if message == "" {
+		message = err.Error()
+	}
+	state := responsesbridge.NewStreamState(bridgeContext)
+	events := state.FailWithDetails(message, jsonx.String(details["code"]), jsonx.String(details["type"]))
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("Connection", "keep-alive")

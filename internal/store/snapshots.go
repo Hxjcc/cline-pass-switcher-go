@@ -364,7 +364,7 @@ func (s *Store) CompactionRecentTokens() int {
 }
 
 // CompactionReasoningEffort is the reasoning level compaction runs at ("auto"
-// picks the level closest to high).
+// picks the strongest advertised level).
 func (s *Store) CompactionReasoningEffort() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

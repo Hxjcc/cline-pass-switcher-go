@@ -239,6 +239,21 @@ func (context *Context) responseOutputItemFromTool(toolCall map[string]any, stat
 			"id": newID("tsc"), "type": "tool_search_call", "status": status,
 			"call_id": callID, "execution": "client", "arguments": parseArgumentsObject(arguments),
 		}
+	case "local_shell":
+		action := parseArgumentsObject(arguments)
+		if action == nil {
+			action = map[string]any{}
+		}
+		if status == "in_progress" {
+			if object := jsonx.Map(action); len(object) == 0 {
+				action = map[string]any{"type": "exec", "command": []any{}}
+			}
+		}
+		item := map[string]any{
+			"id": newID("lsh"), "type": "local_shell_call", "status": status,
+			"call_id": callID, "action": action,
+		}
+		return item
 	default:
 		name := binding.Name
 		if name == "" {
@@ -260,16 +275,31 @@ func (context *Context) responseBase(id string, createdAt int64, modelID, status
 	if incompleteReason != "" {
 		incomplete = map[string]any{"reason": incompleteReason}
 	}
+	var completedAt any
+	if status != "in_progress" {
+		completedAt = time.Now().Unix()
+	}
+	truncation := context.Truncation
+	if truncation == nil {
+		truncation = "disabled"
+	}
+	var promptCacheKey any
+	if context.PromptCacheKey != "" {
+		promptCacheKey = context.PromptCacheKey
+	}
 	return map[string]any{
-		"id": id, "object": "response", "created_at": createdAt, "status": status,
+		"id": id, "object": "response", "created_at": createdAt, "completed_at": completedAt, "status": status,
 		"error": responseError, "incomplete_details": incomplete,
 		"instructions": context.Instructions, "max_output_tokens": context.MaxOutputTokens,
 		"model": firstString(modelID, context.Model), "output": output,
 		"parallel_tool_calls": context.ParallelToolCalls, "previous_response_id": nil,
 		"reasoning": context.Reasoning, "store": false, "temperature": context.Temperature,
 		"text": context.ResponseText, "tool_choice": context.ResponseToolChoice,
-		"tools": context.ResponseTools, "top_p": context.TopP, "truncation": "disabled",
-		"usage": usage, "metadata": context.Metadata,
+		"tools": context.ResponseTools, "top_p": context.TopP,
+		"usage": usage, "metadata": context.Metadata, "background": false,
+		"truncation": truncation, "service_tier": context.ServiceTier,
+		"prompt_cache_key": promptCacheKey, "safety_identifier": context.SafetyIdentifier,
+		"max_tool_calls": context.MaxToolCalls,
 	}
 }
 
@@ -335,13 +365,20 @@ func EventsFromChat(chat map[string]any, context *Context) ([]Event, error) {
 		return nil, errors.New("upstream returned no choices")
 	}
 	choice := jsonx.Map(choices[0])
+	syntheticChoice := map[string]any{
+		"index":         0,
+		"delta":         deltaFromChatMessage(jsonx.Map(choice["message"])),
+		"finish_reason": choice["finish_reason"],
+	}
+	if choice["provider_metadata"] != nil {
+		syntheticChoice["provider_metadata"] = choice["provider_metadata"]
+	}
 	chunk := map[string]any{
 		"id": chat["id"], "model": chat["model"], "created": chat["created"], "usage": chat["usage"],
-		"choices": []any{map[string]any{
-			"index":         0,
-			"delta":         deltaFromChatMessage(jsonx.Map(choice["message"])),
-			"finish_reason": choice["finish_reason"],
-		}},
+		"choices": []any{syntheticChoice},
+	}
+	if chat["provider_metadata"] != nil {
+		chunk["provider_metadata"] = chat["provider_metadata"]
 	}
 	if message := jsonx.Map(choice["message"]); message["provider_metadata"] != nil {
 		chunk["provider_metadata"] = message["provider_metadata"]

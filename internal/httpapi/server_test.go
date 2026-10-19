@@ -553,9 +553,10 @@ func TestResponsesCompactEndpointWrapsChatSummary(t *testing.T) {
 	if !ok || payload2.Summary != "condensed history" {
 		t.Fatalf("compaction envelope did not round-trip: %q %#v", envelope, payload2)
 	}
-	// The verbatim tail rides inside the same item, not as extra output items.
-	if len(payload2.Recent) != 1 || payload2.Recent[0].Role != "user" || !strings.Contains(payload2.Recent[0].Text, "summarize the conversation") {
-		t.Fatalf("recent tail was not embedded in the item: %#v", payload2.Recent)
+	// The user turn is already retained verbatim in output[0]; the envelope
+	// must not duplicate it in the recent tail.
+	if len(payload2.Recent) != 0 {
+		t.Fatalf("retained user turn was duplicated in recent: %#v", payload2.Recent)
 	}
 }
 

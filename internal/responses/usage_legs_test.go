@@ -148,6 +148,34 @@ func TestResponsesUsageSplitsCountedGatewayToolCalls(t *testing.T) {
 	}
 }
 
+func TestResponsesUsageUsesRootProviderMetadata(t *testing.T) {
+	chat := map[string]any{
+		"id": "chatcmpl-root-meta",
+		"provider_metadata": map[string]any{
+			"gateway": map[string]any{
+				"gatewayToolCalls": map[string]any{"exa_search": float64(1)},
+			},
+		},
+		"choices": []any{map[string]any{
+			"finish_reason": "stop",
+			"message":       map[string]any{"role": "assistant", "content": "ok"},
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":         100,
+			"completion_tokens":     4,
+			"prompt_tokens_details": map[string]any{"cached_tokens": 80},
+		},
+	}
+	response, err := FromChat(chat, &Context{Model: "cline-pass/test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := jsonx.Map(response["usage"])
+	if usage["input_tokens"] != int64(50) || jsonx.Map(usage["input_tokens_details"])["cached_tokens"] != int64(40) {
+		t.Fatalf("root provider metadata did not split usage legs: %#v", usage)
+	}
+}
+
 // Counts are cumulative and per tool, so legs from different chunks and
 // different tools must add up instead of replacing each other.
 func TestStreamUsageAddsLegsPerToolAcrossChunks(t *testing.T) {

@@ -29,6 +29,7 @@ func (context *Context) StructuredSchema() any {
 // the caller still validates the wrapped value against the schema.
 func WrapPlainTextForSchema(text string, schema any) (string, bool) {
 	trimmed := strings.TrimSpace(text)
+	trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "\uFEFF"))
 	if trimmed == "" || looksLikeJSONAttempt(trimmed) {
 		return "", false
 	}
@@ -69,7 +70,7 @@ func WrapPlainTextForSchema(text string, schema any) (string, bool) {
 
 func looksLikeJSONAttempt(text string) bool {
 	switch text[0] {
-	case '{', '[', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n':
+	case '{', '[', '"', '`', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n':
 		return true
 	}
 	return false
@@ -78,10 +79,11 @@ func looksLikeJSONAttempt(text string) bool {
 // StructuredRepairBody builds the one-shot reformatting request: the failed
 // text and the schema only, without the original conversation. The task is
 // reformatting rather than reasoning, so it runs at low effort.
-func StructuredRepairBody(chatBody map[string]any, text string, schema any) map[string]any {
+func StructuredRepairBody(chatBody map[string]any, text string, schema any, efforts []string) map[string]any {
 	const maxText = 8000
-	if len(text) > maxText {
-		text = text[:maxText] + "..."
+	text = stripMarkdownFence(text)
+	if len([]rune(text)) > maxText {
+		text = string([]rune(text)[:maxText]) + "..."
 	}
 	rawSchema, err := json.Marshal(schema)
 	if err != nil {
@@ -92,13 +94,35 @@ func StructuredRepairBody(chatBody map[string]any, text string, schema any) map[
 		"Output only the JSON value, with no explanation and no Markdown code fences.\n\nJSON Schema:\n" +
 		string(rawSchema) + "\n\nContent to rewrite:\n" + text
 	body := map[string]any{
-		"model":            chatBody["model"],
-		"stream":           false,
-		"messages":         []any{map[string]any{"role": "user", "content": prompt}},
-		"reasoning_effort": "low",
+		"model":    chatBody["model"],
+		"stream":   false,
+		"messages": []any{map[string]any{"role": "user", "content": prompt}},
+	}
+	effort := "low"
+	if len(efforts) > 0 {
+		effort = mapReasoningEffort("low", efforts)
+	}
+	if effort != "" {
+		body["reasoning_effort"] = effort
 	}
 	if format := chatBody["response_format"]; format != nil {
 		body["response_format"] = format
 	}
 	return body
+}
+
+func stripMarkdownFence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 2 {
+		return trimmed
+	}
+	lines = lines[1:]
+	if last := strings.TrimSpace(lines[len(lines)-1]); strings.HasPrefix(last, "```") {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
