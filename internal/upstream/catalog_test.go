@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // useOpenRouterServer points the OpenRouter endpoints at a local server so the

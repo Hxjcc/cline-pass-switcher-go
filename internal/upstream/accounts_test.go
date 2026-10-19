@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 func TestAccountHealthIsKeyedByIdentityNotName(t *testing.T) {

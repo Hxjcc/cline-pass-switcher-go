@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 const compactionChatBody = `{"id":"chatcmpl-cmp","created":1,"model":"cline-pass/test","choices":[{"index":0,"message":{"role":"assistant","content":"condensed history"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`

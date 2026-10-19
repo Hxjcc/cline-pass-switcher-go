@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 var ErrAccountingUnavailable = errors.New("request accounting is unavailable")

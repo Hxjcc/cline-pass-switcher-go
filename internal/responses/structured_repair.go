@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 // StrictOutput reports whether the request asked for a strict JSON Schema

@@ -3,7 +3,7 @@ package upstream
 import (
 	"log"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 func (s *Service) updateMetadata(update func(*model.Metadata)) {

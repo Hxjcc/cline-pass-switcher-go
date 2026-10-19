@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 const (
@@ -72,7 +72,7 @@ func (s *Store) commitLocked(entry journalEntry) error {
 		return s.writeErr
 	}
 	// Detach caller-owned maps and pointers before publishing committed state.
-	s.applyEntry(model.Clone(entry))
+	s.applyEntry(cloneJournalEntry(entry))
 	s.pending++
 	if !durable {
 		s.unsynced++
@@ -184,10 +184,15 @@ func (s *Store) applyEntry(entry journalEntry) {
 			current.CanonicalSlug = e.Canonical
 		}
 		s.meta.Models[e.Model] = current
-		s.meta.History = append([]model.HistoryEntry{e}, s.meta.History...)
-		if len(s.meta.History) > model.HistoryLimit {
-			s.meta.History = s.meta.History[:model.HistoryLimit]
+		history := s.meta.History
+		if len(history) < model.HistoryLimit {
+			history = append(history, model.HistoryEntry{})
+		} else {
+			history = history[:model.HistoryLimit]
 		}
+		copy(history[1:], history[:len(history)-1])
+		history[0] = e
+		s.meta.History = history
 		// Counters follow the stable account identity; entries written by
 		// older versions only carry a name and keep working through the
 		// fallback.

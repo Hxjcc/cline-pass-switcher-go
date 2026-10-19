@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 const (
@@ -21,12 +21,16 @@ const (
 	// Without a sweep an entry only disappears when that same session comes
 	// back, so threads the user abandoned stay in memory forever.
 	stickSweepInterval = 5 * time.Minute
+	// maxSessionSticks bounds the in-memory affinity table. A client can
+	// invent a fresh prompt_cache_key per request, so TTL alone is not a
+	// memory bound.
+	maxSessionSticks = 20_000
 )
 
 // stickTTL is the configured conversation lifetime, falling back to the
 // built-in default for an empty or unparseable value.
 func (s *Service) stickTTL() time.Duration {
-	raw := strings.TrimSpace(s.store.Config().StickTTL)
+	raw := strings.TrimSpace(s.store.StickTTL())
 	if raw == "" {
 		return defaultSessionStickTTL
 	}
@@ -208,17 +212,31 @@ func (s *Service) rememberStick(session string, account model.Account, upstream 
 		return
 	}
 	now := time.Now()
+	ttl := s.stickTTL()
 	s.stickMu.Lock()
 	defer s.stickMu.Unlock()
 	if s.sticks == nil {
 		s.sticks = map[string]sessionStick{}
 	}
 	s.sweepSticksLocked(now)
+	if _, exists := s.sticks[session]; !exists && len(s.sticks) >= maxSessionSticks {
+		// Drop a batch rather than scanning for the oldest entry on every
+		// insert at the cap. The map iteration order is intentionally
+		// unspecified; an evicted conversation only loses a warm cache hint.
+		evict := maxSessionSticks/8 + 1
+		for key := range s.sticks {
+			delete(s.sticks, key)
+			evict--
+			if evict == 0 {
+				break
+			}
+		}
+	}
 	s.sticks[session] = sessionStick{
 		accountID: account.ID,
 		upstream:  upstream,
 		keyHash:   accountKeyHash(account.Key),
-		until:     now.Add(s.stickTTL()),
+		until:     now.Add(ttl),
 	}
 }
 

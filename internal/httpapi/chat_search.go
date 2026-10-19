@@ -3,8 +3,8 @@ package httpapi
 import (
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
 )
 
 // mapChatSearch rewrites a client-declared web_search on Chat Completions

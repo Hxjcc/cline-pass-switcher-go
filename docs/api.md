@@ -52,6 +52,8 @@
 
 非流式请求失败时，返回最后一次上游尝试的状态码和响应体。流式请求在开始输出前失败时同样如此；开始输出后出错，流会直接结束。
 
+生成接口还受全局和单密钥并发上限保护，超过时返回 HTTP 429（`code: "concurrency_limit"`），不会排队等待。
+
 ### POST /v1/responses 与 /v1/responses/compact
 
 网关把 Responses 请求转换成 Chat Completions 发给上游，再把结果转换回 Responses 格式。支持范围、限制和压缩机制见 [Responses 协议兼容](protocol-compatibility.md)。

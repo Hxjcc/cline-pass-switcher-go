@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/sse"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // streamStats is fed by the goroutine pumping the upstream stream and read
@@ -253,7 +253,24 @@ func addUsage(total, next *model.UsageStats) *model.UsageStats {
 		}
 		total.Cost = &cost
 	}
+	total.InputCost = addCost(total.InputCost, next.InputCost)
+	total.OutputCost = addCost(total.OutputCost, next.OutputCost)
+	total.SurchargeCost = addCost(total.SurchargeCost, next.SurchargeCost)
+	total.GatewayCost = addCost(total.GatewayCost, next.GatewayCost)
+	total.CacheHitTokens += next.CacheHitTokens
+	total.CacheMissTokens += next.CacheMissTokens
 	return total
+}
+
+func addCost(total, next *float64) *float64 {
+	if next == nil {
+		return total
+	}
+	value := *next
+	if total != nil {
+		value += *total
+	}
+	return &value
 }
 
 func recordedEffort(mapped string, body map[string]any) string {

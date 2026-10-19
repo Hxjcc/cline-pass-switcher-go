@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 var invalidToolName = regexp.MustCompile(`[^A-Za-z0-9_-]+`)

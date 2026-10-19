@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
 )
 
 func replayTestBudget(t *testing.T) *replayBudget {

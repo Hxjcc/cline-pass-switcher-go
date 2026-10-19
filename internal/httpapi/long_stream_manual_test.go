@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // TestManualStreamPastLegacy120sDeadline is an opt-in reproduction of the

@@ -3,7 +3,7 @@ package store
 import (
 	"crypto/rand"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 func newHistoryID() string { return "hist_" + rand.Text() }

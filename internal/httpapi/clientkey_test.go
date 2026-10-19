@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 func stringsReader(value string) io.Reader { return strings.NewReader(value) }

@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // A spend limit is only meaningful if the counter outlives a restart, so the

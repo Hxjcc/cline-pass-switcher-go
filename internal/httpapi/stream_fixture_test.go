@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 // One real capture from Cline Pass (deepseek-v4.1-flash): the stream ids,

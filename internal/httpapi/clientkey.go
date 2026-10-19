@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // formatUSD renders an amount the way the console does, so an operator

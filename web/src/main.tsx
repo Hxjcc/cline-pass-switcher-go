@@ -39,7 +39,7 @@ createRoot(rootElement).render(
       >
       <TooltipProvider>
         <App />
-        <Toaster position="top-right" />
+        <Toaster position="bottom-right" />
       </TooltipProvider>
     </ThemeProvider>
   </StrictMode>,

@@ -8,6 +8,8 @@ RUN npm run build
 
 FROM golang:1.25-alpine AS backend
 
+ARG VERSION=dev
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -16,7 +18,7 @@ COPY internal ./internal
 COPY --from=frontend /src/internal/webassets/dist ./internal/webassets/dist
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo.Version=${VERSION}" \
     -o /out/cline-pass-switcher \
     ./cmd/cline-pass-switcher
 

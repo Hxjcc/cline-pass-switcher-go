@@ -1,8 +1,8 @@
 package httpapi
 
 import (
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // applyGatewayMeta copies the gateway's own view of a request onto the history

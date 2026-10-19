@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
 
 // accountView is the wire shape of one account. The stored key stays out of it

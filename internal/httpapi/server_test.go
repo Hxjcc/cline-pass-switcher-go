@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/webassets"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/webassets"
 )
 
 func TestMetaIsPublicAndProtectedRoutesRequireKey(t *testing.T) {

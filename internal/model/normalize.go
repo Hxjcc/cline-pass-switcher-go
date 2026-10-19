@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
 
 func LoadConfig(path string) (Config, error) {
@@ -106,6 +106,16 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.CompactionMinOutputTokens = tokens
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("MAX_CONCURRENT_REQUESTS")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			cfg.MaxConcurrentRequests = value
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("MAX_CONCURRENT_REQUESTS_PER_KEY")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			cfg.MaxConcurrentRequestsPerKey = value
+		}
+	}
 	// How long a conversation keeps its account (and channel order). It should
 	// roughly match the provider's prompt-cache lifetime: a shorter value drops
 	// a warm account, a longer one only costs a few bytes per conversation.
@@ -149,6 +159,21 @@ func NormalizeConfig(cfg *Config) {
 	}
 	if cfg.CompactionMinOutputTokens > 32768 {
 		cfg.CompactionMinOutputTokens = 32768
+	}
+	if cfg.MaxConcurrentRequests <= 0 {
+		cfg.MaxConcurrentRequests = DefaultMaxConcurrentRequests
+	}
+	if cfg.MaxConcurrentRequests > 4096 {
+		cfg.MaxConcurrentRequests = 4096
+	}
+	if cfg.MaxConcurrentRequestsPerKey <= 0 {
+		cfg.MaxConcurrentRequestsPerKey = DefaultMaxConcurrentRequestsPerKey
+	}
+	if cfg.MaxConcurrentRequestsPerKey > 1024 {
+		cfg.MaxConcurrentRequestsPerKey = 1024
+	}
+	if cfg.MaxConcurrentRequestsPerKey > cfg.MaxConcurrentRequests {
+		cfg.MaxConcurrentRequestsPerKey = cfg.MaxConcurrentRequests
 	}
 
 	// The top-level apiKey is a legacy field. It is folded into the account

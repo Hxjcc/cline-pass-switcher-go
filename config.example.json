@@ -3,6 +3,8 @@
   "proxyKey": "",
   "publicBaseUrl": "",
   "strictToolHistory": false,
+  "maxConcurrentRequests": 128,
+  "maxConcurrentRequestsPerKey": 8,
   "webSearchUpstream": "",
   "webFetchUpstream": "",
   "upstreamBase": "https://api.cline.bot/api/v1",

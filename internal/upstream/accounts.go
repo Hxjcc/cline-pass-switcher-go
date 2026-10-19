@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // Account failover. An upstream 401/403 means the key is rejected and a 429

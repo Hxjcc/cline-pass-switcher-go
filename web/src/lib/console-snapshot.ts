@@ -68,7 +68,11 @@ export function readSnapshot(): CachedSnapshot | null {
     ) {
       return null
     }
-    return parsed as CachedSnapshot
+    const cached = parsed as CachedSnapshot
+    return {
+      ...cached,
+      security: { ...cached.security, proxyKey: "", adminKey: "" },
+    }
   } catch {
     return null
   }
@@ -76,7 +80,15 @@ export function readSnapshot(): CachedSnapshot | null {
 
 export function writeSnapshot(snapshot: CachedSnapshot) {
   try {
-    sessionStorage.setItem(SNAPSHOT_STORAGE, JSON.stringify(snapshot))
+    // The security panel needs the live values while the tab is open, but the
+    // reload cache does not: a fresh fetch repopulates them after login. Keep
+    // master/admin credentials out of sessionStorage so an XSS or a shared
+    // browser profile has one less copy to read.
+    const cached: CachedSnapshot = {
+      ...snapshot,
+      security: { ...snapshot.security, proxyKey: "", adminKey: "" },
+    }
+    sessionStorage.setItem(SNAPSHOT_STORAGE, JSON.stringify(cached))
   } catch {
     // Storage can be unavailable in restricted browser contexts.
   }

@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // A probe is what the console shows as 最近命中, so it has to ask the way a real

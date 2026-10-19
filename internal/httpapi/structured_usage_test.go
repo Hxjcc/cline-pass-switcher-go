@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // Schema rejection does not undo the upstream spend. One client request must

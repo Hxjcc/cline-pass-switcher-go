@@ -69,3 +69,26 @@ func BenchmarkFragmentedEvent(b *testing.B) {
 		}
 	}
 }
+
+func FuzzParser(f *testing.F) {
+	for _, seed := range []string{
+		"data: one\n\n",
+		"data: one\r\n\r\n",
+		": ping\r\r",
+		"data: partial",
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var parser Parser
+		blocks := 0
+		err := parser.Feed(data, func(string) bool {
+			blocks++
+			return blocks < 1000
+		})
+		if err != nil && !errors.Is(err, ErrEventTooLarge) {
+			t.Fatalf("unexpected parser error: %v", err)
+		}
+		_ = parser.Finish()
+	})
+}

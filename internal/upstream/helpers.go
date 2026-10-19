@@ -13,13 +13,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/apierr"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/apierr"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
 
-const maxResponseBytes = 64 << 20
+const (
+	maxResponseBytes      = 64 << 20
+	maxErrorResponseBytes = 1 << 20
+)
 
 type Routing struct {
 	Content           string
@@ -763,14 +767,18 @@ func (s *Service) fetchJSON(ctx context.Context, method, endpoint string, header
 		request.Header.Set(key, value)
 	}
 	if request.Header.Get("User-Agent") == "" {
-		request.Header.Set("User-Agent", "cline-pass-switcher-go/1.0")
+		request.Header.Set("User-Agent", buildinfo.UserAgent())
 	}
 	response, err := s.client.Do(request)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	limit := int64(maxResponseBytes)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		limit = maxErrorResponseBytes
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
 		return response.StatusCode, nil, err
 	}

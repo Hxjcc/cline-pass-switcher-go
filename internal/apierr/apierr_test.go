@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 func TestFromBodyPreservesOpenAIErrorDetails(t *testing.T) {

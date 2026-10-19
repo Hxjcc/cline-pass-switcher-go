@@ -5,8 +5,14 @@ import (
 	"log"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
+
+// maxRecordedErrorRunes bounds what one upstream failure can add to the
+// journal, the metadata snapshot and the console. The response itself may
+// still carry a longer diagnostic; history is not a log sink.
+const maxRecordedErrorRunes = 2000
 
 // record persists one request. The admitting key travels in the context so the
 // store can charge the spend of an issued key in the same journal entry; the
@@ -16,6 +22,11 @@ func (s *Server) record(ctx context.Context, entry model.HistoryEntry) {
 	if entry.Session == "" {
 		entry.Session = recordedSession(ctx)
 	}
+	if entry.Error != nil {
+		message := strx.Truncate(*entry.Error, maxRecordedErrorRunes)
+		entry.Error = &message
+	}
+	entry.DegradeReason = strx.Truncate(entry.DegradeReason, maxRecordedErrorRunes)
 	if err := s.store.Record(entry); err != nil {
 		log.Printf("persist request history: %v", err)
 	}

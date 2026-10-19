@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 func setResponsesHeaders(writer http.ResponseWriter, targets []string, result chainResult, effort string) {
@@ -94,7 +95,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	// itself must be non-streaming: AttemptNonStream only parses JSON bodies.
 	upstreamBody := chatBody
 	if strictStructured {
-		upstreamBody = model.Clone(chatBody)
+		upstreamBody = maps.Clone(chatBody)
 		delete(upstreamBody, "stream")
 		delete(upstreamBody, "stream_options")
 	}
@@ -235,14 +236,24 @@ func firstChatChoiceText(chat map[string]any) string {
 }
 
 func patchChatCompletionText(chat map[string]any, text string) map[string]any {
-	patched := model.Clone(chat)
-	choices := jsonx.Slice(patched["choices"])
+	patched := maps.Clone(chat)
+	choices := jsonx.Slice(chat["choices"])
 	if len(choices) == 0 {
 		return patched
 	}
-	if message := jsonx.Map(jsonx.Map(choices[0])["message"]); message != nil {
-		message["content"] = text
+	first := jsonx.Map(choices[0])
+	if first == nil {
+		return patched
 	}
+	replacement := maps.Clone(first)
+	if message := jsonx.Map(first["message"]); message != nil {
+		copied := maps.Clone(message)
+		copied["content"] = text
+		replacement["message"] = copied
+	}
+	nextChoices := append([]any(nil), choices...)
+	nextChoices[0] = replacement
+	patched["choices"] = nextChoices
 	return patched
 }
 
@@ -479,7 +490,7 @@ func (s *Server) runCompactionChain(
 	// Only reasoning starvation is worth a second, more expensive pass: other
 	// failures already walked the account and channel failover.
 	if compactionStarved(result, err) && ctx.Err() == nil {
-		retryBody := model.Clone(chatBody)
+		retryBody := maps.Clone(chatBody)
 		responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
 		bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
 		if effort := effortFromChatBody(retryBody); effort != "" {

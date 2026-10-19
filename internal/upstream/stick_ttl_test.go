@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // The TTL should track the provider cache lifetime, so it is configurable; an

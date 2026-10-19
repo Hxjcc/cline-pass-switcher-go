@@ -5,15 +5,17 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 func TestRequestSnapshotsAreDetached(t *testing.T) {
+	pinnable := true
 	original := model.ModelMeta{
 		ReasoningEfforts: []string{"high"}, InputModalities: []string{"text"}, OutputModalities: []string{"text"},
 		AvailableProviders: []string{"a"}, Upstreams: []string{"a"}, Tier0: []string{"a"},
 		UpstreamDetail: map[string]model.UpstreamDetail{"a": {Name: "A"}},
 		UpstreamStatus: map[string]model.UpstreamStatus{"a": {Status: "ok"}},
+		Pinnable:       &pinnable,
 	}
 	s := &Store{meta: model.Metadata{Models: map[string]model.ModelMeta{"test": original}},
 		config: model.Config{ProxyKey: "key", UpstreamBase: "https://example.test", PerModel: map[string]model.PerModelConfig{
@@ -25,6 +27,7 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 	}
 	snapshot.UpstreamDetail["a"] = model.UpstreamDetail{Name: "changed"}
 	snapshot.UpstreamStatus["a"] = model.UpstreamStatus{Status: "changed"}
+	*snapshot.Pinnable = false
 	if !reflect.DeepEqual(s.ModelMeta("test"), original) {
 		t.Fatal("model snapshot aliases the store")
 	}

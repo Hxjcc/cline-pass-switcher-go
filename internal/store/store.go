@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 type Store struct {
@@ -100,19 +100,19 @@ func Open(dataDir string) (*Store, error) {
 func (s *Store) Config() model.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return model.Clone(s.config)
+	return cloneConfig(s.config)
 }
 
 func (s *Store) Metadata() model.Metadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return model.Clone(s.meta)
+	return cloneMetadata(s.meta)
 }
 
 func (s *Store) UpdateConfig(update func(*model.Config)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := model.Clone(s.config)
+	next := cloneConfig(s.config)
 	update(&next)
 	model.NormalizeConfig(&next)
 	return s.commitLocked(journalEntry{Kind: "config", Config: &next})
@@ -121,7 +121,7 @@ func (s *Store) UpdateConfig(update func(*model.Config)) error {
 func (s *Store) UpdateMetadata(update func(*model.Metadata)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := model.Clone(s.meta)
+	next := cloneMetadata(s.meta)
 	update(&next)
 	model.NormalizeMetadata(&next)
 	ensureHistoryIDs(&next)
@@ -131,7 +131,7 @@ func (s *Store) UpdateMetadata(update func(*model.Metadata)) error {
 func (s *Store) UpdateModelMeta(modelID string, update func(*model.ModelMeta)) (model.ModelMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current := model.Clone(s.meta.Models[modelID])
+	current := cloneModelMeta(s.meta.Models[modelID])
 	if current.UpstreamDetail == nil {
 		current.UpstreamDetail = map[string]model.UpstreamDetail{}
 	}
@@ -142,7 +142,7 @@ func (s *Store) UpdateModelMeta(modelID string, update func(*model.ModelMeta)) (
 	if err := s.commitLocked(journalEntry{Kind: "model", ModelID: modelID, ModelMeta: &current}); err != nil {
 		return model.ModelMeta{}, err
 	}
-	return model.Clone(current), nil
+	return cloneModelMeta(current), nil
 }
 
 func (s *Store) Record(entry model.HistoryEntry) error {

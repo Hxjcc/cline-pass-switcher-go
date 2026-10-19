@@ -6,12 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // The console polls and re-filters /api/history on a remote connection, so the
@@ -54,6 +59,42 @@ func TestAPIResponsesStayPlainWithoutGzip(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "authRequired") {
 		t.Fatalf("plain body should be JSON: %s", response.Body.String())
+	}
+}
+
+func TestStaticAssetsCompressWhenAccepted(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	assets := fstest.MapFS{
+		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>static</title>")},
+		"assets/app.js": &fstest.MapFile{Data: []byte(strings.Repeat("console.log('asset');", 200))},
+	}
+	server, err := New(st, upstream.New(st), fs.FS(assets))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := localRequest(http.MethodGet, "/assets/app.js", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if got := response.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("static asset encoding = %q", got)
+	}
+	if length := response.Header().Get("Content-Length"); length != "" {
+		t.Fatalf("compressed static asset kept an uncompressed Content-Length: %q", length)
+	}
+	reader, err := gzip.NewReader(response.Body)
+	if err != nil {
+		t.Fatalf("static asset is not gzip: %v", err)
+	}
+	defer reader.Close()
+	body, err := io.ReadAll(reader)
+	if err != nil || !strings.Contains(string(body), "console.log('asset')") {
+		t.Fatalf("compressed static body = %q, %v", body, err)
 	}
 }
 

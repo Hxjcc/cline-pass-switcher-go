@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
 
 // Quota probing reads the plan utilization the Cline dashboard itself uses.
@@ -149,6 +149,13 @@ func (s *Service) fetchQuota(ctx context.Context, account model.Account) Account
 		FetchedAt: time.Now().UnixMilli(),
 	}
 	base := s.store.UpstreamBase()
+	// Plan metadata and utilization are separate read-only endpoints. Fetch
+	// them together: routing waits for this snapshot before a first request,
+	// and two sequential round trips doubled that wait.
+	limitsCh := make(chan []QuotaLimit, 1)
+	go func() {
+		limitsCh <- s.fetchQuotaLimits(ctx, base, account.Key)
+	}()
 	status, raw, err := s.fetchJSON(ctx, http.MethodGet, base+"/users/me/plan", chatHeaders(account.Key), nil, quotaTimeout)
 	if err != nil {
 		result.Error = "读取套餐失败：" + err.Error()
@@ -173,7 +180,7 @@ func (s *Service) fetchQuota(ctx context.Context, account model.Account) Account
 	result.CurrentPeriodEnd = strings.TrimSpace(getString(data, "currentPeriodEnd"))
 	result.Caps = quotaCaps(plan)
 	// Utilization is best-effort: the caps alone are still worth showing.
-	result.Limits = s.fetchQuotaLimits(ctx, base, account.Key)
+	result.Limits = <-limitsCh
 	result.OK = true
 	return result
 }

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
 )
 
 // Opt-in soak: concurrent writers, disconnects/reconnects, disk spill and final

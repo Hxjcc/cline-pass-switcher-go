@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // The numbers are one live web-search turn: the ledger charged exactly "cost",
@@ -131,5 +131,33 @@ func TestSSEDataPayloadJoinsEventLines(t *testing.T) {
 	stats.Observe([]byte("data: {\"error\":\ndata: {\"message\":\"boom\"}}\n\n"))
 	if !strings.Contains(stats.StreamError(), "boom") {
 		t.Fatalf("multi-line error event was ignored: %q", stats.StreamError())
+	}
+}
+
+func TestAddUsageKeepsCostBreakdownAcrossPasses(t *testing.T) {
+	cost := func(value float64) *float64 { return &value }
+	total := addUsage(
+		&model.UsageStats{
+			PromptTokens: 10, Cost: cost(0.5), InputCost: cost(0.25),
+			OutputCost: cost(0.125), SurchargeCost: cost(0.5),
+			GatewayCost: cost(0.25), CacheHitTokens: 4, CacheMissTokens: 6,
+		},
+		&model.UsageStats{
+			PromptTokens: 5, Cost: cost(0.25), InputCost: cost(0.5),
+			OutputCost: cost(0.25), SurchargeCost: cost(0.5),
+			GatewayCost: cost(0.25), CacheHitTokens: 8, CacheMissTokens: 2,
+		},
+	)
+	if total == nil || total.PromptTokens != 15 || total.Cost == nil || *total.Cost != 0.75 {
+		t.Fatalf("base usage was not accumulated: %#v", total)
+	}
+	if total.InputCost == nil || *total.InputCost != 0.75 ||
+		total.OutputCost == nil || *total.OutputCost != 0.375 ||
+		total.SurchargeCost == nil || *total.SurchargeCost != 1 ||
+		total.GatewayCost == nil || *total.GatewayCost != 0.5 {
+		t.Fatalf("cost breakdown was not accumulated: %#v", total)
+	}
+	if total.CacheHitTokens != 12 || total.CacheMissTokens != 8 {
+		t.Fatalf("cache counters were not accumulated: %#v", total)
 	}
 }

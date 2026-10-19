@@ -3,7 +3,7 @@ package responses
 import (
 	"fmt"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 // RequestError identifies unsupported semantics before any upstream request is

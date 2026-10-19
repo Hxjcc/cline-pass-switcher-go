@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 // browserRequestAllowed decides whether a request may reach the API at all.

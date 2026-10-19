@@ -3,7 +3,7 @@ package upstream
 import (
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 func TestCanonicalProviderMatchesGatewayNamesToPinSlugs(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/munmunjaklin458-afk/cline-pass-switcher-go
+module github.com/Hxjcc/cline-pass-switcher-go
 
 go 1.25
 

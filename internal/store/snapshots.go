@@ -5,7 +5,7 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // ModelMeta copies only one model, including its mutable maps and slices.
@@ -13,16 +13,66 @@ import (
 func (s *Store) ModelMeta(modelID string) model.ModelMeta {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	meta := s.meta.Models[modelID]
-	meta.ReasoningEfforts = slices.Clone(meta.ReasoningEfforts)
-	meta.InputModalities = slices.Clone(meta.InputModalities)
-	meta.OutputModalities = slices.Clone(meta.OutputModalities)
-	meta.AvailableProviders = slices.Clone(meta.AvailableProviders)
-	meta.Upstreams = slices.Clone(meta.Upstreams)
-	meta.Tier0 = slices.Clone(meta.Tier0)
-	meta.UpstreamDetail = maps.Clone(meta.UpstreamDetail)
-	meta.UpstreamStatus = maps.Clone(meta.UpstreamStatus)
-	return meta
+	return cloneModelMeta(s.meta.Models[modelID])
+}
+
+// ModelsMeta returns the probed model catalog without the request history.
+// Console model pages and routing probes only need this map; cloning the whole
+// metadata document made every such read pay for 500 history rows.
+func (s *Store) ModelsMeta() map[string]model.ModelMeta {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	models := make(map[string]model.ModelMeta, len(s.meta.Models))
+	for id, meta := range s.meta.Models {
+		models[id] = cloneModelMeta(meta)
+	}
+	return models
+}
+
+// History returns a detached copy of the newest-first request log.
+func (s *Store) History() []model.HistoryEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := make([]model.HistoryEntry, len(s.meta.History))
+	for index, entry := range s.meta.History {
+		history[index] = cloneHistoryEntry(entry)
+	}
+	return history
+}
+
+// AccountStats returns only the per-account counters the account panel needs.
+func (s *Store) AccountStats() map[string]model.AccountStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stats := make(map[string]model.AccountStats, len(s.meta.Stats))
+	for id, value := range s.meta.Stats {
+		if value.LastError != nil {
+			message := *value.LastError
+			value.LastError = &message
+		}
+		stats[id] = value
+	}
+	return stats
+}
+
+// OfficialModelsFetch returns the last catalog sync summary, if any.
+func (s *Store) OfficialModelsFetch() *model.OfficialFetch {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.meta.OfficialModelsFetch == nil {
+		return nil
+	}
+	fetch := *s.meta.OfficialModelsFetch
+	fetch.Sources = slices.Clone(fetch.Sources)
+	fetch.Added = slices.Clone(fetch.Added)
+	return &fetch
+}
+
+// ORModelList returns the cached OpenRouter catalog and its fetch time.
+func (s *Store) ORModelList() ([]string, int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.meta.ORModels), s.meta.ORModelsFetchedAt
 }
 
 // Accounts returns a detached copy of the account pool. Accounts only carry
@@ -41,6 +91,70 @@ func (s *Store) ModelConfig(modelID string) model.PerModelConfig {
 	cfg.Upstreams = slices.Clone(cfg.Upstreams)
 	cfg.Exclude = slices.Clone(cfg.Exclude)
 	return cfg
+}
+
+// PerModelConfigs returns the routing preferences without accounts, keys or
+// the rest of config.json.
+func (s *Store) PerModelConfigs() map[string]model.PerModelConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	configs := make(map[string]model.PerModelConfig, len(s.config.PerModel))
+	for id, value := range s.config.PerModel {
+		value.Upstreams = slices.Clone(value.Upstreams)
+		value.Exclude = slices.Clone(value.Exclude)
+		configs[id] = value
+	}
+	return configs
+}
+
+func (s *Store) KnownModels() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.config.KnownModels)
+}
+
+func (s *Store) Port() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.Port
+}
+
+func (s *Store) AccountMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.AccountMode
+}
+
+func (s *Store) ActiveAccount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.ActiveAccount
+}
+
+func (s *Store) PublicBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.PublicBaseURL
+}
+
+// StickTTL is read on every successful conversation turn; keep it out of the
+// full configuration clone.
+func (s *Store) StickTTL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.StickTTL
+}
+
+func (s *Store) MaxConcurrentRequests() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.MaxConcurrentRequests
+}
+
+func (s *Store) MaxConcurrentRequestsPerKey() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.MaxConcurrentRequestsPerKey
 }
 
 func (s *Store) ProxyKey() string {
@@ -117,6 +231,70 @@ type AccessPolicy struct {
 	PublicBaseURL         string
 	TrustedProxies        []string
 	TrustLocalPortForward bool
+}
+
+type ModelsSnapshot struct {
+	KnownModels []string
+	PerModel    map[string]model.PerModelConfig
+	Models      map[string]model.ModelMeta
+	Official    *model.OfficialFetch
+	PublicBase  string
+	Port        int
+}
+
+// ModelsSnapshot keeps the four parts of the model page on one store lock, so
+// a concurrent admin save cannot produce a subscription/config mismatch.
+func (s *Store) ModelsSnapshot() ModelsSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := ModelsSnapshot{
+		KnownModels: slices.Clone(s.config.KnownModels),
+		PerModel:    make(map[string]model.PerModelConfig, len(s.config.PerModel)),
+		Models:      make(map[string]model.ModelMeta, len(s.meta.Models)),
+		PublicBase:  s.config.PublicBaseURL,
+		Port:        s.config.Port,
+	}
+	for id, value := range s.config.PerModel {
+		value.Upstreams = slices.Clone(value.Upstreams)
+		value.Exclude = slices.Clone(value.Exclude)
+		snapshot.PerModel[id] = value
+	}
+	for id, value := range s.meta.Models {
+		snapshot.Models[id] = cloneModelMeta(value)
+	}
+	if s.meta.OfficialModelsFetch != nil {
+		fetch := *s.meta.OfficialModelsFetch
+		fetch.Sources = slices.Clone(fetch.Sources)
+		fetch.Added = slices.Clone(fetch.Added)
+		snapshot.Official = &fetch
+	}
+	return snapshot
+}
+
+type AccountsSnapshot struct {
+	Accounts []model.Account
+	Mode     string
+	Active   int
+	Stats    map[string]model.AccountStats
+}
+
+func (s *Store) AccountsSnapshot() AccountsSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := AccountsSnapshot{
+		Accounts: slices.Clone(s.config.Accounts),
+		Mode:     s.config.AccountMode,
+		Active:   s.config.ActiveAccount,
+		Stats:    make(map[string]model.AccountStats, len(s.meta.Stats)),
+	}
+	for id, value := range s.meta.Stats {
+		if value.LastError != nil {
+			message := *value.LastError
+			value.LastError = &message
+		}
+		snapshot.Stats[id] = value
+	}
+	return snapshot
 }
 
 func (s *Store) AccessPolicy() AccessPolicy {

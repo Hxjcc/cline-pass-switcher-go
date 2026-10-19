@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // Replays the history ChatGPT Desktop stores at the head of a delegated

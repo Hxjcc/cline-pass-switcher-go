@@ -3,7 +3,7 @@ package responses
 import (
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 // ShouldReplayReasoning reports whether reasoning_content can be replayed in

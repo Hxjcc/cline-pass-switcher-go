@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 // The Chat backend has no native compaction endpoint. Explicitly ask for a

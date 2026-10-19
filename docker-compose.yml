@@ -2,7 +2,10 @@
 # ${VAR:-} 形式会自动读取）。直接编辑本文件会让 git pull 反复冲突。
 services:
   cline-pass-console:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
     container_name: cline-pass-console
     restart: unless-stopped
     # PUID/PGID (default 10001) choose the runtime user; the entrypoint fixes
@@ -43,6 +46,9 @@ services:
       - COMPACTION_RECENT_TOKENS=${COMPACTION_RECENT_TOKENS:-}
       - COMPACTION_REASONING_EFFORT=${COMPACTION_REASONING_EFFORT:-}
       - COMPACTION_MIN_OUTPUT_TOKENS=${COMPACTION_MIN_OUTPUT_TOKENS:-}
+      # 生成请求的并发上限；留空 = 全局 128、单密钥 8。
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-}
+      - MAX_CONCURRENT_REQUESTS_PER_KEY=${MAX_CONCURRENT_REQUESTS_PER_KEY:-}
     volumes:
       - ./data:/data
     ports:

@@ -1,6 +1,6 @@
 package store
 
-import "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+import "github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 
 // ResetKeyUsage clears the accumulated spend of one issued key, or of every
 // key when all is true. The secret does not have to be rotated to re-open a

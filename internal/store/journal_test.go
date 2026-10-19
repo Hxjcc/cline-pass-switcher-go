@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 func testStore(t *testing.T) (*Store, string) {

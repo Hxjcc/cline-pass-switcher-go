@@ -84,6 +84,17 @@
 
 摘要因推理耗尽预算而失败时，网关会用模型的最高推理档位、最多 32768 的输出预算重试一次。这个 32768 是代码常量，在运行参数表中显示为 `builtin`。
 
+## 并发保护
+
+生成请求（Chat Completions、Responses 和压缩）受全局与单密钥两层并发上限保护。超出上限时返回 HTTP 429（`concurrency_limit`），不会排队占用连接。
+
+| 环境变量 | `config.json` 字段 | 默认值 | 说明 |
+|---|---|---|---|
+| `MAX_CONCURRENT_REQUESTS` | `maxConcurrentRequests` | `128` | 所有客户端同时在途的生成请求上限，取值 1–4096。 |
+| `MAX_CONCURRENT_REQUESTS_PER_KEY` | `maxConcurrentRequestsPerKey` | `8` | 单个签发密钥同时在途的生成请求上限；主密钥共享一个桶，取值 1–1024。 |
+
+模型列表和只读管理接口不计入生成并发。两层上限在启动时读取，修改后需要重启。
+
 ## 仅在 config.json 中的字段
 
 下面这些字段没有对应的环境变量，一般通过控制台修改。
@@ -144,7 +155,9 @@ Compose 与程序默认值不同的地方：
 | `WEB_FETCH_UPSTREAM` | `browserbase_fetch` | 同上。 |
 | `SHELL_COMPAT_ENFORCE` | `false` | 总会传入，所以运行参数表中它的来源显示为 `env`。 |
 
-Compose 只把以下变量从 `.env` 传进容器：`PROXY_KEY`、`ADMIN_KEY`、`PUBLIC_BASE_URL`、`TRUSTED_PROXIES`、`WEB_SEARCH_UPSTREAM`、`WEB_FETCH_UPSTREAM`、`STICK_TTL`、`SCHEMA_FAIL_DUMP`、`SHELL_COMPAT`、`SHELL_COMPAT_ENFORCE`、`COMPACTION_RECENT_TOKENS`、`COMPACTION_REASONING_EFFORT`、`COMPACTION_MIN_OUTPUT_TOKENS`，外加入口脚本读取的 `PUID`、`PGID`。`PORT`、`CLINE_PASS_KEY`、`STRICT_TOOL_HISTORY` 写在 `.env` 里不会生效；需要时请停止容器，改 `data/config.json` 里的对应字段。
+Compose 只把以下变量从 `.env` 传进容器：`PROXY_KEY`、`ADMIN_KEY`、`PUBLIC_BASE_URL`、`TRUSTED_PROXIES`、`WEB_SEARCH_UPSTREAM`、`WEB_FETCH_UPSTREAM`、`STICK_TTL`、`SCHEMA_FAIL_DUMP`、`SHELL_COMPAT`、`SHELL_COMPAT_ENFORCE`、`COMPACTION_RECENT_TOKENS`、`COMPACTION_REASONING_EFFORT`、`COMPACTION_MIN_OUTPUT_TOKENS`、`MAX_CONCURRENT_REQUESTS`、`MAX_CONCURRENT_REQUESTS_PER_KEY`，外加入口脚本读取的 `PUID`、`PGID`。`PORT`、`CLINE_PASS_KEY`、`STRICT_TOOL_HISTORY` 写在 `.env` 里不会生效；需要时请停止容器，改 `data/config.json` 里的对应字段。
+
+`VERSION` 是构建参数，不会进入运行环境；设置后 Compose 会把它注入二进制，启动日志和上游 `User-Agent` 会显示该版本。
 
 一个对外部署的 `.env` 示例：
 

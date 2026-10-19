@@ -368,7 +368,13 @@ export function HistoryPanel({
   onLoadMore: () => Promise<void>
   onClear: () => Promise<void>
 }) {
-  const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem(AUTO_REFRESH_STORAGE) === "1")
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    try {
+      return localStorage.getItem(AUTO_REFRESH_STORAGE) === "1"
+    } catch {
+      return false
+    }
+  })
   const [refreshing, setRefreshing] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -402,7 +408,11 @@ export function HistoryPanel({
   }, [onRefresh])
 
   useEffect(() => {
-    localStorage.setItem(AUTO_REFRESH_STORAGE, autoRefresh ? "1" : "0")
+    try {
+      localStorage.setItem(AUTO_REFRESH_STORAGE, autoRefresh ? "1" : "0")
+    } catch {
+      // Storage is optional in restricted browser contexts.
+    }
     if (!autoRefresh) return
     // The panel is only mounted while its tab is active, so polling stops on
     // its own when the user looks elsewhere; skip ticks in hidden windows.

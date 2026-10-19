@@ -35,6 +35,15 @@ go build -trimpath -ldflags="-s -w" -o cline-pass-switcher ./cmd/cline-pass-swit
 
 `internal/webassets/dist` 需要随源码一起提交：CI 会重新构建前端，并检查结果与仓库里的内容一致。修改了 `web/` 下的代码，请记得重新构建并提交 `dist`。
 
+发布构建可以注入版本号（启动日志和上游 `User-Agent` 会使用它）：
+
+```bash
+VERSION=1.0.0
+go build -trimpath \
+  -ldflags="-s -w -X github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo.Version=${VERSION}" \
+  -o cline-pass-switcher ./cmd/cline-pass-switcher
+```
+
 ## 前端开发
 
 ```bash

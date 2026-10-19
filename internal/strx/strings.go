@@ -28,9 +28,18 @@ func unique(values []string, trim bool) []string {
 }
 
 func Truncate(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
+	if limit <= 0 {
+		return ""
 	}
-	return string(runes[:limit])
+	// Walk runes in place. Converting the whole string to []rune first made a
+	// 64 MiB upstream error allocate ~256 MiB just to keep the first 160
+	// characters.
+	count := 0
+	for index := range value {
+		if count == limit {
+			return value[:index]
+		}
+		count++
+	}
+	return value
 }

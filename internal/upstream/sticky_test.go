@@ -2,13 +2,14 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 func TestSessionKeyUsesOnlyTheClientCacheKey(t *testing.T) {
@@ -228,5 +229,25 @@ func TestStickSweepDropsAbandonedConversations(t *testing.T) {
 	service.rememberStick("cache\nmodel\nsecond", account, "glm")
 	if _, found := service.sticks["cache\nmodel\nlate"]; !found {
 		t.Fatal("the sweep should be throttled between intervals")
+	}
+}
+
+func TestSessionStickTableIsBounded(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	service := New(st)
+	account := model.Account{ID: "acc_test", Name: "test", Key: "key", Enabled: true}
+	service.sticks = make(map[string]sessionStick, maxSessionSticks)
+	for index := 0; index < maxSessionSticks; index++ {
+		service.sticks[fmt.Sprintf("conversation-%d", index)] = sessionStick{until: time.Now().Add(time.Hour)}
+	}
+	for index := 0; index < 50; index++ {
+		service.rememberStick(fmt.Sprintf("new-conversation-%d", index), account, "provider")
+	}
+	if len(service.sticks) > maxSessionSticks {
+		t.Fatalf("session affinity table grew to %d entries", len(service.sticks))
 	}
 }

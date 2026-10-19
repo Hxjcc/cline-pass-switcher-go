@@ -1,11 +1,13 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -13,11 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/apierr"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/apierr"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 )
 
 // External catalog sources. Variables so tests (and a future self-hosted
@@ -159,7 +162,6 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	if account.Key == "" {
 		return ProbeResult{}, errNoAccount
 	}
-	cfg := s.store.Config()
 	started := time.Now()
 	body := map[string]any{
 		"model": modelID,
@@ -181,13 +183,16 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		body = s.InjectPrefs(body, modelID, attempt)
 		probeRestricted = attempt.Upstream != "" || len(attempt.ExcludeList) > 0
 	}
-	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
+	_, raw, err := s.fetchJSON(ctx, http.MethodPost, s.store.UpstreamBase()+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
 	if err != nil {
 		return ProbeResult{}, err
 	}
 	root := jsonx.Map(raw)
 	if message := extractError(root); message != "" && !hasChoices(root) {
 		return ProbeResult{}, errors.New(message)
+	}
+	if !hasChoices(root) {
+		return ProbeResult{}, errors.New("上游没有返回可用的补全结果，无法探测模型")
 	}
 	routing := ParseRouting(root)
 	var planned []string
@@ -351,13 +356,13 @@ func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline 
 }
 
 func (s *Service) orModelList(ctx context.Context) []string {
-	meta := s.store.Metadata()
-	if len(meta.ORModels) > 0 && time.Now().UnixMilli()-meta.ORModelsFetchedAt < 6*time.Hour.Milliseconds() {
-		return meta.ORModels
+	cached, fetchedAt := s.store.ORModelList()
+	if len(cached) > 0 && time.Now().UnixMilli()-fetchedAt < 6*time.Hour.Milliseconds() {
+		return cached
 	}
 	_, raw, err := s.fetchJSON(ctx, http.MethodGet, openRouterAPI+"/models", nil, nil, 60*time.Second)
 	if err != nil {
-		return meta.ORModels
+		return cached
 	}
 	items := getSlice(jsonx.Map(raw), "data")
 	ids := make([]string, 0, len(items))
@@ -367,7 +372,7 @@ func (s *Service) orModelList(ctx context.Context) []string {
 		}
 	}
 	if len(ids) == 0 {
-		return meta.ORModels
+		return cached
 	}
 	s.updateMetadata(func(current *model.Metadata) {
 		current.ORModels = ids
@@ -430,8 +435,7 @@ func (s *Service) orEndpoints(ctx context.Context, slug string) ([]model.Upstrea
 }
 
 func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (ValidationResult, error) {
-	meta := s.store.Metadata()
-	modelMeta := meta.Models[modelID]
+	modelMeta := s.store.ModelMeta(modelID)
 	if modelMeta.Pinnable == nil || !*modelMeta.Pinnable || len(modelMeta.Upstreams) == 0 {
 		reason := modelMeta.PinReason
 		if reason == "" {
@@ -635,9 +639,8 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 func (s *Service) TestAccount(ctx context.Context, key, accountID string) AccountTestResult {
 	started := time.Now()
 	modelID := "cline-pass/glm-5.3-flash"
-	cfg := s.store.Config()
-	if len(cfg.KnownModels) > 0 {
-		modelID = cfg.KnownModels[0]
+	if known := s.store.KnownModels(); len(known) > 0 {
+		modelID = known[0]
 	}
 	if strings.TrimSpace(key) == "" && strings.TrimSpace(accountID) != "" {
 		account := s.store.FindAccount(strings.TrimSpace(accountID))
@@ -656,7 +659,7 @@ func (s *Service) TestAccount(ctx context.Context, key, accountID string) Accoun
 		},
 		"max_tokens": 512,
 	}
-	status, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(key), body, 120*time.Second)
+	status, raw, err := s.fetchJSON(ctx, http.MethodPost, s.store.UpstreamBase()+"/chat/completions", chatHeaders(key), body, 120*time.Second)
 	if err != nil {
 		return AccountTestResult{OK: false, MS: time.Since(started).Milliseconds(), Model: modelID, Error: err.Error()}
 	}
@@ -792,7 +795,7 @@ func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Detail
 }
 
 func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attempt) map[string]any {
-	cloned := model.Clone(body)
+	cloned := cloneChatRequest(body)
 	modelMeta := s.store.ModelMeta(modelID)
 	ensureIncludeReasoning(cloned, modelMeta)
 	exclude := make([]string, 0, len(attempt.ExcludeList))
@@ -854,6 +857,28 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 	return cloned
 }
 
+// cloneChatRequest copies the small top-level routing fields InjectPrefs may
+// change without re-encoding the messages and tools. A JSON round-trip here
+// was both expensive for large Codex contexts and lossy: numbers decoded with
+// UseNumber became float64, which can silently round large schema values.
+func cloneChatRequest(body map[string]any) map[string]any {
+	cloned := maps.Clone(body)
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	if providerOptions := jsonx.Map(body["providerOptions"]); providerOptions != nil {
+		options := maps.Clone(providerOptions)
+		if gateway := jsonx.Map(providerOptions["gateway"]); gateway != nil {
+			options["gateway"] = maps.Clone(gateway)
+		}
+		cloned["providerOptions"] = options
+	}
+	if provider := jsonx.Map(body["provider"]); provider != nil {
+		cloned["provider"] = maps.Clone(provider)
+	}
+	return cloned
+}
+
 func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map[string]any, attempt Attempt) AttemptResult {
 	account := s.pickAccount(ctx)
 	if account.Key == "" {
@@ -890,6 +915,22 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 			// A pinned key has no second account to move to, so repeating the
 			// same rejected credential only burns time: report it once.
 			Fatal: pinBlocksFailover(ctx, details.Status),
+		}
+	}
+	if !hasChoices(root) {
+		details := apierr.Details{
+			Status:  http.StatusBadGateway,
+			Type:    "upstream_error",
+			Code:    "invalid_upstream_response",
+			Message: "upstream returned no completion choices",
+		}
+		return AttemptResult{
+			Status:  details.Status,
+			Out:     apierr.Body(details),
+			NetErr:  details.Message,
+			Routing: Routing{},
+			Account: account,
+			Usage:   output["usage"],
 		}
 	}
 	s.noteAccountStatus(account, http.StatusOK)
@@ -993,13 +1034,13 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 	if err != nil {
 		return StreamAttemptResult{Status: http.StatusBadGateway, NetErr: err.Error(), Account: account}
 	}
-	request, err := http.NewRequestWithContext(attemptContext, http.MethodPost, baseURL+"/chat/completions", strings.NewReader(string(rawBody)))
+	request, err := http.NewRequestWithContext(attemptContext, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(rawBody))
 	if err != nil {
 		return StreamAttemptResult{Status: http.StatusBadGateway, NetErr: err.Error(), Account: account}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+account.Key)
-	request.Header.Set("User-Agent", "cline-pass-switcher-go/1.0")
+	request.Header.Set("User-Agent", buildinfo.UserAgent())
 	response, err := s.client.Do(request)
 	if err != nil {
 		details := apierr.Network(guardError(guard, err), "network_error")
@@ -1008,7 +1049,11 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 	contentType := response.Header.Get("Content-Type")
 	if response.StatusCode != http.StatusOK || !strings.Contains(strings.ToLower(contentType), "event-stream") {
 		defer response.Body.Close()
-		raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		limit := int64(maxResponseBytes)
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			limit = maxErrorResponseBytes
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(response.Body, limit))
 		if readErr != nil {
 			return StreamAttemptResult{Status: http.StatusBadGateway, NetErr: readErr.Error(), Account: account}
 		}
@@ -1032,6 +1077,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 			if message == "" {
 				message = "upstream returned a non-SSE response"
 			}
+			message = strx.Truncate(message, 2000)
 			details = apierr.Details{Status: http.StatusBadGateway, Type: "upstream_error", Message: message}
 		}
 		s.noteAccountStatus(account, details.Status)

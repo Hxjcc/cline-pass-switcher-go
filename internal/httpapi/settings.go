@@ -6,8 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
 )
 
 // Where an effective value came from. The three sources are resolved in this
@@ -38,9 +37,8 @@ type effectiveSettingView struct {
 // built-in default, which is exactly the question the console could not answer
 // before.
 func (s *Server) effectiveSettings() []effectiveSettingView {
-	cfg := s.store.Config()
 	fileKeys := s.store.ConfigFileKeys()
-	rows := make([]effectiveSettingView, 0, 9)
+	rows := make([]effectiveSettingView, 0, 13)
 
 	add := func(key, label, configKey, envName, value string) {
 		rows = append(rows, effectiveSettingView{
@@ -52,11 +50,11 @@ func (s *Server) effectiveSettings() []effectiveSettingView {
 	}
 
 	add("compactionRecentTokens", "压缩逐字尾部（估算 token）", "compactionRecentTokens",
-		"COMPACTION_RECENT_TOKENS", strconv.Itoa(cfg.CompactionRecentTokens))
+		"COMPACTION_RECENT_TOKENS", strconv.Itoa(s.store.CompactionRecentTokens()))
 	add("compactionReasoningEffort", "压缩推理档位", "compactionReasoningEffort",
-		"COMPACTION_REASONING_EFFORT", cfg.CompactionReasoningEffort)
+		"COMPACTION_REASONING_EFFORT", s.store.CompactionReasoningEffort())
 	add("compactionMinOutputTokens", "压缩首轮输出预算下限", "compactionMinOutputTokens",
-		"COMPACTION_MIN_OUTPUT_TOKENS", strconv.Itoa(cfg.CompactionMinOutputTokens))
+		"COMPACTION_MIN_OUTPUT_TOKENS", strconv.Itoa(s.store.CompactionMinOutputTokens()))
 	rows = append(rows, effectiveSettingView{
 		Key:    "compactionEscalatedCeilingTokens",
 		Label:  "压缩重试预算上限（代码常量）",
@@ -64,28 +62,32 @@ func (s *Server) effectiveSettings() []effectiveSettingView {
 		Source: sourceBuiltin,
 	})
 	add("shellCompat", "工具 shell 兼容值", "shellCompat",
-		"SHELL_COMPAT", firstNonEmpty(cfg.ShellCompat, "关闭"))
+		"SHELL_COMPAT", firstNonEmpty(s.store.ShellCompat(), "关闭"))
 	add("shellCompatEnforce", "强制改写工具 shell 参数", "shellCompatEnforce",
-		"SHELL_COMPAT_ENFORCE", yesNo(cfg.ShellCompatEnforce))
+		"SHELL_COMPAT_ENFORCE", yesNo(s.store.ShellCompatEnforce()))
 	add("webSearchUpstream", "搜索工具映射", "webSearchUpstream",
-		"WEB_SEARCH_UPSTREAM", firstNonEmpty(cfg.WebSearchUpstream, "关闭"))
+		"WEB_SEARCH_UPSTREAM", firstNonEmpty(s.store.WebSearchUpstream(), "关闭"))
 	add("webFetchUpstream", "网页抓取工具映射", "webFetchUpstream",
-		"WEB_FETCH_UPSTREAM", firstNonEmpty(cfg.WebFetchUpstream, "关闭"))
+		"WEB_FETCH_UPSTREAM", firstNonEmpty(s.store.WebFetchUpstream(), "关闭"))
 	add("stickTtl", "会话粘性有效期", "stickTtl",
-		"STICK_TTL", firstNonEmpty(cfg.StickTTL, "60m"))
+		"STICK_TTL", firstNonEmpty(s.store.StickTTL(), "60m"))
+	add("maxConcurrentRequests", "全局生成并发上限", "maxConcurrentRequests",
+		"MAX_CONCURRENT_REQUESTS", strconv.Itoa(s.store.MaxConcurrentRequests()))
+	add("maxConcurrentRequestsPerKey", "单密钥生成并发上限", "maxConcurrentRequestsPerKey",
+		"MAX_CONCURRENT_REQUESTS_PER_KEY", strconv.Itoa(s.store.MaxConcurrentRequestsPerKey()))
 
 	// Credentials are reported as presence only: the console shows which layer
 	// supplied them without ever echoing the secret.
 	rows = append(rows,
 		effectiveSettingView{
 			Key: "proxyKey", Label: "代理主密钥（客户端）", Secret: true,
-			Value:  presence(cfg.ProxyKey),
-			Source: settingSource("PROXY_KEY", "proxyKey", fileKeys, cfg.ProxyKey),
+			Value:  presence(s.store.ProxyKey()),
+			Source: settingSource("PROXY_KEY", "proxyKey", fileKeys, s.store.ProxyKey()),
 		},
 		effectiveSettingView{
 			Key: "adminKey", Label: "管理密钥（控制台）", Secret: true,
-			Value:  presence(effectiveAdminKey(cfg)),
-			Source: settingSource("ADMIN_KEY", "adminKey", fileKeys, cfg.AdminKey),
+			Value:  presence(s.store.AdminKey()),
+			Source: settingSource("ADMIN_KEY", "adminKey", fileKeys, s.store.AdminKey()),
 		},
 	)
 	return rows
@@ -114,13 +116,6 @@ func environmentMatches(envName, raw, effective string) bool {
 	default:
 		return strings.EqualFold(strings.TrimSpace(raw), strings.TrimSpace(effective))
 	}
-}
-
-func effectiveAdminKey(cfg model.Config) string {
-	if cfg.AdminKey != "" {
-		return cfg.AdminKey
-	}
-	return cfg.ProxyKey
 }
 
 func presence(value string) string {

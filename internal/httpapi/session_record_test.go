@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
 
 // The console has to be able to answer "why does THIS thread keep landing on

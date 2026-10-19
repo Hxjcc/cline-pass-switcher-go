@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   Boxes,
@@ -16,15 +16,10 @@ import {
 import { toast } from "sonner"
 
 import { BrandMark } from "@/components/brand-mark"
-import { AccountsPanel } from "@/components/accounts-panel"
-import { HistoryPanel } from "@/components/history-panel"
-import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
 import { ModelsPanel } from "@/components/models-panel"
-import { SecurityPanel } from "@/components/security-panel"
 import { StorageAlert } from "@/components/storage-alert"
-import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -54,6 +49,26 @@ import type {
 
 const TAB_STORAGE = "cline-pass-switcher-tab"
 
+const AccountsPanel = lazy(() =>
+  import("@/components/accounts-panel").then(({ AccountsPanel: panel }) => ({ default: panel })),
+)
+const HistoryPanel = lazy(() =>
+  import("@/components/history-panel").then(({ HistoryPanel: panel }) => ({ default: panel })),
+)
+const KeysPanel = lazy(() =>
+  import("@/components/keys-panel").then(({ KeysPanel: panel }) => ({ default: panel })),
+)
+const SecurityPanel = lazy(() =>
+  import("@/components/security-panel").then(({ SecurityPanel: panel }) => ({ default: panel })),
+)
+const TestBench = lazy(() =>
+  import("@/components/test-bench").then(({ TestBench: panel }) => ({ default: panel })),
+)
+
+function PanelFallback() {
+  return <div className="text-muted-foreground py-10 text-center text-sm">加载中…</div>
+}
+
 const TABS = [
   { value: "overview", label: "模型与上游", icon: Boxes },
   { value: "accounts", label: "账号池", icon: Users },
@@ -65,8 +80,12 @@ const TABS = [
 
 // The session may remember a tab this build no longer has.
 function initialTab() {
-  const stored = sessionStorage.getItem(TAB_STORAGE)
-  return TABS.some((item) => item.value === stored) ? stored! : "overview"
+  try {
+    const stored = sessionStorage.getItem(TAB_STORAGE)
+    return TABS.some((item) => item.value === stored) ? stored! : "overview"
+  } catch {
+    return "overview"
+  }
 }
 
 function App() {
@@ -172,7 +191,11 @@ function App() {
   }, [accounts, history, historyTotal, historyHasMore, historyCursor, historyQuery, keys, meta, models, security])
 
   useEffect(() => {
-    sessionStorage.setItem(TAB_STORAGE, tab)
+    try {
+      sessionStorage.setItem(TAB_STORAGE, tab)
+    } catch {
+      // Storage is optional in restricted browser contexts.
+    }
   }, [tab])
 
   const login = async (key: string, remember = false) => {
@@ -603,63 +626,75 @@ function App() {
 
           <TabsContent value="accounts" keepMounted={visitedTabs.has("accounts")}>
             {accounts && (
-              <AccountsPanel
-                data={accounts}
-                onSave={saveAccounts}
-                onTest={testAccount}
-                onReveal={revealAccounts}
-                onQuota={loadQuota}
-              />
+              <Suspense fallback={<PanelFallback />}>
+                <AccountsPanel
+                  data={accounts}
+                  onSave={saveAccounts}
+                  onTest={testAccount}
+                  onReveal={revealAccounts}
+                  onQuota={loadQuota}
+                />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="security" keepMounted={visitedTabs.has("security")}>
             {security && (
-              <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+              <Suspense fallback={<PanelFallback />}>
+                <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="keys" keepMounted={visitedTabs.has("keys")}>
             {keys && accounts && (
-              <KeysPanel
-                data={keys}
-                accounts={accounts}
-                proxyBase={proxyBase}
-                onSave={saveKeys}
-                onReveal={revealKeys}
-                onReset={resetKeyUsage}
-              />
+              <Suspense fallback={<PanelFallback />}>
+                <KeysPanel
+                  data={keys}
+                  accounts={accounts}
+                  proxyBase={proxyBase}
+                  onSave={saveKeys}
+                  onReveal={revealKeys}
+                  onReset={resetKeyUsage}
+                />
+              </Suspense>
             )}
           </TabsContent>
 
           <TabsContent value="test">
-            {models && <TestBench models={models.subscription} onTest={testModel} />}
+            {models && (
+              <Suspense fallback={<PanelFallback />}>
+                <TestBench models={models.subscription} onTest={testModel} />
+              </Suspense>
+            )}
           </TabsContent>
 
           <TabsContent value="history">
-            <HistoryPanel
-              history={history}
-              total={historyTotal}
-              hasMore={historyHasMore}
-              pending={historyPending}
-              query={historyQuery}
-              onQueryChange={applyHistoryQuery}
-              onRefresh={async () => {
-                try {
-                  await refreshHistory()
-                } catch (error) {
-                  handleError(error)
-                }
-              }}
-              onLoadMore={async () => {
-                try {
-                  await loadMoreHistory()
-                } catch (error) {
-                  handleError(error)
-                }
-              }}
-              onClear={clearHistory}
-            />
+            <Suspense fallback={<PanelFallback />}>
+              <HistoryPanel
+                history={history}
+                total={historyTotal}
+                hasMore={historyHasMore}
+                pending={historyPending}
+                query={historyQuery}
+                onQueryChange={applyHistoryQuery}
+                onRefresh={async () => {
+                  try {
+                    await refreshHistory()
+                  } catch (error) {
+                    handleError(error)
+                  }
+                }}
+                onLoadMore={async () => {
+                  try {
+                    await loadMoreHistory()
+                  } catch (error) {
+                    handleError(error)
+                  }
+                }}
+                onClear={clearHistory}
+              />
+            </Suspense>
           </TabsContent>
         </Tabs>
       </main>

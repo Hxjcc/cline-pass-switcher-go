@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/sse"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/sse"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 var (

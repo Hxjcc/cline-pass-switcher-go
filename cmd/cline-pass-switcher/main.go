@@ -13,14 +13,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/httpapi"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/webassets"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/buildinfo"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/httpapi"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/webassets"
 )
 
 func main() {
+	log.Printf("Cline Pass Switcher %s", buildinfo.Version)
 	dataDir := stringsOrDefault(os.Getenv("DATA_DIR"), ".")
 	st, err := store.Open(dataDir)
 	if err != nil {
@@ -44,7 +46,10 @@ func main() {
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// Bound request-body reads without imposing a response deadline:
+		// streaming generations legitimately outlive this value.
+		ReadTimeout: 10 * time.Minute,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	if !st.IsConfigured() {

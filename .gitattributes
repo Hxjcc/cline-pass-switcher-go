@@ -1,1 +1,11 @@
+* text=auto eol=lf
+
 *.sh text eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+web/** text eol=lf
+
+# Vite writes these with LF; treating them as binary prevents Windows
+# core.autocrlf from dirtying the tree after every build.
+internal/webassets/dist/** -text

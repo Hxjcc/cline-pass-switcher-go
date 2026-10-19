@@ -3,7 +3,7 @@ package responses
 import (
 	"strings"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/jsonx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
 
 // MapChatSearchTools replaces a client-declared web_search tool with the

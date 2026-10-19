@@ -7,6 +7,11 @@ import (
 
 const DefaultUpstreamBase = "https://api.cline.bot/api/v1"
 
+const (
+	DefaultMaxConcurrentRequests       = 128
+	DefaultMaxConcurrentRequestsPerKey = 8
+)
+
 // HistoryLimit is how many request records a data directory keeps. The console
 // pages through them; the oldest entry beyond this is dropped on write.
 const HistoryLimit = 500
@@ -106,12 +111,17 @@ type Config struct {
 	// response content", which costs a wasted pass plus a retry.
 	CompactionReasoningEffort string `json:"compactionReasoningEffort,omitempty"`
 	// CompactionMinOutputTokens is the output floor for compaction turns.
-	CompactionMinOutputTokens int       `json:"compactionMinOutputTokens,omitempty"`
-	UpstreamBase              string    `json:"upstreamBase"`
-	Accounts                  []Account `json:"accounts"`
-	AccountMode               string    `json:"accountMode"`
-	ActiveAccount             int       `json:"activeAccount"`
-	KnownModels               []string  `json:"knownModels"`
+	CompactionMinOutputTokens int `json:"compactionMinOutputTokens,omitempty"`
+	// MaxConcurrentRequests bounds generation requests in flight across all
+	// clients. MaxConcurrentRequestsPerKey bounds one issued key (and the
+	// master-key bucket). Zero resolves to the built-in default at startup.
+	MaxConcurrentRequests       int       `json:"maxConcurrentRequests,omitempty"`
+	MaxConcurrentRequestsPerKey int       `json:"maxConcurrentRequestsPerKey,omitempty"`
+	UpstreamBase                string    `json:"upstreamBase"`
+	Accounts                    []Account `json:"accounts"`
+	AccountMode                 string    `json:"accountMode"`
+	ActiveAccount               int       `json:"activeAccount"`
+	KnownModels                 []string  `json:"knownModels"`
 	// Models the user removed from the subscription list. The official
 	// catalog fetch skips these so a deletion is not undone on the next sync;
 	// a successful live request re-subscribes the model.
@@ -324,16 +334,18 @@ type Metadata struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Port:                      3123,
-		ProxyKey:                  "",
-		PublicBaseURL:             "",
-		CompactionRecentTokens:    DefaultCompactionRecentTokens,
-		CompactionReasoningEffort: DefaultCompactionReasoningEffort,
-		CompactionMinOutputTokens: DefaultCompactionMinOutputTokens,
-		UpstreamBase:              DefaultUpstreamBase,
-		Accounts:                  []Account{},
-		AccountMode:               "single",
-		ActiveAccount:             0,
+		Port:                        3123,
+		ProxyKey:                    "",
+		PublicBaseURL:               "",
+		CompactionRecentTokens:      DefaultCompactionRecentTokens,
+		CompactionReasoningEffort:   DefaultCompactionReasoningEffort,
+		CompactionMinOutputTokens:   DefaultCompactionMinOutputTokens,
+		MaxConcurrentRequests:       DefaultMaxConcurrentRequests,
+		MaxConcurrentRequestsPerKey: DefaultMaxConcurrentRequestsPerKey,
+		UpstreamBase:                DefaultUpstreamBase,
+		Accounts:                    []Account{},
+		AccountMode:                 "single",
+		ActiveAccount:               0,
 		// A fresh install starts with an empty subscription; the console's
 		// 拉取 button fills it from models.dev, and any model a client actually
 		// uses is appended by the store once the request succeeds.
@@ -371,18 +383,6 @@ func EmptyMetadata() Metadata {
 		Stats:    map[string]AccountStats{},
 		KeyUsage: map[string]KeyUsage{},
 	}
-}
-
-func Clone[T any](value T) T {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return value
-	}
-	var clone T
-	if err := json.Unmarshal(raw, &clone); err != nil {
-		return value
-	}
-	return clone
 }
 
 func DecodeStrict(data []byte, target any) error {

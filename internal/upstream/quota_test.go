@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
 )
 
 const quotaPlanBody = `{"data":{"userId":"usr-1","plan":{"id":"pln-1","name":"Cline Pass (Monthly)[Internal]","displayName":"Cline Pass (Monthly)","entitlements":{"cline_pass":{"enabled":true,"inferenceCapThreshold":{"last5HoursUsageCostUSDPerUser":1000000000,"last7daysUsageCostUSDPerUser":2500000000,"last30daysUsageCostUSDPerUser":5000000000}}},"isActive":true},"subscriptionId":"sub-1","currentPeriodStart":"2026-09-14T16:23:10Z","currentPeriodEnd":"2026-10-14T16:23:10Z"},"success":true}`

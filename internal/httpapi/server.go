@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	responsesbridge "github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/responses"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/strx"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 type Server struct {
@@ -34,6 +34,7 @@ type Server struct {
 	shares         *streamShareHub
 	adminThrottle  *authThrottle
 	clientThrottle *authThrottle
+	limiter        *concurrencyLimiter
 	// requests counts running handlers, so Shutdown can wait for their
 	// history records before the store closes.
 	requests sync.WaitGroup
@@ -73,6 +74,7 @@ func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, err
 		shares:         newStreamShareHub(),
 		adminThrottle:  newAuthThrottle(),
 		clientThrottle: newAuthThrottle(),
+		limiter:        newConcurrencyLimiter(st.MaxConcurrentRequests(), st.MaxConcurrentRequestsPerKey()),
 	}, nil
 }
 
@@ -169,6 +171,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		defer spendHoldFrom(request.Context()).Release()
+		if isGenerationRequest(request) {
+			key := "master"
+			if caller, ok := callerKeyFrom(request.Context()); ok && caller.ID != "" {
+				key = caller.ID
+			}
+			release, allowed := s.limiter.acquire(key)
+			if !allowed {
+				writeConcurrencyLimit(writer)
+				return
+			}
+			defer release()
+		}
 	} else if strings.HasPrefix(path, "/api/") {
 		if !s.authorizeAdmin(writer, request) {
 			return
@@ -240,20 +254,19 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request) {
-	cfg := s.store.Config()
-	meta := s.store.Metadata()
-	subscription := make([]map[string]any, 0, len(cfg.KnownModels))
-	for _, id := range cfg.KnownModels {
+	snapshot := s.store.ModelsSnapshot()
+	subscription := make([]map[string]any, 0, len(snapshot.KnownModels))
+	for _, id := range snapshot.KnownModels {
 		subscription = append(subscription, map[string]any{
 			"id":     id,
-			"config": modelConfigView(cfg.PerModel[id]),
-			"meta":   meta.Models[id],
+			"config": modelConfigView(snapshot.PerModel[id]),
+			"meta":   snapshot.Models[id],
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"subscription":  subscription,
-		"proxyBase":     s.publicProxyBase(cfg),
-		"officialFetch": meta.OfficialModelsFetch,
+		"proxyBase":     publicProxyBaseFor(snapshot.PublicBase, snapshot.Port),
+		"officialFetch": snapshot.Official,
 	})
 }
 
@@ -278,15 +291,14 @@ func (s *Server) handleProbe(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) handleGetAccounts(writer http.ResponseWriter, request *http.Request) {
-	cfg := s.store.Config()
-	meta := s.store.Metadata()
 	// Stored keys are opt-in: only an explicit reveal returns them.
 	reveal := request.URL.Query().Get("reveal") == "1"
+	snapshot := s.store.AccountsSnapshot()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"accounts": accountViews(cfg.Accounts, reveal),
-		"mode":     cfg.AccountMode,
-		"active":   cfg.ActiveAccount,
-		"stats":    meta.Stats,
+		"accounts": accountViews(snapshot.Accounts, reveal),
+		"mode":     snapshot.Mode,
+		"active":   snapshot.Active,
+		"stats":    snapshot.Stats,
 	})
 }
 
@@ -462,7 +474,7 @@ func (s *Server) handleRemoveModel(writer http.ResponseWriter, request *http.Req
 		writeInternalError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "total": len(s.store.Config().KnownModels)})
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "total": len(s.store.KnownModels())})
 }
 
 const (
@@ -475,7 +487,7 @@ const (
 // shows, so a long log does not turn every refresh into a full dump.
 func (s *Server) handleHistory(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
-	entries := filterHistory(s.store.Metadata().History, strings.TrimSpace(query.Get("q")), query.Get("result"))
+	entries := filterHistory(s.store.History(), strings.TrimSpace(query.Get("q")), query.Get("result"))
 	limit := clampQueryInt(query.Get("limit"), defaultHistoryPage, 1, maxHistoryPage)
 	offset := clampQueryInt(query.Get("offset"), 0, 0, len(entries))
 	if cursor := query.Get("cursor"); cursor != "" {
@@ -574,9 +586,8 @@ func (s *Server) handleClearHistory(writer http.ResponseWriter) {
 }
 
 func (s *Server) handleGetConfig(writer http.ResponseWriter) {
-	cfg := s.store.Config()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"port": cfg.Port, "perModel": cfg.PerModel, "knownModels": cfg.KnownModels,
+		"port": s.store.Port(), "perModel": s.store.PerModelConfigs(), "knownModels": s.store.KnownModels(),
 	})
 }
 
@@ -618,7 +629,7 @@ func (s *Server) handleSaveConfig(writer http.ResponseWriter, request *http.Requ
 
 // handleListModels advertises exactly the subscription the console shows.
 func (s *Server) handleListModels(writer http.ResponseWriter) {
-	ids := strx.UniqueTrimmed(s.store.Config().KnownModels)
+	ids := strx.UniqueTrimmed(s.store.KnownModels())
 	data := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
 		data = append(data, map[string]any{"id": id, "object": "model"})
@@ -673,6 +684,25 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 	result := s.runNonStreamChain(request.Context(), body.Model, chatBody, modelConfig, 180*time.Second)
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
+		if message == "" {
+			message = "upstream returned no response"
+		}
+		s.record(request.Context(), model.HistoryEntry{
+			TS:        time.Now().UnixMilli(),
+			Model:     body.Model,
+			Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
+			Canonical: result.Routing.CanonicalSlug,
+			MS:        time.Since(started).Milliseconds(),
+			Stream:    false,
+			Kind:      "test",
+			Effort:    effortFromChatBody(chatBody),
+			Error:     &message,
+			Account:   result.Account.Name,
+			AccountID: result.Account.ID,
+			Attempts:  traceUpstreams(result.Trace),
+			Trace:     result.Trace,
+			Usage:     result.Usage,
+		})
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"ok": false, "error": strx.Truncate(message, 400), "targets": modelConfig.Upstreams, "exclude": modelConfig.Exclude, "trace": result.Trace,
 		})
@@ -931,6 +961,19 @@ func (s *Server) serveStatic(writer http.ResponseWriter, request *http.Request) 
 	} else {
 		writer.Header().Set("Cache-Control", "no-cache")
 	}
+	if compressibleStatic(path) {
+		writer.Header().Add("Vary", "Accept-Encoding")
+	}
+	compress := request.Method == http.MethodGet &&
+		request.Header.Get("Range") == "" &&
+		compressibleStatic(path) &&
+		acceptsGzip(request)
+	if compress {
+		writer.Header().Set("Content-Encoding", "gzip")
+		compressor := gzip.NewWriter(writer)
+		defer func() { _ = compressor.Close() }()
+		writer = gzipResponseWriter{ResponseWriter: writer, compressor: compressor}
+	}
 	if path == "" {
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		writer.WriteHeader(http.StatusOK)
@@ -965,11 +1008,26 @@ func writeThrottled(writer http.ResponseWriter, delay time.Duration) {
 	})
 }
 
+func writeConcurrencyLimit(writer http.ResponseWriter) {
+	writer.Header().Set("Retry-After", "1")
+	writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+		"error": map[string]any{
+			"message": "并发请求数已达上限，请稍后重试",
+			"type":    "rate_limit_error",
+			"code":    "concurrency_limit",
+		},
+	})
+}
+
 func (s *Server) publicProxyBase(cfg model.Config) string {
-	if cfg.PublicBaseURL != "" {
-		return strings.TrimRight(cfg.PublicBaseURL, "/") + "/v1"
+	return publicProxyBaseFor(cfg.PublicBaseURL, cfg.Port)
+}
+
+func publicProxyBaseFor(publicBaseURL string, port int) string {
+	if publicBaseURL != "" {
+		return strings.TrimRight(publicBaseURL, "/") + "/v1"
 	}
-	return "http://127.0.0.1:" + strconv.Itoa(cfg.Port) + "/v1"
+	return "http://127.0.0.1:" + strconv.Itoa(port) + "/v1"
 }
 
 // A model without saved routing preferences still reports its lists as empty
@@ -1033,9 +1091,31 @@ type gzipResponseWriter struct {
 	compressor *gzip.Writer
 }
 
+func (writer gzipResponseWriter) WriteHeader(status int) {
+	// FileServer derives Content-Length from the uncompressed file. Once the
+	// body is gzipped, letting that header through would truncate the body.
+	writer.Header().Del("Content-Length")
+	writer.ResponseWriter.WriteHeader(status)
+}
+
 func (writer gzipResponseWriter) Write(data []byte) (int, error) {
 	return writer.compressor.Write(data)
 }
+
+func compressibleStatic(path string) bool {
+	path = strings.ToLower(path)
+	if path == "" || path == "index.html" {
+		return true
+	}
+	for _, suffix := range staticCompressibleSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+var staticCompressibleSuffixes = [...]string{".js", ".mjs", ".css", ".svg", ".html", ".json", ".txt", ".map"}
 
 // acceptsGzip reports whether the request advertises gzip with a non-zero
 // quality, which is what browsers send for fetch() by default.

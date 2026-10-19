@@ -9,9 +9,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/model"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/store"
-	"github.com/munmunjaklin458-afk/cline-pass-switcher-go/internal/upstream"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/store"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // Production only permits loopback hosts before a proxy key is configured.
@@ -39,6 +39,7 @@ func newTestServerInDir(t *testing.T, dir string) (*store.Store, *Server) {
 		"CLINE_PASS_KEY", "PROXY_KEY", "ADMIN_KEY", "PUBLIC_BASE_URL", "PORT",
 		"COMPACTION_RECENT_TOKENS", "COMPACTION_REASONING_EFFORT", "COMPACTION_MIN_OUTPUT_TOKENS",
 		"SHELL_COMPAT", "SHELL_COMPAT_ENFORCE", "WEB_SEARCH_UPSTREAM", "WEB_FETCH_UPSTREAM",
+		"MAX_CONCURRENT_REQUESTS", "MAX_CONCURRENT_REQUESTS_PER_KEY",
 	} {
 		t.Setenv(name, "")
 	}
