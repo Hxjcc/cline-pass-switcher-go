@@ -45,7 +45,7 @@ jobs:
       - name: Verify embedded frontend matches source
         # Dependabot PRs are repaired after merge by sync-dist.yml. Human PRs
         # still have to keep the checked-in artifact in sync before merge.
-        if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
         run: |
           git diff --exit-code -- internal/webassets/dist
           test -z "$(git ls-files --others --exclude-standard -- internal/webassets/dist)"
