@@ -465,7 +465,7 @@ func compactionEntry(
 }
 
 // compactionMinOutputTokens is the built-in output floor for compaction turns;
-// the configured floor can only raise it.
+// the configured floor can raise it, before the model's output cap is applied.
 // Reasoning models can otherwise spend the entire budget on hidden thinking
 // and the upstream answers "empty response content"; see ensureCompactionBudget.
 const compactionMinOutputTokens = 4096
@@ -475,9 +475,14 @@ func (s *Server) ensureCompactionBudget(chatBody map[string]any) {
 	if floor < compactionMinOutputTokens {
 		floor = compactionMinOutputTokens
 	}
-	if positiveInt(chatBody["max_tokens"]) < floor {
-		chatBody["max_tokens"] = floor
+	tokens := positiveInt(chatBody["max_tokens"])
+	if tokens < floor {
+		tokens = floor
 	}
+	if limit := s.store.ModelMeta(jsonx.String(chatBody["model"])).OutputLimit; limit > 0 && tokens > limit {
+		tokens = limit
+	}
+	chatBody["max_tokens"] = tokens
 }
 
 // compactionConvert adapts a completed Chat response to the compaction shape
@@ -515,18 +520,23 @@ func (s *Server) runCompactionChain(
 	if compactionStarved(result, err) && ctx.Err() == nil {
 		retryBody := maps.Clone(chatBody)
 		responsesbridge.EscalateCompactionBudget(retryBody, s.store.ModelMeta(modelID).ReasoningEfforts)
-		bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
-		if effort := effortFromChatBody(retryBody); effort != "" {
-			bridgeContext.MappedReasoningEffort = effort
+		s.ensureCompactionBudget(retryBody)
+		// A model already at its output cap and strongest effort cannot get
+		// a larger retry. Repeating the same request only spends again.
+		if positiveInt(retryBody["max_tokens"]) > positiveInt(chatBody["max_tokens"]) || effortFromChatBody(retryBody) != effortFromChatBody(chatBody) {
+			bridgeContext.MaxOutputTokens = retryBody["max_tokens"]
+			if effort := effortFromChatBody(retryBody); effort != "" {
+				bridgeContext.MappedReasoningEffort = effort
+			}
+			escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
+			escalated.Usage = addUsage(result.Usage, escalated.Usage)
+			escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
+			compaction, err = convertCompaction(escalated, bridgeContext, convert)
+			if err == nil {
+				return escalated, compaction, nil
+			}
+			result = escalated
 		}
-		escalated := s.runNonStreamChain(ctx, modelID, retryBody, modelConfig, s.upstream.NonStreamTimeout())
-		escalated.Usage = addUsage(result.Usage, escalated.Usage)
-		escalated.Trace = append(append([]model.Trace(nil), result.Trace...), escalated.Trace...)
-		compaction, err = convertCompaction(escalated, bridgeContext, convert)
-		if err == nil {
-			return escalated, compaction, nil
-		}
-		result = escalated
 	}
 	if degrade == nil || ctx.Err() != nil {
 		return result, nil, err

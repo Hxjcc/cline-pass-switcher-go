@@ -53,6 +53,8 @@ type Context struct {
 	// compactionRecent is the verbatim tail embedded in compaction items; it
 	// survives the summary so exact paths, commands and errors are not lost.
 	compactionRecent []CompactionRecentMessage
+	// The last successful summary remains a fallback across failed compactions.
+	compactionPreviousSummary string
 	// shellCompat restricts forwarded tool schemas that declare a "shell"
 	// parameter to this value and marks the parameter required. Empty keeps
 	// the client's own schema untouched.
@@ -403,6 +405,13 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	}
 	restoreCompaction := func(payload CompactionPayload) {
 		compactionSummaries = append(compactionSummaries, payload.Summary)
+		previous := payload.Summary
+		if payload.Degraded {
+			previous = payload.PreviousSummary
+		}
+		if strings.TrimSpace(previous) != "" {
+			context.compactionPreviousSummary = previous
+		}
 		flushPending()
 		attachReasoningToLastAssistant()
 		// Only the history before this item can duplicate its retained tail.

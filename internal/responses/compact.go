@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 )
@@ -30,7 +31,7 @@ The single next action to take, plus pending work and open questions.
 ## Relevant Files
 Files, directories, endpoints or config keys that matter, one line each.
 
-Keep every fact another model needs to continue accurately; drop small talk. Thinking alone is not a summary.`
+Keep every fact another model needs to continue accurately; drop small talk. For images, describe the visually relevant facts needed for the task, rather than only stating that an image was attached. Thinking alone is not a summary.`
 
 const (
 	// maxCompactionRecentMessageRunes caps one ordinary user/assistant message.
@@ -112,9 +113,10 @@ type CompactionRecentMessage struct {
 // CompactionPayload is what the ocx1: envelope carries. Older envelopes hold
 // the summary text directly; decoding still accepts those.
 type CompactionPayload struct {
-	Summary  string                    `json:"summary"`
-	Recent   []CompactionRecentMessage `json:"recent,omitempty"`
-	Degraded bool                      `json:"degraded,omitempty"`
+	Summary         string                    `json:"summary"`
+	Recent          []CompactionRecentMessage `json:"recent,omitempty"`
+	Degraded        bool                      `json:"degraded,omitempty"`
+	PreviousSummary string                    `json:"previous_summary,omitempty"`
 }
 
 func ToCompactionChatWithOptions(body map[string]any, options Options) (map[string]any, *Context, error) {
@@ -150,11 +152,15 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 		// does not produce an empty or misleading summary.
 		summaryEnd = len(history)
 	}
+	// Text excerpts cannot replace the rest of a long message or its images.
+	// Include those original turns in the summary even when their excerpts
+	// also belong to the retained tail.
+	summaryEnd = compactionSummaryBoundary(history, summaryEnd)
 	context.compactionRecent = tail
 
 	summaryInstructions := compactionInstructions
 	if tailSelected {
-		if transcript := compactionToolTranscript(history); transcript != "" {
+		if transcript := compactionToolTranscript(history[summaryEnd:]); transcript != "" {
 			summaryInstructions += "\n\nTool activity transcript (use it for Work State; exact excerpts):\n" + transcript
 		}
 	}
@@ -189,6 +195,37 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	context.outputSchema = nil
 	context.ParallelToolCalls = false
 	return chat, context, nil
+}
+
+func compactionSummaryBoundary(messages []any, cut int) int {
+	end := cut
+	for index := cut; index < len(messages); index++ {
+		message := jsonx.Map(messages[index])
+		role := jsonx.String(message["role"])
+		needsSummary := false
+		if role == "user" || role == "assistant" {
+			needsSummary = utf8.RuneCountInString(collectPartText(message["content"])) > maxCompactionRecentMessageRunes
+			for _, raw := range jsonx.Slice(message["content"]) {
+				if kind := jsonx.String(jsonx.Map(raw)["type"]); kind != "" && kind != "text" {
+					needsSummary = true
+				}
+			}
+			for _, raw := range jsonx.Slice(message["tool_calls"]) {
+				function := jsonx.Map(jsonx.Map(raw)["function"])
+				if utf8.RuneCountInString(jsonx.String(function["arguments"])) > 500 {
+					needsSummary = true
+				}
+			}
+		}
+		if needsSummary {
+			end = index + 1
+			// Never cut between an assistant's calls and their tool results.
+			for end < len(messages) && jsonx.String(jsonx.Map(messages[end])["role"]) == "tool" {
+				end++
+			}
+		}
+	}
+	return end
 }
 
 // compactionGroup keeps an assistant tool call together with its tool results
@@ -388,6 +425,16 @@ func compactionToolTranscript(messages []any) string {
 	)
 	lines := make([]string, 0, 8)
 	total := 0
+	add := func(line string) {
+		line = compactCleanedToolOutput(line, maxLineRunes)
+		lines = append(lines, line)
+		total += len([]rune(line)) + 1
+		for total > maxTotalRunes && len(lines) > 0 {
+			total -= len([]rune(lines[0])) + 1
+			lines[0] = ""
+			lines = lines[1:]
+		}
+	}
 	for _, raw := range messages {
 		message := jsonx.Map(raw)
 		if message == nil {
@@ -407,11 +454,7 @@ func compactionToolTranscript(messages []any) string {
 					arguments = "{}"
 				}
 				line := "- assistant called " + name + " with arguments " + truncateText(arguments, maxLineRunes)
-				if total+len([]rune(line)) > maxTotalRunes {
-					return strings.Join(lines, "\n")
-				}
-				lines = append(lines, line)
-				total += len([]rune(line))
+				add(line)
 			}
 		case "tool":
 			callID := strings.TrimSpace(jsonx.String(message["tool_call_id"]))
@@ -424,11 +467,7 @@ func compactionToolTranscript(messages []any) string {
 				label += " (" + callID + ")"
 			}
 			line := label + ": " + compactToolOutput(text, maxLineRunes)
-			if total+len([]rune(line)) > maxTotalRunes {
-				return strings.Join(lines, "\n")
-			}
-			lines = append(lines, line)
-			total += len([]rune(line))
+			add(line)
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -633,9 +672,10 @@ func degradedCompactionItem(context *Context, reason, partial string) map[string
 		"id":   newID("cmp"),
 		"type": "compaction",
 		"encrypted_content": encodeCompactionPayload(CompactionPayload{
-			Summary:  degradedCompactionSummary(context, reason, partial),
-			Recent:   context.compactionRecent,
-			Degraded: true,
+			Summary:         degradedCompactionSummary(context, reason, partial),
+			Recent:          context.compactionRecent,
+			Degraded:        true,
+			PreviousSummary: context.compactionPreviousSummary,
 		}),
 	}
 }
@@ -652,9 +692,9 @@ func PartialCompactionSummary(chat map[string]any) string {
 	return strings.TrimSpace(collectPartText(jsonx.Map(choice["message"])["content"]))
 }
 
-// degradedCompactionSummary keeps the compaction shape (the four headings) so
-// the next model still gets a usable handoff, and preserves the most recent
-// user requests verbatim because everything older is gone.
+// degradedCompactionSummary preserves the last successful summary when one
+// exists. Without it, only the retained recent messages and partial new
+// summary remain available.
 func degradedCompactionSummary(context *Context, reason, partial string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -683,19 +723,34 @@ func degradedCompactionSummary(context *Context, reason, partial string) string 
 	builder.WriteString("[compaction degraded] The earlier conversation could not be summarized: ")
 	builder.WriteString(truncateText(reason, 200))
 	builder.WriteString("\n\n## Objective\n")
-	if len(recent) > 0 {
+	previous := strings.TrimSpace(context.compactionPreviousSummary)
+	if previous != "" {
+		builder.WriteString("Continue the objective in the last successful summary below, subject to newer user requests.\n")
+	} else if len(recent) > 0 {
 		builder.WriteString("Unknown beyond the recent user requests preserved below.\n")
 	} else {
 		builder.WriteString("Unknown: the earlier conversation is no longer available.\n")
 	}
-	builder.WriteString("\n## Work State\nUnavailable: summarization failed, so completed work and tool results from earlier turns were dropped.\n")
+	builder.WriteString("\n## Work State\n")
+	if previous != "" {
+		builder.WriteString("The last successful summary is preserved. Progress after it may be missing except for the recent messages.\n\n<last_successful_summary>\n")
+		builder.WriteString(previous)
+		builder.WriteString("\n</last_successful_summary>\n")
+	} else {
+		builder.WriteString("Unavailable: summarization failed, so completed work and tool results from earlier turns were dropped.\n")
+	}
 	if partial = strings.TrimSpace(partial); partial != "" {
 		builder.WriteString("\nPartial summary produced before the failure (may be cut off):\n")
 		builder.WriteString(partial)
 		builder.WriteString("\n")
 	}
-	builder.WriteString("\n## Next Move\nRe-read the recent user requests below and continue from the last one; ask the user to restate the goal if it is unclear.\n")
-	builder.WriteString("\n## Relevant Files\nUnknown: recover paths from the recent requests below.\n")
+	if previous != "" {
+		builder.WriteString("\n## Next Move\nUse the last successful summary together with newer retained messages, verify intervening progress, and continue the latest request.\n")
+		builder.WriteString("\n## Relevant Files\nRecover paths from the last successful summary and the recent messages.\n")
+	} else {
+		builder.WriteString("\n## Next Move\nRe-read the recent user requests below and continue from the last one; ask the user to restate the goal if it is unclear.\n")
+		builder.WriteString("\n## Relevant Files\nUnknown: recover paths from the recent requests below.\n")
+	}
 	if len(recent) > 0 {
 		builder.WriteString("\n---\nRecent user requests (verbatim, oldest first):\n")
 		for _, text := range recent {
