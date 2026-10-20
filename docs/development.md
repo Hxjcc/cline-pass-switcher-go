@@ -93,7 +93,11 @@ Dependabot 每月检查一次 Go、npm 和 GitHub Actions 依赖；`minor` / `pa
 更新会按生态合并成一个 PR，`major` 更新保持独立 PR，便于人工判断。依赖 PR
 仍需通过上面的 CI 后才能合并，不启用自动合并。
 
-前端依赖更新会改变打包结果，合并前必须在 `web` 目录执行 `npm ci` 和
-`npm run build`，并把 `internal/webassets/dist` 一起提交；`frontend` 任务
-会检查内嵌产物是否与源码一致。Dependabot 安全更新在 GitHub 仓库设置中单独
-启用。
+人工提交的前端改动如果改变了打包结果，合并前必须在 `web` 目录执行
+`npm ci` 和 `npm run build`，并把 `internal/webassets/dist` 一起提交；
+`frontend` 任务会检查内嵌产物是否与源码一致。
+
+Dependabot 的 npm PR 只要求构建和测试通过，不要求分支里预先提交 dist；
+合并到 `main` 后，`Sync embedded frontend` workflow 会自动重建并提交
+`internal/webassets/dist`。这样依赖更新不会因为生成产物不同而反复失败。
+Dependabot 安全更新在 GitHub 仓库设置中单独启用。
