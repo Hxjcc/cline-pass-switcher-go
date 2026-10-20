@@ -82,9 +82,9 @@ function App() {
     initialSnapshot?.accounts ?? null,
   )
   const [keys, setKeys] = useState<KeysResponse | null>(initialSnapshot?.keys ?? null)
-  const [security, setSecurity] = useState<SecurityResponse | null>(
-    initialSnapshot?.security ?? null,
-  )
+  // Reload snapshots omit credentials. Their empty placeholders must never
+  // become an editable form that could clear the live keys on save.
+  const [security, setSecurity] = useState<SecurityResponse | null>(null)
   const [loginOpen, setLoginOpen] = useState(false)
   const [tab, setTab] = useState(initialTab)
   const [visitedTabs, setVisitedTabs] = useState(() => new Set([tab]))
@@ -653,8 +653,12 @@ function App() {
           </TabsContent>
 
           <TabsContent value="security" keepMounted={visitedTabs.has("security")}>
-            {security && (
+            {security ? (
               <SecurityPanel data={security} proxyBase={proxyBase} onSave={saveSecurity} />
+            ) : (
+              <p className="text-muted-foreground rounded-lg border p-4 text-sm" role="status">
+                访问设置尚未加载，读取完成后即可编辑；读取失败时请点击顶部「刷新」重试。
+              </p>
             )}
           </TabsContent>
 
