@@ -237,7 +237,6 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	pendingToolCalls := make([]any, 0)
 	pendingReasoning := ""
 	compactionSummaries := make([]string, 0, 1)
-	compactionRecent := make([]CompactionRecentMessage, 0, 4)
 	lastAssistantIndex := -1
 	appendReasoning := func(value string) {
 		if strings.TrimSpace(value) == "" {
@@ -402,6 +401,21 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		flushToolCalls()
 		flushAfterToolGroup()
 	}
+	restoreCompaction := func(payload CompactionPayload) {
+		compactionSummaries = append(compactionSummaries, payload.Summary)
+		flushPending()
+		attachReasoningToLastAssistant()
+		// Only the history before this item can duplicate its retained tail.
+		// Later user turns, even identical ones, must remain in the conversation.
+		messages = mergeCompactionRecent(messages, payload.Recent)
+		lastAssistantIndex = -1
+		for index := len(messages) - 1; index >= 0; index-- {
+			if jsonx.String(jsonx.Map(messages[index])["role"]) == "assistant" {
+				lastAssistantIndex = index
+				break
+			}
+		}
+	}
 
 	for _, rawItem := range input {
 		if text, ok := rawItem.(string); ok {
@@ -473,29 +487,13 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 			flushAfterToolGroup()
 		case "compaction":
 			if payload, ok := compactionPayloadFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
-				compactionSummaries = append(compactionSummaries, payload.Summary)
-				for _, message := range payload.Recent {
-					role := strings.TrimSpace(message.Role)
-					text := strings.TrimSpace(message.Text)
-					if (role != "user" && role != "assistant") || text == "" {
-						continue
-					}
-					compactionRecent = append(compactionRecent, CompactionRecentMessage{Role: role, Text: text})
-				}
+				restoreCompaction(payload)
 			} else {
 				compactionSummaries = append(compactionSummaries, "Earlier conversation was compacted, but its details are not readable by this provider.")
 			}
 		case "context_compaction":
 			if payload, ok := compactionPayloadFromEnvelope(jsonx.String(item["encrypted_content"])); ok {
-				compactionSummaries = append(compactionSummaries, payload.Summary)
-				for _, message := range payload.Recent {
-					role := strings.TrimSpace(message.Role)
-					text := strings.TrimSpace(message.Text)
-					if (role != "user" && role != "assistant") || text == "" {
-						continue
-					}
-					compactionRecent = append(compactionRecent, CompactionRecentMessage{Role: role, Text: text})
-				}
+				restoreCompaction(payload)
 			}
 		case "additional_tools":
 			// Responses Lite carries dynamic tool declarations here; they are
@@ -540,18 +538,11 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	} else {
 		pendingReasoning = ""
 	}
-	compactionPrefix := make([]any, 0, len(compactionRecent)+1)
+	compactionPrefix := make([]any, 0, 1)
 	if len(compactionSummaries) > 0 {
 		compactionPrefix = append(compactionPrefix, map[string]any{
 			"role":    "system",
 			"content": "Earlier conversation was compacted. Summary:\n" + strings.Join(compactionSummaries, "\n\n"),
-		})
-	}
-	// Replay the verbatim tail right after the summary so the next model sees
-	// the exact recent turns before the new user message.
-	for _, message := range filterCompactionRecent(compactionRecent, messages) {
-		compactionPrefix = append(compactionPrefix, map[string]any{
-			"role": message.Role, "content": message.Text,
 		})
 	}
 	if len(instructionMessages) > 0 || len(compactionPrefix) > 0 {

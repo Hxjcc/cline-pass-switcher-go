@@ -640,10 +640,14 @@ func TestResponsesCompactEndpointWrapsChatSummary(t *testing.T) {
 	if !ok || payload2.Summary != "condensed history" {
 		t.Fatalf("compaction envelope did not round-trip: %q %#v", envelope, payload2)
 	}
-	// The user turn is already retained verbatim in output[0]; the envelope
-	// must not duplicate it in the recent tail.
-	if len(payload2.Recent) != 0 {
-		t.Fatalf("retained user turn was duplicated in recent: %#v", payload2.Recent)
+	// Replay merges the envelope's user anchor with the retained original.
+	replayed, _, err := responsesbridge.ToChat(map[string]any{"model": "cline-pass/test", "input": output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := replayed["messages"].([]any)
+	if len(messages) != 2 || messages[1].(map[string]any)["content"] != "summarize the conversation" {
+		t.Fatalf("retained user turn was duplicated or lost during replay: %#v", messages)
 	}
 }
 

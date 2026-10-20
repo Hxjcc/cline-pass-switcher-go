@@ -2179,7 +2179,7 @@ func TestCompactionChatTreatsPreviousSummaryAsHistory(t *testing.T) {
 	}
 }
 
-func TestCompactionResponseDedupesRetainedUsers(t *testing.T) {
+func TestCompactionResponseKeepsUserAnchorsInTail(t *testing.T) {
 	body := map[string]any{
 		"model": "test",
 		"input": []any{
@@ -2203,8 +2203,8 @@ func TestCompactionResponseDedupesRetainedUsers(t *testing.T) {
 	if !ok {
 		t.Fatal("compaction envelope did not decode")
 	}
-	if len(payload.Recent) != 0 {
-		t.Fatalf("retained users duplicated inside the envelope: %#v", payload.Recent)
+	if len(payload.Recent) != 2 || payload.Recent[0].Text != "old request" || payload.Recent[1].Text != "recent request" {
+		t.Fatalf("the envelope lost the user anchors needed to restore turn order: %#v", payload.Recent)
 	}
 }
 

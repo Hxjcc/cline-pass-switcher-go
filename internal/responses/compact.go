@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -433,34 +434,65 @@ func compactionToolTranscript(messages []any) string {
 	return strings.Join(lines, "\n")
 }
 
-// filterCompactionRecent drops recent text that is already present in the
-// current request. Codex replays retained user messages alongside a compaction
-// item, so without this filter environment and user messages would appear two
-// or three times in the next model call.
-func filterCompactionRecent(recent []CompactionRecentMessage, messages []any) []CompactionRecentMessage {
-	if len(recent) == 0 {
-		return nil
-	}
-	current := make(map[string]struct{}, len(messages))
-	for _, raw := range messages {
-		message := jsonx.Map(raw)
-		if message == nil {
-			continue
-		}
-		text := strings.TrimSpace(collectPartText(message["content"]))
-		if text == "" {
-			continue
-		}
-		current[jsonx.String(message["role"])+"\x00"+text] = struct{}{}
-	}
-	filtered := make([]CompactionRecentMessage, 0, len(recent))
+// mergeCompactionRecent restores an ordered tail among the messages retained
+// before its compaction item. Matching occurrences are anchors, not a set of
+// text to delete: a repeated user request must keep its corresponding answer.
+// Reusing the original anchor also preserves images and other content parts.
+func mergeCompactionRecent(messages []any, recent []CompactionRecentMessage) []any {
+	type messageKey struct{ role, text string }
+	tail := make([]CompactionRecentMessage, 0, len(recent))
 	for _, message := range recent {
-		if _, found := current[message.Role+"\x00"+strings.TrimSpace(message.Text)]; found {
+		message.Role = strings.TrimSpace(message.Role)
+		message.Text = strings.TrimSpace(message.Text)
+		if (message.Role == "user" || message.Role == "assistant") && message.Text != "" {
+			tail = append(tail, message)
+		}
+	}
+	if len(tail) == 0 {
+		return messages
+	}
+	positions := make(map[messageKey][]int, len(messages))
+	for index, raw := range messages {
+		message := jsonx.Map(raw)
+		key := messageKey{jsonx.String(message["role"]), strings.TrimSpace(collectPartText(message["content"]))}
+		positions[key] = append(positions[key], index)
+	}
+	// Match backwards because recent is the newest part of the conversation.
+	// Each occurrence can anchor once, and anchor order must remain monotonic.
+	anchors := make([]int, len(tail))
+	before := len(messages)
+	for index := len(tail) - 1; index >= 0; index-- {
+		anchors[index] = -1
+		matches := positions[messageKey{tail[index].Role, tail[index].Text}]
+		if match := sort.SearchInts(matches, before) - 1; match >= 0 {
+			anchors[index] = matches[match]
+			before = matches[match]
+		}
+	}
+	merged := make([]any, 0, len(messages)+len(tail))
+	appendTail := func(start, end int) {
+		for _, message := range tail[start:end] {
+			merged = append(merged, map[string]any{"role": message.Role, "content": message.Text})
+		}
+	}
+	cursor, pending := 0, 0
+	for index, anchor := range anchors {
+		if anchor < 0 {
 			continue
 		}
-		filtered = append(filtered, message)
+		merged = append(merged, messages[cursor:anchor]...)
+		appendTail(pending, index)
+		merged = append(merged, messages[anchor])
+		cursor, pending = anchor+1, index+1
 	}
-	return filtered
+	if pending == 0 {
+		// An envelope without any shared messages follows the retained history.
+		merged = append(merged, messages...)
+		appendTail(0, len(tail))
+		return merged
+	}
+	appendTail(pending, len(tail))
+	return append(merged, messages[cursor:]...)
 }
 
 // estimateCompactionTokens approximates the tokenizer closely enough to bound
@@ -579,7 +611,6 @@ func DegradedCompactionResponse(context *Context, reason, partial string) map[st
 	users := context.compactionUsers
 	summaryContext := *context
 	summaryContext.compactionUsers = nil
-	summaryContext.compactionRecent = filterCompactionRecent(context.compactionRecent, users)
 	output := append([]any(nil), users...)
 	output = append(output, degradedCompactionItem(&summaryContext, reason, partial))
 	return map[string]any{
@@ -810,11 +841,12 @@ func CompactionResponse(chat map[string]any, context *Context) (map[string]any, 
 		return nil, err
 	}
 	output := append([]any(nil), context.compactionUsers...)
-	recent := filterCompactionRecent(context.compactionRecent, context.compactionUsers)
 	output = append(output, map[string]any{
-		"id":                newID("cmp"),
-		"type":              "compaction",
-		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: recent}),
+		"id":   newID("cmp"),
+		"type": "compaction",
+		// Keep the complete order in the envelope; replay merges duplicate
+		// users with their original messages, including images.
+		"encrypted_content": encodeCompactionPayload(CompactionPayload{Summary: summary, Recent: context.compactionRecent}),
 	})
 	return map[string]any{
 		"id": response["id"], "object": "response.compaction", "created_at": response["created_at"],
