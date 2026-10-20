@@ -37,7 +37,9 @@ func Truncate(value string, limit int) string {
 	count := 0
 	for index := range value {
 		if count == limit {
-			return value[:index]
+			// History and trace entries keep this result after the response is
+			// gone. Copy the prefix so they do not retain the full input buffer.
+			return strings.Clone(value[:index])
 		}
 		count++
 	}
