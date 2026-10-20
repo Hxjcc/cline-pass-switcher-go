@@ -994,29 +994,34 @@ type StreamAttemptResult struct {
 	Out        map[string]any
 	NetErr     string
 	Account    model.Account
+	// Usage retains billed work even when an error body replaces the response.
+	Usage any
 	// Fatal marks a failure no other channel or account can fix.
 	Fatal bool
 }
 
 func firstSSEPayload(raw []byte, includeTrailing bool) (string, bool) {
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	blocks := strings.Split(text, "\n\n")
-	limit := len(blocks)
-	if !includeTrailing && !strings.HasSuffix(text, "\n\n") {
-		limit--
+	var parser sse.Parser
+	var payload string
+	found := false
+	_ = parser.Feed(raw, func(block string) bool {
+		payload, found = ssePayload(block)
+		return !found
+	})
+	if !found && includeTrailing {
+		payload, found = ssePayload(parser.Finish())
 	}
-	for index := 0; index < limit; index++ {
-		var data []string
-		for _, line := range strings.Split(blocks[index], "\n") {
-			if strings.HasPrefix(line, "data:") {
-				data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-			}
-		}
-		if len(data) > 0 {
-			return strings.Join(data, "\n"), true
+	return payload, found
+}
+
+func ssePayload(block string) (string, bool) {
+	var data []string
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
-	return "", false
+	return strings.Join(data, "\n"), len(data) > 0
 }
 
 func readSSEHead(reader io.Reader) ([]byte, string, error) {
@@ -1025,6 +1030,7 @@ func readSSEHead(reader io.Reader) ([]byte, string, error) {
 	const maxHead = sse.MaxEventBytes
 	result := make([]byte, 0, 4096)
 	buffer := make([]byte, 4096)
+	var parser sse.Parser
 	for len(result) < maxHead {
 		limit := len(buffer)
 		if remaining := maxHead - len(result); remaining < limit {
@@ -1033,13 +1039,22 @@ func readSSEHead(reader io.Reader) ([]byte, string, error) {
 		count, err := reader.Read(buffer[:limit])
 		if count > 0 {
 			result = append(result, buffer[:count]...)
-			if payload, found := firstSSEPayload(result, false); found {
+			var payload string
+			found := false
+			parseErr := parser.Feed(buffer[:count], func(block string) bool {
+				payload, found = ssePayload(block)
+				return !found
+			})
+			if found {
 				return result, payload, nil
+			}
+			if parseErr != nil {
+				return result, "", parseErr
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				if payload, found := firstSSEPayload(result, true); found {
+				if payload, found := ssePayload(parser.Finish()); found {
 					return result, payload, nil
 				}
 			}
@@ -1112,6 +1127,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 				Header:  response.Header.Clone(),
 				Out:     parsed,
 				Account: account,
+				Usage:   responseBody(parsed)["usage"],
 			}
 		}
 		details, found := apierr.FromBody(parsed, response.StatusCode)
@@ -1131,6 +1147,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 			Out:     apierr.Body(details),
 			NetErr:  details.Message,
 			Account: account,
+			Usage:   responseBody(parsed)["usage"],
 			// See the non-streaming path: a pinned key has nothing to fail
 			// over to.
 			Fatal: pinBlocksFailover(ctx, details.Status),
@@ -1158,6 +1175,7 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		s.observeStick(ctx, account, attempt.Upstream, details.Status)
 		return StreamAttemptResult{
 			Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Account: account,
+			Usage: responseBody(firstEvent)["usage"],
 			Fatal: pinBlocksFailover(ctx, details.Status),
 		}
 	}

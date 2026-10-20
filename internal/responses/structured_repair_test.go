@@ -54,8 +54,8 @@ func TestStructuredRepairBodyMapsEffortAndPreservesUTF8(t *testing.T) {
 		map[string]any{"type": "object"},
 		[]string{"none", "max"},
 	)
-	if body["reasoning_effort"] != "max" {
-		t.Fatalf("repair effort = %#v, want max for a model that only supports none/max", body["reasoning_effort"])
+	if body["reasoning_effort"] != "none" {
+		t.Fatalf("repair effort = %#v, want none for a model that only supports none/max", body["reasoning_effort"])
 	}
 	messages := body["messages"].([]any)
 	prompt := messages[0].(map[string]any)["content"].(string)
@@ -64,6 +64,50 @@ func TestStructuredRepairBodyMapsEffortAndPreservesUTF8(t *testing.T) {
 	}
 	if strings.Count(prompt, "中") > 8000 {
 		t.Fatal("repair prompt was not truncated")
+	}
+}
+
+func TestStructuredRepairBudgetsAndEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		limit          any
+		originalEffort string
+		supported      []string
+		wantLimit      int64
+		wantEffort     string
+	}{
+		{"explicit small cap", json.Number("16"), "none", []string{"none", "max"}, 16, "none"},
+		{"bounded default", nil, "", []string{"none", "max"}, 4096, "none"},
+		{"large cap", 100000, "high", []string{"low", "high"}, 4096, "high"},
+		{"unknown capabilities", 512, "", nil, 512, "low"},
+		{"preserve disabled reasoning", 128, "none", []string{"high"}, 128, "none"},
+		{"unspecified effort", nil, "", []string{" HIGH ", "MINIMAL"}, 4096, "minimal"},
+		{"preserve high effort", nil, "high", []string{" HIGH ", "MINIMAL"}, 4096, "high"},
+		{"preserve max effort", nil, "max", []string{"none", "max"}, 4096, "max"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := map[string]any{"model": "test", "max_tokens": tc.limit, "reasoning_effort": tc.originalEffort}
+			repaired := StructuredRepairBody(original, "invalid JSON", map[string]any{"type": "object"}, tc.supported)
+			if repaired["max_tokens"] != tc.wantLimit || repaired["reasoning_effort"] != tc.wantEffort {
+				t.Fatalf("repair budget/effort = %v/%v, want %d/%s", repaired["max_tokens"], repaired["reasoning_effort"], tc.wantLimit, tc.wantEffort)
+			}
+			if original["max_tokens"] != tc.limit || original["reasoning_effort"] != tc.originalEffort {
+				t.Fatal("repair mutated the original request")
+			}
+		})
+	}
+}
+
+func TestStructuredRepairPreservesReasoningOptions(t *testing.T) {
+	original := map[string]any{
+		"model": "test", "reasoning": map[string]any{"effort": "high", "exclude": true}, "include_reasoning": false,
+	}
+	repaired := StructuredRepairBody(original, "invalid JSON", map[string]any{"type": "object"}, []string{"none", "high"})
+	if repaired["reasoning_effort"] != "high" || repaired["include_reasoning"] != false {
+		t.Fatalf("repair changed reasoning settings: %#v", repaired)
+	}
+	if reasoning := repaired["reasoning"].(map[string]any); reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		t.Fatalf("repair dropped reasoning options: %#v", reasoning)
 	}
 }
 

@@ -137,3 +137,72 @@ func TestCompactionReplayWithoutAnchorsFollowsEarlierHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactionLongUserRoundTripPreservesOccurrencesAndImages(t *testing.T) {
+	prefix := strings.Repeat("共同前缀", 600)
+	first, second := prefix+" KEEP_FIRST_DATABASE", prefix+" KEEP_SECOND_DATABASE"
+	const imageURL = "data:image/png;base64,aGVsbG8="
+	history := []any{
+		map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": first}, map[string]any{"type": "input_image", "image_url": imageURL}}},
+		map[string]any{"role": "assistant", "content": "first answer"},
+		map[string]any{"role": "user", "content": second},
+		map[string]any{"role": "assistant", "content": "second answer"},
+		map[string]any{"role": "user", "content": first},
+		map[string]any{"role": "assistant", "content": "repeated first answer"},
+	}
+	_, ctx, err := ToCompactionChatWithOptions(map[string]any{"model": "test", "input": history}, Options{RecentCompactionTokens: 16000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx.compactionRecent) != 6 || ctx.compactionRecent[0].SourceHash == "" || ctx.compactionRecent[0].SourceHash == ctx.compactionRecent[2].SourceHash {
+		t.Fatal("long turns with identical excerpts need distinct full-text identities")
+	}
+	for _, degraded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "completed", true: "degraded"}[degraded], func(t *testing.T) {
+			var compacted map[string]any
+			if degraded {
+				compacted = DegradedCompactionResponse(ctx, "unavailable", "")
+			} else {
+				var err error
+				compacted, err = CompactionResponse(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "summary"}, "finish_reason": "stop"}}}, ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			input := append(slices.Clone(jsonx.Slice(compacted["output"])), map[string]any{"role": "user", "content": first})
+			chat, _, err := ToChat(map[string]any{"model": "test", "input": input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"user:" + first, "assistant:first answer", "user:" + second, "assistant:second answer", "user:" + first, "assistant:repeated first answer", "user:" + first}
+			if got := compactionReplayMessages(chat); !slices.Equal(got, want) {
+				t.Fatalf("long turns duplicated or reordered: got %d messages, want %d", len(got), len(want))
+			}
+			messages := jsonx.Slice(chat["messages"])
+			parts := jsonx.Slice(jsonx.Map(messages[1])["content"])
+			if len(parts) != 2 || jsonx.String(jsonx.Map(jsonx.Map(parts[1])["image_url"])["url"]) != imageURL {
+				t.Fatal("original image lost during long-message deduplication")
+			}
+		})
+	}
+}
+
+func TestLegacyCompactionLongExcerptMatchesOnlyUnambiguousText(t *testing.T) {
+	first := strings.Repeat("x", 2100) + " first"
+	excerpt := truncateText(first, maxCompactionRecentMessageRunes)
+	recent := []CompactionRecentMessage{{Role: "user", Text: excerpt}, {Role: "assistant", Text: "answer"}}
+	for _, ambiguous := range []bool{false, true} {
+		messages := []any{map[string]any{"role": "user", "content": first}}
+		if ambiguous {
+			messages = append(messages, map[string]any{"role": "user", "content": strings.Repeat("x", 2100) + " second"})
+		}
+		merged := mergeCompactionRecent(messages, recent)
+		want := 2
+		if ambiguous {
+			want = 4
+		} // Preserve ambiguous older messages rather than guessing an anchor.
+		if len(merged) != want || jsonx.Map(merged[0])["content"] != first {
+			t.Fatalf("legacy excerpt misidentified the original: got %d messages, want %d", len(merged), want)
+		}
+	}
+}

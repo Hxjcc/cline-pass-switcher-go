@@ -57,6 +57,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 				return
 			}
 			if !result.SSE {
+				last.Usage = addUsage(last.Usage, usageFromValue(result.Usage))
 				message := result.NetErr
 				if message == "" {
 					message = extractAttemptError(result.Out)
@@ -160,6 +161,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 				Trace:     last.Trace,
 			}
 			applyStreamStats(&entry, stats)
+			entry.Usage = addUsage(last.Usage, entry.Usage)
 			applyGatewayMeta(&entry, meta, modelConfig)
 			if errorMessage == nil {
 				s.upstream.ObserveStreamSuccess(ctx, result.Account, attempt.Upstream)
@@ -222,6 +224,7 @@ func (s *Server) writeChatStreamFailure(ctx context.Context, writer http.Respons
 		AccountID: last.Account.ID,
 		Attempts:  traceUpstreams(last.Trace),
 		Trace:     last.Trace,
+		Usage:     last.Usage,
 	})
 	status := last.Status
 	if status < 400 {
@@ -291,6 +294,7 @@ func (s *Server) writeBufferedChatStream(
 		Trace:     last.Trace,
 	}
 	applyChatStats(&entry, result.Out, entry.MS)
+	entry.Usage = addUsage(last.Usage, entry.Usage)
 	s.applyGatewayMetaForModel(&entry, meta, modelID)
 	s.record(ctx, entry)
 }

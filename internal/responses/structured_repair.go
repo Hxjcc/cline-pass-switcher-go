@@ -77,8 +77,9 @@ func looksLikeJSONAttempt(text string) bool {
 }
 
 // StructuredRepairBody builds the one-shot reformatting request: the failed
-// text and the schema only, without the original conversation. The task is
-// reformatting rather than reasoning, so it runs at low effort.
+// text and the schema only, without the original conversation. It preserves
+// the original reasoning effort and uses an explicit budget no larger than
+// the original request's output limit. Unspecified effort gets a cheap default.
 func StructuredRepairBody(chatBody map[string]any, text string, schema any, efforts []string) map[string]any {
 	const maxText = 8000
 	text = stripMarkdownFence(text)
@@ -98,12 +99,32 @@ func StructuredRepairBody(chatBody map[string]any, text string, schema any, effo
 		"stream":   false,
 		"messages": []any{map[string]any{"role": "user", "content": prompt}},
 	}
-	effort := "low"
-	if len(efforts) > 0 {
-		effort = mapReasoningEffort("low", efforts)
+	limit := int64(4096)
+	if original := intValue(chatBody["max_tokens"]); original > 0 && original < limit {
+		limit = original
+	}
+	body["max_tokens"] = limit
+	effort := strings.TrimSpace(jsonx.String(chatBody["reasoning_effort"]))
+	if effort == "" {
+		effort = strings.TrimSpace(jsonx.String(jsonx.Map(chatBody["reasoning"])["effort"]))
+	}
+	if effort == "" {
+		effort = "low"
+		if len(efforts) > 0 {
+			normalized := make([]string, 0, len(efforts))
+			for _, value := range efforts {
+				normalized = append(normalized, strings.ToLower(strings.TrimSpace(value)))
+			}
+			effort = pickReasoningEffort(normalized, "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+		}
 	}
 	if effort != "" {
 		body["reasoning_effort"] = effort
+	}
+	for _, key := range []string{"reasoning", "include_reasoning"} {
+		if value, found := chatBody[key]; found {
+			body[key] = value
+		}
 	}
 	if format := chatBody["response_format"]; format != nil {
 		body["response_format"] = format

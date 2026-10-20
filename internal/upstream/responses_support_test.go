@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -48,6 +49,28 @@ func TestReadSSEHeadAcceptsLargeFirstEvent(t *testing.T) {
 	}
 	if len(raw) <= 32<<10 {
 		t.Fatalf("test payload did not cross the old head cap: %d bytes", len(raw))
+	}
+}
+
+func TestReadSSEHeadRecognizesEveryLineEnding(t *testing.T) {
+	const payload = `{"choices":[{"delta":{"content":"ok"}}]}`
+	for _, ending := range []string{"\n", "\r\n", "\r"} {
+		for _, bytewise := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ending=%q/bytewise=%v", ending, bytewise), func(t *testing.T) {
+				wire := ": comment" + ending + ending + "data: " + payload + ending + ending + "data: [DONE]" + ending + ending
+				var reader io.Reader = strings.NewReader(wire)
+				if bytewise {
+					reader = &bytewiseReader{data: []byte(wire)}
+				}
+				_, got, err := readSSEHead(reader)
+				if err != nil || got != payload {
+					t.Fatalf("SSE head framing changed: got=%q err=%v", got, err)
+				}
+				if got, ok := firstSSEPayload([]byte(wire), false); !ok || got != payload {
+					t.Fatalf("first payload framing changed: %q %v", got, ok)
+				}
+			})
+		}
 	}
 }
 

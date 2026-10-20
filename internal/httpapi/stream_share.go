@@ -431,6 +431,7 @@ func (s *Server) recordSharedRun(
 	if job.okSSE {
 		applyStreamStats(&entry, job.stats)
 	}
+	entry.Usage = addUsage(job.last.Usage, entry.Usage)
 	applyGatewayMeta(&entry, job.stats.Gateway(), modelConfig)
 	s.record(job.ctx, entry)
 }
@@ -481,6 +482,7 @@ func (s *Server) runSharedResponses(
 				result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error"}}
 			}
 			if !result.SSE {
+				job.last.Usage = addUsage(job.last.Usage, usageFromValue(result.Usage))
 				message := result.NetErr
 				if message == "" {
 					message = extractAttemptError(result.Out)

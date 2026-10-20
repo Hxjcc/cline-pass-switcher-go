@@ -121,12 +121,14 @@ type toolState struct {
 	Key         int
 	OutputIndex int
 	CallID      string
+	UpstreamID  string
 	ChatName    string
 	Arguments   strings.Builder
 	ItemID      string
 	Kind        string
 	Added       bool
 	Done        bool
+	Provider    bool
 }
 
 // outputEntry pairs a completed output item with its output_index so the
@@ -532,10 +534,19 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 	callID := jsonx.String(raw["id"])
 	if index < 0 && callID != "" {
 		for key, current := range state.tools {
-			if current.CallID == callID {
+			if current.UpstreamID == callID || current.CallID == callID {
 				index = key
 				break
 			}
+		}
+	}
+	if index < 0 && callID != "" && state.lastToolIndex >= 0 {
+		current := state.tools[state.lastToolIndex]
+		function := jsonx.Map(raw["function"])
+		// Some compatible streams omit indexes as well as the initial ID.
+		// A nameless continuation can attach a late ID to the preceding call.
+		if current != nil && current.UpstreamID == "" && jsonx.String(function["name"]) == "" {
+			index = state.lastToolIndex
 		}
 	}
 	if index < 0 && callID != "" {
@@ -554,12 +565,19 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 	state.lastToolIndex = index
 	current := state.tools[index]
 	if current == nil {
-		current = &toolState{Key: index, OutputIndex: state.nextOutputIndex, CallID: callID}
-		state.nextOutputIndex++
+		current = &toolState{Key: index, OutputIndex: -1, CallID: callID}
 		state.tools[index] = current
 	}
 	if callID != "" {
-		current.CallID = callID
+		current.UpstreamID = callID
+		// Once published, the client-facing identity must stay stable even
+		// when a compatible provider sends its ID in a later chunk.
+		if !current.Added {
+			current.CallID = callID
+		}
+	}
+	if current.CallID == "" {
+		current.CallID = newID("call")
 	}
 	if function := jsonx.Map(raw["function"]); function != nil {
 		if name := jsonx.String(function["name"]); name != "" {
@@ -570,18 +588,23 @@ func (state *StreamState) ensureTool(raw map[string]any) *toolState {
 }
 
 func (state *StreamState) pushToolCall(raw map[string]any) []Event {
-	if function := jsonx.Map(raw["function"]); state.context.isProviderTool(jsonx.String(function["name"])) {
+	current := state.ensureTool(raw)
+	current.Provider = state.context.isProviderTool(current.ChatName)
+	if current.Provider {
 		// Provider-executed tools (web search and friends) run inside the
-		// gateway; surfacing them would hand the client a tool it never declared.
+		// gateway. Remember their identity so nameless continuation chunks
+		// are filtered too, without consuming a client output index.
+		current.Arguments.Reset()
 		return nil
 	}
-	current := state.ensureTool(raw)
 	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
 	bufferShell := state.context != nil && state.context.enforcesShell(current.ChatName)
 	events := []Event{}
 	if !current.Added && current.ChatName != "" {
+		current.OutputIndex = state.nextOutputIndex
+		state.nextOutputIndex++
 		base := state.context.responseOutputItemFromTool(map[string]any{
 			"id":       current.CallID,
 			"function": map[string]any{"name": current.ChatName, "arguments": ""},
@@ -620,6 +643,9 @@ func (state *StreamState) closeTools() []Event {
 			continue
 		}
 		current.Done = true
+		if current.Provider {
+			continue
+		}
 		if !current.Added || current.ChatName == "" {
 			state.droppedTools++
 			continue

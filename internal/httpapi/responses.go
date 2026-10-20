@@ -173,8 +173,9 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 
 // repairStructuredOutput rewrites an upstream answer that ignored a strict
 // JSON Schema. Plain text is wrapped locally when the schema has a single
-// string property (conversation titles); otherwise one low-effort
-// reformatting call carries only the failed text and the schema. The caller
+// string property (conversation titles); otherwise one
+// reformatting call carries only the failed text and the schema, with a bounded
+// output budget and the original reasoning effort. The caller
 // re-validates the returned response, so a repair that still does not satisfy
 // the schema keeps the original failure.
 func (s *Server) repairStructuredOutput(
@@ -201,7 +202,12 @@ func (s *Server) repairStructuredOutput(
 			return result, response, nil
 		}
 	}
-	repaired := s.runNonStreamChain(ctx, modelID, responsesbridge.StructuredRepairBody(chatBody, text, schema, s.store.ModelMeta(modelID).ReasoningEfforts), modelConfig, s.upstream.NonStreamTimeout())
+	meta := s.store.ModelMeta(modelID)
+	repairBody := responsesbridge.StructuredRepairBody(chatBody, text, schema, meta.ReasoningEfforts)
+	if limit := meta.OutputLimit; limit > 0 && positiveInt(repairBody["max_tokens"]) > limit {
+		repairBody["max_tokens"] = limit
+	}
+	repaired := s.runNonStreamChain(ctx, modelID, repairBody, modelConfig, s.upstream.NonStreamTimeout())
 	result.Usage = addUsage(result.Usage, repaired.Usage)
 	result.Trace = append(result.Trace, repaired.Trace...)
 	if repaired.Out == nil || repaired.Status != http.StatusOK {

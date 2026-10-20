@@ -1,7 +1,9 @@
 package responses
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -105,6 +107,9 @@ func normalizeSectionText(value string) string {
 type CompactionRecentMessage struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
+	// SourceHash identifies the full text when Text is only an excerpt. It
+	// keeps distinct long requests with the same prefix distinguishable.
+	SourceHash string `json:"source_hash,omitempty"`
 	// toolResult is set only while building a fresh tail. It is deliberately
 	// unexported so envelopes stay compatible with older payloads.
 	toolResult bool
@@ -300,7 +305,7 @@ func buildCompactionGroups(messages []any) []compactionGroup {
 			}
 			if text != "" {
 				groups = append(groups, compactionGroup{
-					start: index, messages: []CompactionRecentMessage{{Role: "assistant", Text: truncateText(text, maxCompactionRecentMessageRunes)}},
+					start: index, messages: []CompactionRecentMessage{compactionRecentText("assistant", text)},
 				})
 			}
 			index++
@@ -319,7 +324,7 @@ func buildCompactionGroups(messages []any) []compactionGroup {
 					continue
 				}
 				groups = append(groups, compactionGroup{
-					start: index, messages: []CompactionRecentMessage{{Role: "user", Text: truncateText(text, maxCompactionRecentMessageRunes)}},
+					start: index, messages: []CompactionRecentMessage{compactionRecentText("user", text)},
 				})
 			}
 			index++
@@ -473,6 +478,19 @@ func compactionToolTranscript(messages []any) string {
 	return strings.Join(lines, "\n")
 }
 
+func compactionSourceHash(text string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(text)))
+	return hex.EncodeToString(sum[:])
+}
+
+func compactionRecentText(role, text string) CompactionRecentMessage {
+	message := CompactionRecentMessage{Role: role, Text: truncateText(text, maxCompactionRecentMessageRunes)}
+	if message.Text != text {
+		message.SourceHash = compactionSourceHash(text)
+	}
+	return message
+}
+
 // mergeCompactionRecent restores an ordered tail among the messages retained
 // before its compaction item. Matching occurrences are anchors, not a set of
 // text to delete: a repeated user request must keep its corresponding answer.
@@ -491,10 +509,18 @@ func mergeCompactionRecent(messages []any, recent []CompactionRecentMessage) []a
 		return messages
 	}
 	positions := make(map[messageKey][]int, len(messages))
+	sources := make(map[messageKey][]int)
+	legacyExcerpts := make(map[messageKey][]int)
 	for index, raw := range messages {
 		message := jsonx.Map(raw)
 		key := messageKey{jsonx.String(message["role"]), strings.TrimSpace(collectPartText(message["content"]))}
 		positions[key] = append(positions[key], index)
+		if utf8.RuneCountInString(key.text) > maxCompactionRecentMessageRunes {
+			source := messageKey{key.role, compactionSourceHash(key.text)}
+			sources[source] = append(sources[source], index)
+			excerpt := messageKey{key.role, truncateText(key.text, maxCompactionRecentMessageRunes)}
+			legacyExcerpts[excerpt] = append(legacyExcerpts[excerpt], index)
+		}
 	}
 	// Match backwards because recent is the newest part of the conversation.
 	// Each occurrence can anchor once, and anchor order must remain monotonic.
@@ -503,6 +529,27 @@ func mergeCompactionRecent(messages []any, recent []CompactionRecentMessage) []a
 	for index := len(tail) - 1; index >= 0; index-- {
 		anchors[index] = -1
 		matches := positions[messageKey{tail[index].Role, tail[index].Text}]
+		if tail[index].SourceHash != "" {
+			matches = sources[messageKey{tail[index].Role, tail[index].SourceHash}]
+		} else if len(matches) == 0 {
+			// Older envelopes carry no source hash. Only a unique full-text
+			// candidate can safely identify a truncated legacy excerpt.
+			candidates := legacyExcerpts[messageKey{tail[index].Role, tail[index].Text}]
+			if len(candidates) > 0 {
+				first := jsonx.Map(messages[candidates[0]])
+				text := strings.TrimSpace(collectPartText(first["content"]))
+				unique := true
+				for _, candidate := range candidates[1:] {
+					if strings.TrimSpace(collectPartText(jsonx.Map(messages[candidate])["content"])) != text {
+						unique = false
+						break
+					}
+				}
+				if unique {
+					matches = candidates
+				}
+			}
+		}
 		if match := sort.SearchInts(matches, before) - 1; match >= 0 {
 			anchors[index] = matches[match]
 			before = matches[match]

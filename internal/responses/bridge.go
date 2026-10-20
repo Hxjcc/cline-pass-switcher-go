@@ -777,7 +777,9 @@ func parseArgumentsObject(value string) any {
 		return map[string]any{}
 	}
 	var result any
-	if json.Unmarshal([]byte(value), &result) == nil {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	if decoder.Decode(&result) == nil && json.Valid([]byte(value)) {
 		return result
 	}
 	return map[string]any{}
@@ -789,7 +791,9 @@ func customInputFromArguments(value string) string {
 		return ""
 	}
 	var parsed any
-	if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	if decoder.Decode(&parsed) == nil && json.Valid([]byte(trimmed)) {
 		if object, ok := parsed.(map[string]any); ok {
 			if input, found := object[customToolInputKey]; found {
 				if text, ok := input.(string); ok {
