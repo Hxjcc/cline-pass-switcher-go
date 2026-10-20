@@ -127,14 +127,15 @@ func (h *streamShareHub) join(parent context.Context, key string, run func(*shar
 // Admission and publication of a new job are one operation. An existing job
 // keeps its original reservation, so reconnects and duplicate subscribers do
 // not reserve or charge another generation. Failed admission publishes no job.
-func (h *streamShareHub) joinWithAdmission(parent context.Context, key string, admit func() (context.Context, error), run func(*sharedResponsesStream)) (*sharedResponsesStream, error) {
+func (h *streamShareHub) joinWithAdmission(parent context.Context, key string, admit func() (context.Context, func(), error), run func(*sharedResponsesStream)) (*sharedResponsesStream, error) {
 	h.mu.Lock()
 	job := h.jobs[key]
 	started := false
+	var releaseAdmission func()
 	if job == nil || job.runDone || job.ctx.Err() != nil {
 		if admit != nil {
 			var err error
-			parent, err = admit()
+			parent, releaseAdmission, err = admit()
 			if err != nil {
 				h.mu.Unlock()
 				return nil, err
@@ -170,6 +171,9 @@ func (h *streamShareHub) joinWithAdmission(parent context.Context, key string, a
 		hold.Retain()
 		go func() {
 			defer h.running.Done()
+			if releaseAdmission != nil {
+				defer releaseAdmission()
+			}
 			defer hold.Release()
 			run(job)
 			job.finish()
@@ -295,15 +299,26 @@ func (s *Server) handleStreamingResponses(
 ) {
 	ctx := request.Context()
 	var hold *store.SpendReservation
-	job, err := s.shares.joinWithAdmission(ctx, responsesShareKey(ctx, modelID, requestBody, chatBody, modelConfig), func() (context.Context, error) {
-		var err error
+	job, err := s.shares.joinWithAdmission(ctx, responsesShareKey(ctx, modelID, requestBody, chatBody, modelConfig), func() (context.Context, func(), error) {
+		release, err := s.acquireGeneration(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
 		hold, err = s.reserveRequestSpend(ctx)
-		return withSpendHold(ctx, hold), err
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+		return withSpendHold(ctx, hold), release, nil
 	}, func(job *sharedResponsesStream) {
 		s.runSharedResponses(job, chatBody, bridgeContext, modelID, modelConfig)
 	})
 	if err != nil {
-		writeSpendError(writer, err)
+		if errors.Is(err, errConcurrencyLimit) {
+			writeConcurrencyLimit(writer)
+		} else {
+			writeSpendError(writer, err)
+		}
 		return
 	}
 	defer hold.Release()

@@ -162,13 +162,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		defer spendHoldFrom(request.Context()).Release()
-		if isGenerationRequest(request) {
-			key := "master"
-			if caller, ok := callerKeyFrom(request.Context()); ok && caller.ID != "" {
-				key = caller.ID
-			}
-			release, allowed := s.limiter.acquire(key)
-			if !allowed {
+		// Responses admits work after conversion so reconnects can join an
+		// existing shared run without reserving a second generation slot.
+		if isGenerationRequest(request) && !isResponsesPath(path) {
+			release, err := s.acquireGeneration(request.Context())
+			if err != nil {
 				writeConcurrencyLimit(writer)
 				return
 			}

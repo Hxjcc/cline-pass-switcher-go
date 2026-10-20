@@ -34,13 +34,22 @@ func (s *Server) reserveRequestSpend(ctx context.Context) (*store.SpendReservati
 }
 
 // Buffered Responses and compaction-trigger requests do not share an upstream
-// run. Their handler owns this deferred reservation until its record is saved.
-func (s *Server) admitDeferredSpend(writer http.ResponseWriter, request *http.Request) (*store.SpendReservation, bool) {
+// run. Their handler owns both reservations until its record is saved.
+func (s *Server) admitDeferredGeneration(writer http.ResponseWriter, request *http.Request) (func(), bool) {
+	release, err := s.acquireGeneration(request.Context())
+	if err != nil {
+		writeConcurrencyLimit(writer)
+		return nil, false
+	}
 	hold, err := s.reserveRequestSpend(request.Context())
 	if err != nil {
+		release()
 		writeSpendError(writer, err)
 		return nil, false
 	}
 	*request = *request.WithContext(withSpendHold(request.Context(), hold))
-	return hold, true
+	return func() {
+		hold.Release()
+		release()
+	}, true
 }

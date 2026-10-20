@@ -1,6 +1,24 @@
 package httpapi
 
-import "sync"
+import (
+	"context"
+	"errors"
+	"sync"
+)
+
+var errConcurrencyLimit = errors.New("generation concurrency limit reached")
+
+func (s *Server) acquireGeneration(ctx context.Context) (func(), error) {
+	key := "master"
+	if caller, ok := callerKeyFrom(ctx); ok && caller.ID != "" {
+		key = caller.ID
+	}
+	release, allowed := s.limiter.acquire(key)
+	if !allowed {
+		return nil, errConcurrencyLimit
+	}
+	return release, nil
+}
 
 // concurrencyLimiter bounds generation work rather than merely counting
 // completed failures. A valid key could otherwise open arbitrarily many long

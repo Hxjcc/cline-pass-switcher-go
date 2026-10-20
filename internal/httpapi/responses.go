@@ -49,11 +49,11 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	// carries a compaction_trigger item. It is answered by the compaction
 	// pipeline rather than a normal generation turn.
 	if responsesbridge.RequestTriggersCompaction(body) {
-		hold, ok := s.admitDeferredSpend(writer, request)
+		release, ok := s.admitDeferredGeneration(writer, request)
 		if !ok {
 			return
 		}
-		defer hold.Release()
+		defer release()
 		s.handleResponsesCompactionTrigger(writer, request, body)
 		return
 	}
@@ -84,11 +84,11 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		s.handleStreamingResponses(writer, request, body, chatBody, bridgeContext, modelID, modelConfig)
 		return
 	}
-	hold, ok := s.admitDeferredSpend(writer, request)
+	release, ok := s.admitDeferredGeneration(writer, request)
 	if !ok {
 		return
 	}
-	defer hold.Release()
+	defer release()
 	// Strict structured requests are answered from one buffered upstream turn
 	// so the bridge can wrap plain text or run a single reformatting repair
 	// before any partial, non-JSON text reaches the client. The upstream call
