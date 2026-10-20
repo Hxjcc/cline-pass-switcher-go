@@ -1,14 +1,41 @@
+# Routine version updates are monthly and grouped by minor/patch. Major
+# updates stay as individual PRs for manual review. Security updates are
+# enabled separately in the repository settings.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: npm
     directory: /web
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

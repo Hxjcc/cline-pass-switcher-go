@@ -86,3 +86,14 @@ CLINE_STRESS_SECONDS=60 go test -race ./internal/httpapi -run SharedStreamSoak -
 | `frontend` | `npm run lint`、`npm test`、`npm run build`，然后检查 `internal/webassets/dist` 与提交的内容一致。 |
 | `e2e` | Playwright 端到端测试。 |
 | `container` | 构建 Docker 镜像，检查容器以 UID 10001 运行且 `/data` 可写。 |
+
+## 依赖更新
+
+Dependabot 每月检查一次 Go、npm 和 GitHub Actions 依赖；`minor` / `patch`
+更新会按生态合并成一个 PR，`major` 更新保持独立 PR，便于人工判断。依赖 PR
+仍需通过上面的 CI 后才能合并，不启用自动合并。
+
+前端依赖更新会改变打包结果，合并前必须在 `web` 目录执行 `npm ci` 和
+`npm run build`，并把 `internal/webassets/dist` 一起提交；`frontend` 任务
+会检查内嵌产物是否与源码一致。Dependabot 安全更新在 GitHub 仓库设置中单独
+启用。
