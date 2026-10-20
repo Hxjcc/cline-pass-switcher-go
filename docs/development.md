@@ -74,6 +74,32 @@ CLINE_MANUAL_LONG_STREAM=1 go test ./internal/httpapi -run ManualStreamPastLegac
 CLINE_STRESS_SECONDS=60 go test -race ./internal/httpapi -run SharedStreamSoak -v -timeout 4m
 ```
 
+另有默认跳过的真实压缩评测，使用合成对话，检查连续三轮压缩后的任务约束、工具结果和图片视觉信息。开启后会调用指定模型并产生费用；不会修改远程配置。示例（PowerShell，请替换测试地址、模型和临时密钥）：
+
+```powershell
+$env:CLINE_LIVE_COMPACTION = "1"
+$env:CLINE_TEST_BASE_URL = "https://your-gateway.example/v1"
+$env:CLINE_TEST_MODEL = "cline-pass/your-model"
+$env:CLINE_TEST_API_KEY = "your-temporary-test-key"
+go test ./internal/httpapi -run '^TestLiveCompaction' -v -count=1 -timeout 12m
+Remove-Item Env:CLINE_LIVE_COMPACTION, Env:CLINE_TEST_BASE_URL, Env:CLINE_TEST_MODEL, Env:CLINE_TEST_API_KEY
+```
+
+密钥只由内存中的测试代理注入请求头，临时数据目录保存的是占位账号密钥。普通 `go test ./...` 会跳过这些评测。
+
+长上下文评测单独开启，不随上面的普通真实评测运行。它按约 10 万、30 万、90 万输入 token 逐档测试，后续档位根据上游实际用量校准；最大档之后再追加两轮约 5 万 token 的新历史，检查七项早期约束、当前状态及新旧指令覆盖关系。输入包含不同的代码日志和工具调用。容量最终受实际转发链路限制，测试不把字符数当作 token 用量。
+
+```powershell
+# 保留上面的 CLINE_LIVE_COMPACTION 和三个 CLINE_TEST_* 接入变量。
+$env:CLINE_LIVE_LONG_COMPACTION = "1"
+$env:CLINE_TEST_TIMEOUT_SECONDS = "600"
+$env:CLINE_TEST_REPORT_PATH = Join-Path $env:TEMP "cline-compaction-long-report.json"
+go test ./internal/httpapi -run '^TestLiveLongCompaction' -v -count=1 -timeout 35m
+Remove-Item Env:CLINE_LIVE_LONG_COMPACTION, Env:CLINE_TEST_TIMEOUT_SECONDS, Env:CLINE_TEST_REPORT_PATH
+```
+
+这项评测的真实调用量和费用高于普通评测。日志包含每次调用的实际输入 token、缓存命中、输出 token、耗时及上游报告费用；可选 JSON 报告只保存合成数据的统计与检查结果，不包含密钥。
+
 `internal/httpapi/testdata` 里有一段真实的上游流式响应，用来验证流式转换在任意分片位置都能得到相同的结果；更新方法见该目录下的 README。
 
 ## CI
