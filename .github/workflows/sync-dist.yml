@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: "24.19.0"
+          node-version: "24.22.1"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci

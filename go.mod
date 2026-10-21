@@ -1,6 +1,6 @@
 module github.com/Hxjcc/cline-pass-switcher-go
 
-go 1.25
+go 1.26.10
 
 require github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 

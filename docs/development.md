@@ -18,8 +18,10 @@
 
 ## 环境要求
 
-- Go 1.25 或更高版本。
-- Node.js 与 npm，仅构建前端时需要。构建需要 Node 20.19+ 或 22.12+；运行前端单元测试需要 Node 22.22+ 或 24.15+。CI 和 Docker 镜像使用 Node 24。
+- Go 1.26.10（或 1.27.3 及以上）。`go.mod` 要求最低 1.26.10，CI 从该文件读取版本，Docker 使用 1.26.10。
+- Node.js 24.22.1 与 npm，仅构建、开发或测试前端时需要。CI 和 Docker 使用同一版本。
+
+上述版本包含 eMudhra 证书信任风险（[CVE-2026-111943](https://pkg.go.dev/vuln/GO-2026-6809)）和 [Node.js 2026 年 10 月安全更新](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)的修复。Docker 运行镜像要求 `ca-certificates` 和 `ca-certificates-bundle` 至少为 `20261020-r0`。升级构建工具后需要重新编译和部署，已有二进制不会自动获得修复。
 
 ## 构建
 

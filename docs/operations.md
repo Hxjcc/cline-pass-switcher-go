@@ -181,9 +181,12 @@ Docker Compose：
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 ```
 
-源码运行：拉取代码后按 [README](../README.md#源码编译运行) 重新构建，停止旧进程再启动新的。
+`--pull` 拉取基础镜像，`--no-cache` 重新安装运行镜像中的软件包，确保 CA 证书库不会沿用旧构建缓存。Dockerfile 要求 `ca-certificates` 和 `ca-certificates-bundle` 至少为 `20261020-r0`，并使用已修复的 Go 1.26.10 和 Node.js 24.22.1。
+
+源码运行：使用 Go 1.26.10（或 1.27.3 及以上），拉取代码后按 [README](../README.md#源码编译运行) 重新构建，停止旧进程再启动新的；同时更新宿主机的系统 CA 证书库。只更新 Go 安装或重启旧程序不会更新二进制中编译进去的证书校验逻辑。
 
 数据目录向后兼容：旧版本配置里的字段（例如顶层的 `apiKey`、单个渠道的 `upstream`）会在启动时自动迁移。升级前备份一次数据目录更稳妥。

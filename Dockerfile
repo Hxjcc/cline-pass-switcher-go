@@ -1,4 +1,4 @@
-FROM node:24-alpine AS frontend
+FROM node:24.22.1-alpine AS frontend
 
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
@@ -6,7 +6,7 @@ RUN npm ci
 COPY web ./
 RUN npm run build
 
-FROM golang:1.25-alpine AS backend
+FROM golang:1.26.10-alpine AS backend
 
 ARG VERSION=dev
 
@@ -24,7 +24,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 FROM alpine:3.22
 
-RUN apk add --no-cache ca-certificates tzdata su-exec \
+# Require the trust-store update for the compromised eMudhra certificates.
+RUN apk add --no-cache \
+    'ca-certificates>=20261020-r0' 'ca-certificates-bundle>=20261020-r0' \
+    tzdata su-exec \
     && addgroup -g 10001 app \
     && adduser -D -H -u 10001 -G app app \
     && mkdir -p /data

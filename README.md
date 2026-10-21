@@ -41,7 +41,7 @@ docker compose up -d --build
 
 ### 源码编译运行
 
-需要 Go 1.25 以上；构建前端需要 Node.js 22.12 以上及 npm。
+使用 Go 1.26.10（或 1.27.3 及以上）；构建前端使用 Node.js 24.22.1 及 npm，与 CI 和 Docker 保持一致。
 
 ```bash
 cd web
@@ -152,8 +152,11 @@ Nginx 配置示例、`TRUSTED_PROXIES` 的查法和各种部署方式的区别�
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose build --pull --no-cache
+docker compose up -d
 ```
+
+升级时重新拉取基础镜像并刷新软件包，避免复用旧的 Go 二进制或 CA 证书库。源码部署也需要重新编译并替换运行中的程序。
 
 备份时先停止服务，再复制整个 `data` 目录。数据目录里有账号的 API Key，请注意保管。详见[运维说明](docs/operations.md)。
 
