@@ -83,6 +83,9 @@ type Options struct {
 	ReplayReasoning  bool
 	ReasoningEfforts []string
 	RawReasoning     bool
+	// SupportsImageDetailOriginal forwards the requested detail for image
+	// models. Other models retain the legacy high-detail fallback.
+	SupportsImageDetailOriginal bool
 	// StrictToolHistory rejects a request whose tool history does not map onto
 	// Chat Completions exactly. It is off by default: ChatGPT Desktop replays
 	// results of calls that are not part of the request (delegation hand-offs,
@@ -646,6 +649,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 				chat["response_format"] = map[string]any{"type": "json_object"}
 			}
 		}
+	}
+	if !options.SupportsImageDetailOriginal {
+		fallbackOriginalImageDetail(messages)
 	}
 	return chat, context, nil
 }

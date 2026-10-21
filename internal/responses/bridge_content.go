@@ -9,14 +9,22 @@ import (
 
 func normalizedImageDetail(value any) string {
 	detail := jsonx.String(value)
-	if detail == "original" {
-		return "high"
-	}
 	switch detail {
-	case "auto", "low", "high":
+	case "auto", "low", "high", "original":
 		return detail
 	default:
 		return ""
+	}
+}
+
+func fallbackOriginalImageDetail(messages []any) {
+	for _, raw := range messages {
+		for _, part := range jsonx.Slice(jsonx.Map(raw)["content"]) {
+			image := jsonx.Map(jsonx.Map(part)["image_url"])
+			if image["detail"] == "original" {
+				image["detail"] = "high"
+			}
+		}
 	}
 }
 

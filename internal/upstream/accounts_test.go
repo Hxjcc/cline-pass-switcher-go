@@ -219,6 +219,7 @@ func TestFetchOfficialModelsAddsRecommendedSnapshot(t *testing.T) {
 				"name":"DeepSeek V4.1 Flash",
 				"reasoning":true,
 				"reasoning_options":[{"type":"effort","values":["none","low","high","max"]}],
+				"modalities":{"input":["text","image"]},
 				"limit":{"context":1000000,"output":384000}
 			}}}}`)
 		}
@@ -256,6 +257,9 @@ func TestFetchOfficialModelsAddsRecommendedSnapshot(t *testing.T) {
 		t.Fatalf("recommended dated snapshot was not added: %#v", result.Added)
 	}
 	meta := st.ModelMeta(snapshot)
+	if !meta.SupportsOriginalImageDetail() || !st.ModelMeta("cline-pass/deepseek-v4.1-flash").SupportsOriginalImageDetail() {
+		t.Fatal("snapshot must inherit the base model's image input capability")
+	}
 	if !meta.CapabilitiesKnown || meta.ContextWindow != 1000000 || meta.OutputLimit != 384000 {
 		t.Fatalf("snapshot did not inherit base capabilities: %#v", meta)
 	}
@@ -264,6 +268,39 @@ func TestFetchOfficialModelsAddsRecommendedSnapshot(t *testing.T) {
 	}
 	if !slices.Contains(meta.ReasoningEfforts, "max") {
 		t.Fatalf("snapshot lost reasoning tiers: %#v", meta.ReasoningEfforts)
+	}
+}
+
+func TestFetchOfficialModelsKeepsExplicitSnapshotCapabilities(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/recommended" {
+			_, _ = io.WriteString(w, `{"clinePass":[{"id":"cline-pass/deepseek-v4.1-flash-1017"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"cline-pass":{"models":{
+			"deepseek-v4.1-flash":{"name":"Base","modalities":{"input":["text","image"]},"limit":{"context":1000000}},
+			"deepseek-v4.1-flash-1017":{"name":"Explicit snapshot","modalities":{"input":["text"]},"limit":{"context":64000},"reasoning_options":[{"type":"effort","values":["medium"]}]}
+		}}}`)
+	}))
+	defer upstreamServer.Close()
+	previous, previousRecommended := officialModelsDevURL, officialRecommendedModelsURL
+	officialModelsDevURL, officialRecommendedModelsURL = upstreamServer.URL+"/models-dev", upstreamServer.URL+"/recommended"
+	t.Cleanup(func() { officialModelsDevURL, officialRecommendedModelsURL = previous, previousRecommended })
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := New(st).FetchOfficialModels(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	meta := st.ModelMeta("cline-pass/deepseek-v4.1-flash-1017")
+	if meta.ContextWindow != 64000 || meta.DisplayName != "Explicit snapshot" || !slices.Equal(meta.InputModalities, []string{"text"}) || !slices.Equal(meta.ReasoningEfforts, []string{"medium"}) {
+		t.Fatalf("base model overwrote explicit snapshot capability: %+v", meta)
+	}
+	if meta.SupportsOriginalImageDetail() {
+		t.Fatal("original detail was advertised without image input")
 	}
 }
 

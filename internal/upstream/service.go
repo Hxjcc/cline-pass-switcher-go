@@ -604,6 +604,9 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 	// Recommended-only entries have no models.dev row. For a dated snapshot,
 	// copy the base model's capabilities and keep the snapshot suffix visible.
 	for id := range found {
+		if capabilities[id].CapabilitiesKnown {
+			continue
+		}
 		base, suffix, ok := datedModelBase(id)
 		if !ok {
 			continue
@@ -612,7 +615,7 @@ func (s *Service) FetchOfficialModels(ctx context.Context) (OfficialResult, erro
 		if !exists || !baseCapability.CapabilitiesKnown {
 			continue
 		}
-		capability := baseCapability
+		capability := normalizeModelCapability(id, baseCapability)
 		if capability.DisplayName != "" {
 			capability.DisplayName = strings.TrimSpace(capability.DisplayName + " " + suffix)
 		}

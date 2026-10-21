@@ -27,17 +27,26 @@
 
 ### GET /v1/models
 
-返回订阅模型列表，与控制台「模型与上游」页一致：
+返回订阅模型列表，与控制台「模型与上游」页一致。`data` 保持 OpenAI 格式；`models` 返回同一批模型的 Codex 原生能力目录，下面仅列出部分目录字段：
 
 ```json
 {
   "object": "list",
   "data": [{ "id": "cline-pass/glm-5.3-flash", "object": "model" }],
-  "models": []
+  "models": [{
+    "slug": "cline-pass/glm-5.3-flash",
+    "display_name": "GLM 5.3 Flash",
+    "supported_in_api": true,
+    "supported_reasoning_levels": [],
+    "input_modalities": ["text"],
+    "supports_search_tool": true
+  }]
 }
 ```
 
-`models` 恒为空数组，供新版 Codex 客户端解析。
+目录还包含 Codex 所需的提示和工具配置；上下文、推理档位和图片能力按已保存的模型元数据填写，实际值依模型而定。没有订阅模型时，`data` 和 `models` 都为空数组。增删订阅或更新元数据会反映在之后的目录请求中；客户端可能缓存旧目录。
+
+在 Codex 的 provider 配置中设置 `model_catalog_url = "http://127.0.0.1:3123/v1/models"` 即可读取；远程部署时替换为实际地址。完整说明见 [Codex 模型能力目录](protocol-compatibility.md#codex-模型能力目录)。
 
 查询模型列表只验证密钥有效且未停用，不检查余额或绑定账号是否可用，也不占用并发额度预留。
 

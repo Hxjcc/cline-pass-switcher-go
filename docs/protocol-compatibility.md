@@ -4,6 +4,16 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 
 网关不在服务端保存会话：每个请求都要带上完整的对话历史，响应中的 `store` 恒为 `false`。
 
+## Codex 模型能力目录
+
+`GET /v1/models` 同时返回 OpenAI 格式的 `data` 和 Codex 原生格式的 `models`，两者使用同一份订阅列表。Codex 配置中的 `model_providers.<id>.model_catalog_url` 应指向这个完整地址，并使用同一 provider 的代理密钥认证，示例见 [README](../README.md#codex-cli--codex-桌面版)。
+
+目录按已保存的模型元数据填写显示名、上下文和推理档位；未知的上下文、推理档位不编造数值。默认推理档从已知支持档位中选择，优先 `medium`，存在开启推理的档位时不会默认选 `none`；客户端显式设置的档位仍优先。输入能力只声明网关支持的文本和已知的图片能力。目录附带网关自己的简短编码助手提示及客户端工具配置，不套用其他厂商模型的提示或服务等级。
+
+支持工具调用的模型声明 `supports_search_tool`，让 Codex 发送客户端执行的 `tool_search`，完成「搜索延迟工具 → 加载声明 → 调用」；网关把这一流程转换成普通 Chat 函数调用。尚无工具能力元数据时保留这条兼容路径，已知不支持工具调用的模型不声明。缺少模型目录时，自定义模型名可能落入 Codex 的默认能力配置，导致延迟工具无法发现。客户端可能缓存目录，修改订阅或元数据后需要刷新模型列表或重启 Codex。
+
+`supports_image_detail_original` 控制图片的原图细节声明，按图片输入能力统一开启。`supports_parallel_tool_calls` 和 `supports_reasoning_summaries` 在本机 Codex 0.163.0 的目录解析中会被忽略，因此不把它们作为生效开关：并行工具调用使用请求的 `parallel_tool_calls`，推理内容由网关转换为 `reasoning` 输出项及 `response.reasoning_summary_*` 事件。客户端的 `reasoning.summary` / `model_reasoning_summary` 控制摘要偏好；这里显示的是上游返回的可读推理，网关不会额外调用模型生成另一份摘要。
+
 ## 请求转换
 
 ### 输入项
@@ -25,8 +35,10 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 | 内容 | 处理方式 |
 |---|---|
 | `input_text`、`output_text`、`text` | 文本。 |
-| `input_image` 等图片 | 支持 URL、`data:` URL，以及 base64 数据加 MIME 类型。`detail: "original"` 按 `high` 处理。 |
+| `input_image` 等图片 | 支持 URL、`data:` URL，以及 base64 数据加 MIME 类型。具有图片输入能力的模型原样转发 `detail: "original"`，其余按 `high` 处理。 |
 | `refusal` | 作为助手消息的 `refusal` 回传。 |
+
+所有元数据中包含 `image` 输入的模型，Codex 目录统一声明 `supports_image_detail_original: true`。用户图片、工具结果图片和压缩请求都保留客户端传来的 `original` 及图片数据，`low/high/auto` 继续按原值发送；未声明图片能力的模型保留 `original → high` 回退。已验证 `cline-pass/deepseek-v4.1-flash-1017` 能接受该参数；其他图片模型按同一策略透传，实际缩放、小字识别效果和参数兼容性仍取决于各自上游。已有图片元数据升级后即可生效；缺少元数据时先在控制台「拉取模型目录」，再刷新客户端目录。
 
 ### 工具
 
@@ -158,14 +170,22 @@ Codex 的命令执行工具带有一个 `shell` 参数。模型漏填时，Windo
 
 ### 让 Codex 使用远端压缩
 
-Codex 只对 OpenAI 和 Azure OpenAI 形态的 provider 启用远端压缩，其他自定义 provider 会退回"本地摘要"：客户端自己发一次普通请求让模型总结。要让 Codex 使用网关的远端压缩，把 provider 的 `name` 设为 `azure`（大小写不敏感）：
+Codex 支持显式声明 provider 的压缩协议。以下配置已用 Codex 0.163.0 验证：普通名称的 provider 也会把手动 `/compact` 和自动压缩作为 `compaction_trigger` 发给网关。
 
 ```toml
 [model_providers.cline-pass]
-name = "azure"
+name = "Cline Pass"
 base_url = "http://127.0.0.1:3123/v1"
+model_catalog_url = "http://127.0.0.1:3123/v1/models"
 wire_api = "responses"
+requires_openai_auth = false
+env_key = "CLINE_PROXY_KEY"
+
+[model_providers.cline-pass.capabilities]
+remote_compaction = "v2"
 ```
+
+`remote_compaction = "unsupported"` 则使用客户端本地摘要：客户端发一次普通生成请求让模型总结。省略时采用客户端的 provider 默认值；模型和当前轮设置仍可能进一步限制压缩能力，见 [Codex 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。依赖 provider 名称判定的旧版 Codex 可以继续使用 `name = "azure"`，但远端压缩并不要求新客户端必须使用 Azure 或 OpenAI 名称。
 
 ### 压缩内容
 

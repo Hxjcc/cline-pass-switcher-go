@@ -78,9 +78,13 @@ model_reasoning_effort = "high"
 [model_providers.cline-pass]
 name = "Cline Pass"
 base_url = "http://127.0.0.1:3123/v1"
+model_catalog_url = "http://127.0.0.1:3123/v1/models"
 wire_api = "responses"
 requires_openai_auth = false
 env_key = "CLINE_PROXY_KEY"
+
+[model_providers.cline-pass.capabilities]
+remote_compaction = "v2"
 ```
 
 然后在环境变量 `CLINE_PROXY_KEY` 中设置密钥：
@@ -89,7 +93,9 @@ env_key = "CLINE_PROXY_KEY"
 export CLINE_PROXY_KEY="你的代理密钥"
 ```
 
-Codex 只对 OpenAI 和 Azure 形态的 provider 使用远端上下文压缩，其他名称的 provider 会退回客户端本地摘要。想让 Codex 的 `/compact` 和自动压缩交给网关处理（摘要之外还会原样保留最近几轮对话），把上面的 `name` 改成 `"azure"`，详见 [Responses 协议兼容 · 上下文压缩](docs/protocol-compatibility.md#上下文压缩)。
+`model_catalog_url` 指向网关的 Codex 模型能力目录，让客户端识别订阅模型的推理档位、上下文、图片和延迟工具搜索能力。请把这两个 URL 一起改成实际部署地址；目录请求使用同一个代理密钥。
+
+Codex 0.163.0 已实测支持显式设置 `remote_compaction = "v2"`：普通 provider 名称也能把 `/compact` 和自动压缩交给网关处理，无须改名为 `azure`。旧版本不识别这些配置项时，建议升级；原来的 `name = "azure"` 兼容配置仍可用于依赖名称判定的旧客户端。详见 [Responses 协议兼容 · 上下文压缩](docs/protocol-compatibility.md#上下文压缩)和 [Codex 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。
 
 ### 其他客户端
 

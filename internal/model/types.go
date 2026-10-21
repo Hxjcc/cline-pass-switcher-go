@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 const DefaultUpstreamBase = "https://api.cline.bot/api/v1"
@@ -151,9 +152,9 @@ type UpstreamStatus struct {
 // part of the row has a reader: ContextWindow caps the input tokens reported to
 // the client and ReasoningEfforts picks the upstream effort, the console renders
 // Reasoning, ReasoningEfforts, InputModalities, ContextWindow and OutputLimit,
-// and DisplayName, Description, Family, Attachment, ToolCall, StructuredOutput,
-// Temperature, OutputModalities, CapabilitiesKnown and CapabilityUpdatedAt are
-// stored for later use.
+// and the Codex catalog also uses DisplayName, Description, ToolCall and
+// CapabilitiesKnown. Family, Attachment, StructuredOutput, Temperature,
+// OutputModalities and CapabilityUpdatedAt are stored for later use.
 type ModelMeta struct {
 	OK                  bool                      `json:"ok,omitempty"`
 	DisplayName         string                    `json:"displayName,omitempty"`
@@ -185,6 +186,17 @@ type ModelMeta struct {
 	ProbedAt            int64                     `json:"probedAt,omitempty"`
 	UpstreamStatus      map[string]UpstreamStatus `json:"upstreamStatus,omitempty"`
 	ValidatedAt         int64                     `json:"validatedAt,omitempty"`
+}
+
+// SupportsOriginalImageDetail follows the gateway policy: every model with
+// image input may receive original detail. Actual preprocessing is upstream.
+func (m ModelMeta) SupportsOriginalImageDetail() bool {
+	for _, modality := range m.InputModalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "image") {
+			return true
+		}
+	}
+	return false
 }
 
 type Trace struct {
