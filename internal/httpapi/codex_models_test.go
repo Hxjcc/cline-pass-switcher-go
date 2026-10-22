@@ -68,7 +68,7 @@ func TestCodexCatalogMatchesSubscriptionAndCapabilities(t *testing.T) {
 			if !known.SupportsImageDetailOriginal || out.Models[1].SupportsImageDetailOriginal || out.Models[2].SupportsImageDetailOriginal {
 				t.Fatal("original image detail must follow the model's image input capability")
 			}
-			if known.DisplayName != "Reasoning model" || known.ContextWindow == nil || *known.ContextWindow != 1000000 || !known.SupportsSearchTool || !slices.Equal(known.InputModalities, []string{"text", "image"}) {
+			if known.DisplayName != "REASONING MODEL" || known.ContextWindow == nil || *known.ContextWindow != 1000000 || !known.SupportsSearchTool || !slices.Equal(known.InputModalities, []string{"text", "image"}) {
 				t.Fatalf("lost model capability: %+v", known)
 			}
 			if known.DefaultReasoningLevel == nil || *known.DefaultReasoningLevel != "max" || len(known.SupportedReasoningLevels) != 2 {

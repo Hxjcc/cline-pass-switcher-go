@@ -98,6 +98,14 @@ func TestProbeModelPinnedDoesNotLookSingleProvider(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+		meta.UpstreamStatus = map[string]model.UpstreamStatus{
+			"deepseek": {Status: "bad", Note: "previous rejection", CheckedAt: 1},
+			"baseten":  {Status: "limited", Note: "rate limited", CheckedAt: 1},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := New(st).ProbeModel(t.Context(), "cline-pass/test")
 	if err != nil {
@@ -111,6 +119,12 @@ func TestProbeModelPinnedDoesNotLookSingleProvider(t *testing.T) {
 		t.Fatalf("pinReason = %q, want empty", meta.PinReason)
 	}
 	assertSameStringSet(t, "upstreams", meta.Upstreams, []string{"deepseek", "alibaba", "baseten", "fireworks"})
+	if status := meta.UpstreamStatus["deepseek"]; status.Status != "ok" || status.Note != "" || status.CheckedAt <= 1 {
+		t.Fatalf("successful probe retained a stale channel failure: %#v", status)
+	}
+	if status := meta.UpstreamStatus["baseten"]; status.Status != "limited" || status.CheckedAt != 1 {
+		t.Fatalf("probe changed a channel it did not use: %#v", status)
+	}
 }
 
 // asksForChannel reports whether a chat body pins routing to one channel through

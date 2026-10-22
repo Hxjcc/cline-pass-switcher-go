@@ -183,6 +183,9 @@ func (s *Store) applyEntry(entry journalEntry) {
 		if e.Canonical != "" {
 			current.CanonicalSlug = e.Canonical
 		}
+		if e.Error == nil && !e.Degraded {
+			current.ObserveUpstreamSuccess(e.Provider, e.GatewayAttempts, e.TS, e.MS)
+		}
 		s.meta.Models[e.Model] = current
 		history := s.meta.History
 		if len(history) < model.HistoryLimit {

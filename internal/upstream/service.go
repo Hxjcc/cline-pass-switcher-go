@@ -196,6 +196,8 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	if !hasChoices(root) {
 		return ProbeResult{}, errors.New("上游没有返回可用的补全结果，无法探测模型")
 	}
+	observedAt := time.Now().UnixMilli()
+	responseMS := time.Since(started).Milliseconds()
 	routing := ParseRouting(root)
 	var planned []string
 	var probe routingProbe
@@ -297,6 +299,8 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 			// gateway still honoured pins; stale data is worse than none.
 			current.UpstreamStatus = nil
 			current.ValidatedAt = 0
+		} else {
+			current.ObserveUpstreamSuccess(routing.FinalProvider, ParseMeta(root).Attempts, observedAt, responseMS)
 		}
 	})
 	if err != nil {

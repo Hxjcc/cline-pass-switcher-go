@@ -59,6 +59,7 @@ func codexModelCatalog(ids []string, metadata map[string]model.ModelMeta) []code
 		if display == "" {
 			display = id
 		}
+		display = strings.ToUpper(display)
 		levels := make([]codexReasoningLevel, 0, len(meta.ReasoningEfforts))
 		seen := map[string]bool{}
 		for _, raw := range meta.ReasoningEfforts {
