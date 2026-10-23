@@ -108,10 +108,27 @@ func (s *Service) ReadGatewayCatalog(ctx context.Context, modelID string, refres
 	return catalog, err
 }
 
-func RecommendedGatewayHas(catalog model.GatewayCatalog) []string {
-	// Prefer the model author's provider when available. Recommendations are
-	// requirements chosen for this routing workaround, not every supported tag.
+func RecommendedGatewayHas(catalog model.GatewayCatalog, targets ...string) []string {
 	providers := slices.Clone(catalog.Providers)
+	if len(targets) > 0 {
+		providers = nil
+		for _, target := range targets {
+			index := slices.IndexFunc(catalog.Providers, func(p model.GatewayProvider) bool { return p.Slug == target })
+			if index < 0 {
+				return []string{}
+			}
+			providers = append(providers, catalog.Providers[index])
+		}
+		// Every selected provider must satisfy the recommended requirements.
+		result := recommendableGatewayHas(providers[0])
+		for _, p := range providers[1:] {
+			has := recommendableGatewayHas(p)
+			result = slices.DeleteFunc(result, func(value string) bool { return !slices.Contains(has, value) })
+		}
+		return result
+	}
+	// With no selection, prefer the model author's provider, then the first
+	// provider with supported capability tags. Do not combine unrelated providers.
 	author := strings.SplitN(catalog.Model, "/", 2)[0]
 	slices.SortStableFunc(providers, func(a, b model.GatewayProvider) int {
 		if a.Slug == author && b.Slug != author {
@@ -123,17 +140,24 @@ func RecommendedGatewayHas(catalog model.GatewayCatalog) []string {
 		return 0
 	})
 	for _, p := range providers {
-		var result []string
-		for _, capability := range []string{"vision", "implicit-caching"} {
-			if slices.Contains(p.Has, capability) {
-				result = append(result, capability)
-			}
-		}
+		result := recommendableGatewayHas(p)
 		if len(result) > 0 {
-			return model.NormalizeGatewayHas(result)
+			return result
 		}
 	}
 	return []string{}
+}
+
+func recommendableGatewayHas(provider model.GatewayProvider) []string {
+	result := []string{}
+	for _, capability := range model.NormalizeGatewayHas(provider.Has) {
+		// Quantization remains an explicit advanced setting; unknown directory
+		// tags such as open-weights cannot become routing requirements.
+		if !strings.Contains(capability, ":") && model.ValidateGatewayHas([]string{capability}) == nil {
+			result = append(result, capability)
+		}
+	}
+	return result
 }
 
 func GatewayChannels(meta model.ModelMeta, has []string) []string {

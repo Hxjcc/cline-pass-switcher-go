@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test"
 
 test("a private-only model discovers suppliers and applies verified capability routing", async ({ page }) => {
   const modelID = "cline-pass/deepseek-v4.1-flash-1017"
-  const has = ["implicit-caching", "vision"]
+  const has = ["implicit-caching", "reasoning", "structured-output", "tool-use", "vision"]
   const catalog = { model: "deepseek/deepseek-v4.1-flash-1017", source: "https://example.test/endpoints", fetchedAt: Date.now(), providers: [
     { slug: "deepseek", name: "DeepSeek", has: ["vision", "implicit-caching", "reasoning", "tool-use", "structured-output"] },
     { slug: "baseten", name: "Baseten", has: ["vision", "implicit-caching", "tool-use"] },
@@ -15,6 +15,7 @@ test("a private-only model discovers suppliers and applies verified capability r
   } }] } }))
   await page.route("**/api/gateway-capabilities", async route => {
     expect(route.request().postDataJSON().model).toBe(modelID)
+    expect(route.request().postDataJSON().upstreams).toEqual(loaded ? ["deepseek"] : [])
     loaded = true
     await route.fulfill({ json: { ok: true, catalog, recommendedHas: has } })
   })
@@ -36,9 +37,17 @@ test("a private-only model discovers suppliers and applies verified capability r
   await page.getByRole("switch", { name: "启用能力过滤" }).click()
   const deepseek = page.getByRole("group", { name: "供应商 deepseek" })
   await expect(deepseek).toBeVisible()
-  await expect(page.getByRole("group", { name: "供应商 baseten" })).toBeVisible()
+  await expect(page.getByRole("group", { name: "供应商 baseten" })).toHaveCount(0)
+  for (const capability of ["图片输入", "隐式缓存", "推理", "工具调用", "结构化输出"]) {
+    await expect(page.getByRole("checkbox", { name: `要求${capability}能力` })).toBeChecked()
+  }
+  await expect(page.getByRole("checkbox", { name: "要求免费推理能力" })).not.toBeChecked()
   await deepseek.getByRole("button", { name: "设为优先" }).click()
   await expect(page.getByText("待应用", { exact: true })).toBeVisible()
+  const recommendation = page.waitForResponse("**/api/gateway-capabilities")
+  await page.getByRole("button", { name: "使用推荐" }).click()
+  await recommendation
+  await expect(page.getByRole("button", { name: "验证并应用" })).toBeEnabled()
   await page.getByRole("button", { name: "验证并应用" }).click()
   await expect(page.getByText("对照验证通过", { exact: true })).toBeVisible()
   await expect(page.getByText("待应用", { exact: true })).toHaveCount(0)

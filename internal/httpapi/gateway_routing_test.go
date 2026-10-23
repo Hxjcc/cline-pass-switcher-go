@@ -21,6 +21,39 @@ func cachedGatewayCatalog() *model.GatewayCatalog {
 	return &model.GatewayCatalog{Model: "deepseek/test", Source: "https://example.test/endpoints", FetchedAt: time.Now().UnixMilli(), Providers: []model.GatewayProvider{{Slug: "deepseek", Name: "DeepSeek", Has: []string{"vision", "implicit-caching", "tool-use"}}, {Slug: "other", Name: "Other", Has: []string{"tool-use"}}}}
 }
 
+func TestGatewayCapabilitiesRecommendsForSelectedSuppliers(t *testing.T) {
+	st, server := newTestServer(t)
+	_, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) { meta.GatewayCatalog = cachedGatewayCatalog() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		upstreams []string
+		want      []string
+	}{
+		{"default", nil, []string{"implicit-caching", "tool-use", "vision"}},
+		{"selected", []string{"other"}, []string{"tool-use"}},
+		{"intersection", []string{"deepseek", "other"}, []string{"tool-use"}},
+		{"missing", []string{"missing"}, []string{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]any{"model": "cline-pass/test", "upstreams": test.upstreams})
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, localRequest(http.MethodPost, "/api/gateway-capabilities", bytes.NewReader(raw)))
+			var result struct {
+				RecommendedHas []string `json:"recommendedHas"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK {
+				t.Fatalf("response=%d %s, err=%v", response.Code, response.Body.String(), err)
+			}
+			if result.RecommendedHas == nil || !slices.Equal(result.RecommendedHas, test.want) {
+				t.Fatalf("recommended=%v, want=%v", result.RecommendedHas, test.want)
+			}
+		})
+	}
+}
+
 func TestGatewayRoutingApplyAndEveryGenerationPath(t *testing.T) {
 	var calls atomic.Int32
 	var ignore atomic.Bool

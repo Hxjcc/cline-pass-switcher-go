@@ -403,9 +403,9 @@ function App() {
       body: { model: modelID, upstreams, exclude },
     })
 
-  const readGateway = async (modelID: string, refresh: boolean) => {
+  const readGateway = async (modelID: string, refresh: boolean, upstreams: string[] = []) => {
     const response = await api<GatewayCapabilitiesResponse>("/api/gateway-capabilities", {
-      key: authKey, body: { model: modelID, refresh },
+      key: authKey, body: { model: modelID, refresh, upstreams },
     })
     await loadModels()
     return response

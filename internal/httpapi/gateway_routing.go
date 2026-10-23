@@ -33,8 +33,9 @@ func routingConfigEqual(a, b model.PerModelConfig) bool {
 
 func (s *Server) handleGatewayCapabilities(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model   string `json:"model"`
-		Refresh bool   `json:"refresh"`
+		Model     string   `json:"model"`
+		Refresh   bool     `json:"refresh"`
+		Upstreams []string `json:"upstreams"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeRequestError(w, err)
@@ -49,7 +50,7 @@ func (s *Server) handleGatewayCapabilities(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "catalog": catalog, "recommendedHas": upstream.RecommendedGatewayHas(catalog)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "catalog": catalog, "recommendedHas": upstream.RecommendedGatewayHas(catalog, body.Upstreams...)})
 }
 
 func (s *Server) handleVerifyRouting(w http.ResponseWriter, r *http.Request) {

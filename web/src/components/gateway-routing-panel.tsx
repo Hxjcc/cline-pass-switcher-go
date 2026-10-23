@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { errorMessage } from "@/lib/api"
 import { formatTime } from "@/lib/format"
-import { gatewayCapabilities, normalizeHas, providerMatches, recommendedHas, routingConfigKey } from "@/lib/gateway-routing"
+import { gatewayCapabilities, normalizeHas, providerMatches, recommendationProviders, recommendedHas, routingConfigKey } from "@/lib/gateway-routing"
 import type { GatewayRoutingActions, ModelConfig, RoutingVerifyResponse, SubscriptionModel } from "@/types"
 
 interface Props extends GatewayRoutingActions {
@@ -30,6 +30,7 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
   const pending = busy || working
   const dirty = routingConfigKey(config) !== routingConfigKey(model.config)
   const candidates = catalog?.providers.filter(provider => providerMatches(provider, has)) ?? []
+  const suggestedProviders = recommendationProviders(catalog, config.upstreams)
   const usableAccounts = accounts.filter(account => account.enabled && account.hasKey)
   const selectedAccounts = accountID === "all" ? usableAccounts.length : 1
   const requestCount = selectedAccounts * ((config.upstreams.length || 1) + 1)
@@ -42,12 +43,15 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
     if (!onReadGateway) return
     setWorking(true)
     try {
-      const response = await onReadGateway(model.id, true)
+      const response = await onReadGateway(model.id, true, config.upstreams)
       if (useRecommendation || (enabled && !has.length)) {
         const chosen = response.recommendedHas
-        if (!chosen.length) { toast.info("目录没有可推荐的视觉或隐式缓存条件，请手动选择"); return }
+        if (!chosen.length) {
+          toast.info(config.upstreams.length > 1 ? "所选供应商没有共同的可推荐能力，请调整供应商或手动选择" : "目录没有所选供应商的可推荐能力，请调整供应商或手动选择")
+          return
+        }
         onEnabledChange(true)
-        onDraftChange({ ...config, gatewayHas: chosen, upstreams: config.upstreams.filter(target => response.catalog.providers.some(provider => provider.slug === target && providerMatches(provider, chosen))) })
+        onDraftChange({ ...config, gatewayHas: chosen })
       }
     } catch (error) { toast.error(errorMessage(error)) } finally { setWorking(false) }
   }
@@ -55,7 +59,7 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
   const toggle = (next: boolean) => {
     onEnabledChange(next)
     if (!next) { onDraftChange({ ...config, gatewayHas: [], upstreams: [], exclude: [] }); return }
-    onDraftChange({ ...config, gatewayHas: has.length ? has : recommendedHas(catalog) })
+    onDraftChange({ ...config, gatewayHas: has.length ? has : recommendedHas(catalog, config.upstreams) })
     if (!catalog && onReadGateway) void read(true)
   }
 
@@ -89,6 +93,7 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
       </div>
 
       {catalog && <p className="text-muted-foreground text-xs" title={catalog.source}>来源：Vercel · {catalog.model} · 更新于 {formatTime(catalog.fetchedAt)}{openedAt - catalog.fetchedAt > 6 * 60 * 60 * 1000 ? "（已过期，可刷新）" : ""}</p>}
+      {suggestedProviders.length > 0 && <p className="text-muted-foreground text-xs">推荐依据：{suggestedProviders.map(provider => provider.name).join("、")}{config.upstreams.length > 1 ? "的共同能力" : "的目录能力"}{!config.upstreams.length && "（未选择供应商，优先使用模型原厂）"}。点击“使用推荐”填写草稿，验证通过后应用。</p>}
 
       {enabled && <>
         {!dirty && !checks.length && <p className="text-xs">当前账号与条件尚无有效验证记录，请重新验证后确认钉住状态。</p>}

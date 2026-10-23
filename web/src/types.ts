@@ -65,7 +65,7 @@ export interface RoutingVerifyResponse {
 
 export interface GatewayRoutingActions {
   accounts?: Account[]
-  onReadGateway?: (modelID: string, refresh: boolean) => Promise<GatewayCapabilitiesResponse>
+  onReadGateway?: (modelID: string, refresh: boolean, upstreams?: string[]) => Promise<GatewayCapabilitiesResponse>
   onVerifyGateway?: (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean) => Promise<RoutingVerifyResponse>
 }
 

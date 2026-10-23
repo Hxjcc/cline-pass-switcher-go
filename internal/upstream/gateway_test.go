@@ -63,7 +63,7 @@ func TestGatewayCatalogDiscoversPrivateModelProvidersWithoutCredential(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(catalog.Providers) != 2 || !slices.Equal(RecommendedGatewayHas(catalog), []string{"implicit-caching", "vision"}) {
+		if len(catalog.Providers) != 2 || !slices.Equal(RecommendedGatewayHas(catalog), []string{"implicit-caching", "tool-use", "vision"}) {
 			t.Fatalf("catalog=%+v", catalog)
 		}
 		if slices.Contains(catalog.Providers[0].Has, "open-weights") {

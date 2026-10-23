@@ -447,9 +447,9 @@ export function ModelRow({
                 onEnabledChange={setFilterEnabled}
                 onDraftChange={setDraftConfig}
                 onRestore={clearConfig}
-                onReadGateway={onReadGateway ? async (modelID, refresh) => {
+                onReadGateway={onReadGateway ? async (modelID, refresh, upstreams) => {
                   setBusy("capabilities")
-                  try { return await onReadGateway(modelID, refresh) } finally { setBusy(null) }
+                  try { return await onReadGateway(modelID, refresh, upstreams) } finally { setBusy(null) }
                 } : undefined}
                 onVerifyGateway={onVerifyGateway ? async (modelID, value, accountID, allAccounts) => {
                   setBusy("verify")

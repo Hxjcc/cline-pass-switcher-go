@@ -21,15 +21,26 @@ export function providerMatches(provider: GatewayProvider, has: string[]) {
   })
 }
 
-export function recommendedHas(catalog?: GatewayCatalog) {
+export function recommendationProviders(catalog?: GatewayCatalog, upstreams: string[] = []): GatewayProvider[] {
   if (!catalog) return []
+  if (upstreams.length) {
+    const providers = upstreams.map(slug => catalog.providers.find(provider => provider.slug === slug))
+    return providers.every((provider): provider is GatewayProvider => provider !== undefined) ? providers : []
+  }
   const author = catalog.model.split("/")[0]
   const providers = [...catalog.providers].sort((a, b) => Number(b.slug === author) - Number(a.slug === author))
-  for (const provider of providers) {
-    const result = ["vision", "implicit-caching"].filter(capability => provider.has.includes(capability))
-    if (result.length) return normalizeHas(result)
-  }
-  return []
+  return providers.filter(provider => recommendableHas(provider).length > 0).slice(0, 1)
+}
+
+function recommendableHas(provider: GatewayProvider) {
+  const supported = normalizeHas(provider.has)
+  return gatewayCapabilities.map(capability => capability.value).filter(value => supported.includes(value))
+}
+
+export function recommendedHas(catalog?: GatewayCatalog, upstreams: string[] = []) {
+  const providers = recommendationProviders(catalog, upstreams)
+  if (!providers.length) return []
+  return normalizeHas(recommendableHas(providers[0]).filter(value => providers.every(provider => recommendableHas(provider).includes(value))))
 }
 
 export function routingConfigKey(config: ModelConfig) {
