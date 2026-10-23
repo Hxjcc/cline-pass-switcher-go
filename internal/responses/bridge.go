@@ -574,6 +574,7 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	}
 
 	chat := map[string]any{"model": modelID, "messages": messages}
+	CopyRoutingOptions(body, chat)
 	if len(context.chatTools) > 0 {
 		chat["tools"] = context.chatTools
 	}

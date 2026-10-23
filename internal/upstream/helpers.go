@@ -274,8 +274,12 @@ func SameProvider(first, second string) bool {
 }
 
 type Attempt struct {
-	Upstream    string
-	ExcludeList []string
+	Upstream       string
+	ExcludeList    []string
+	GatewayHas     []string
+	AllowList      []string
+	RoutingError   *apierr.Details
+	PolicyResolved bool
 }
 
 type AttemptResult struct {

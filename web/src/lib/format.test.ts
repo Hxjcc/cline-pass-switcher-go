@@ -86,7 +86,7 @@ test("providerLabel shortens the private-endpoint slug and passes others through
 
 test("pinReasonLabel maps the backend probe reasons", () => {
   expect(pinReasonLabel("gateway_ignores_provider_preferences")).toBe("网关已忽略上游偏好")
-  expect(pinReasonLabel("single_provider")).toBe("仅有一个候选渠道，无需钉住")
+  expect(pinReasonLabel("single_provider")).toBe("当前探测仅发现一个渠道")
   expect(pinReasonLabel("probe_failed")).toBe("无法确认网关是否支持钉住")
   expect(pinReasonLabel(undefined)).toBe("当前不可钉住")
 })
@@ -117,7 +117,7 @@ test("pipelineHint explains when pinning is unavailable", () => {
   expect(pipelineHint("planner", undefined, "gateway_ignores_provider_preferences")).toContain(
     "网关已忽略上游偏好",
   )
-  expect(pipelineHint("planner", false, "single_provider")).toContain("仅有一个候选渠道")
+  expect(pipelineHint("planner", false, "single_provider")).toContain("当前探测仅发现一个渠道")
   expect(pipelineHint("planner", true)).toContain("providerOptions.gateway")
   expect(pipelineHint("direct", true)).toContain("provider 字段")
   expect(pipelineHint(undefined)).toContain("无法区分渠道")
@@ -125,6 +125,6 @@ test("pipelineHint explains when pinning is unavailable", () => {
 
 test("pipelineHint explains a privately served model", () => {
   const hint = pipelineHint("planner", false, "single_provider", { canonicalSlug: "private/glm-5p3-contributor" })
-  expect(hint).toContain("不经过 OpenRouter / Vercel")
-  expect(hint).toContain("不能钉住")
+  expect(hint).toContain("当前默认路由使用私有接口")
+  expect(hint).toContain("启用能力过滤")
 })

@@ -86,11 +86,9 @@ const (
 	pinReasonUnsupported    = "unsupported_pipeline"
 )
 
-// privateChannel is the one endpoint Cline uses to serve the models it hosts
-// itself (the VMC/contributor deployments). Those models have no other usable
-// channel: the OpenRouter providers the gateway names in an impossible-pin
-// rejection are fallbacks it does not take, so a channel preference cannot
-// move the request and must not be advertised as pinning.
+// privateChannel is Cline's default endpoint for contributor deployments.
+// An unfiltered probe reaching it does not prove other providers are pinnable.
+// Capability-filtered routing has its own catalog and per-account evidence.
 const privateChannel = "openai-compatible-private"
 
 // servedPrivately reports whether the gateway answered this completion from
@@ -164,6 +162,17 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	if account.Key == "" {
 		return ProbeResult{}, errNoAccount
 	}
+	if cfg := s.store.ModelConfig(modelID); len(cfg.GatewayHas) > 0 {
+		check, err := s.VerifyGatewayRouting(ctx, modelID, cfg, account)
+		if err != nil {
+			return ProbeResult{}, err
+		}
+		meta := s.RoutingMeta(modelID, cfg, s.store.ModelMeta(modelID))
+		if !check.OK {
+			return ProbeResult{MS: check.MS, ModelMeta: meta}, fmt.Errorf("%s", check.Error)
+		}
+		return ProbeResult{OK: true, MS: check.MS, ModelMeta: meta}, nil
+	}
 	started := time.Now()
 	body := map[string]any{
 		"model": modelID,
@@ -204,7 +213,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	var probeErr error
 	if routing.Pipeline != "" {
 		planned = parsePlannedProviders(routing.Plan)
-		probe, probeErr = s.probeRoutingPreference(ctx, modelID, routing.Pipeline)
+		probe, probeErr = s.probeRoutingPreference(ctx, modelID, routing.Pipeline, account)
 	}
 	var endpoints []model.UpstreamDetail
 	orSlug := ""
@@ -313,8 +322,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 // provider-routing field for the model's pipeline. A routing rejection proves
 // the field is read and also yields the candidate list; a normal completion
 // means the gateway silently ignored the impossible pin.
-func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline string) (routingProbe, error) {
-	account := s.store.PickAccount()
+func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline string, account model.Account) (routingProbe, error) {
 	if account.Key == "" {
 		return routingProbe{}, errNoAccount
 	}
@@ -441,6 +449,9 @@ func (s *Service) orEndpoints(ctx context.Context, slug string) ([]model.Upstrea
 }
 
 func (s *Service) ValidateUpstreams(ctx context.Context, modelID string) (ValidationResult, error) {
+	if cfg := s.store.ModelConfig(modelID); len(cfg.GatewayHas) > 0 {
+		return s.validateGatewayChannels(ctx, modelID, cfg)
+	}
 	modelMeta := s.store.ModelMeta(modelID)
 	if modelMeta.Pinnable == nil || !*modelMeta.Pinnable || len(modelMeta.Upstreams) == 0 {
 		reason := modelMeta.PinReason
@@ -762,12 +773,15 @@ func (s *Service) TestAccount(ctx context.Context, key, accountID string) Accoun
 // GLM-style routes stay pinnable. An unprobed model is not auto: saved pins
 // are left as configured until a probe says otherwise.
 func (s *Service) AutoRoute(modelID string) bool {
+	if len(s.store.ModelConfig(modelID).GatewayHas) > 0 {
+		return false
+	}
 	meta := s.store.ModelMeta(modelID)
 	return meta.Pinnable != nil && !*meta.Pinnable
 }
 
 func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Attempt {
-	if s.AutoRoute(modelID) {
+	if len(cfg.GatewayHas) == 0 && s.AutoRoute(modelID) {
 		return []Attempt{{}}
 	}
 	excluded := make(map[string]struct{}, len(cfg.Exclude))
@@ -780,7 +794,7 @@ func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Atte
 			wanted = append(wanted, upstreamSlug)
 		}
 	}
-	base := Attempt{ExcludeList: cfg.Exclude}
+	base := Attempt{ExcludeList: slices.Clone(cfg.Exclude), GatewayHas: slices.Clone(cfg.GatewayHas)}
 	if len(wanted) == 0 {
 		return []Attempt{base}
 	}
@@ -797,6 +811,9 @@ func (s *Service) BuildAttempts(modelID string, cfg model.PerModelConfig) []Atte
 // against: the probed channel list when one exists, otherwise the channels the
 // user pinned for the model before the first probe.
 func (s *Service) knownChannels(modelID string) []string {
+	if cfg := s.store.ModelConfig(modelID); len(cfg.GatewayHas) > 0 {
+		return GatewayChannels(s.store.ModelMeta(modelID), cfg.GatewayHas)
+	}
 	if upstreams := s.store.ModelMeta(modelID).Upstreams; len(upstreams) > 0 {
 		return upstreams
 	}
@@ -808,6 +825,12 @@ func (s *Service) knownChannels(modelID string) []string {
 // that allow list comes out empty an unconstrained request would silently use
 // the channels the user excluded, so the attempt must fail instead.
 func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Details {
+	if attempt.RoutingError != nil {
+		return attempt.RoutingError
+	}
+	if attempt.PolicyResolved {
+		return nil
+	}
 	if len(attempt.ExcludeList) == 0 {
 		return nil
 	}
@@ -817,6 +840,9 @@ func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Detail
 		return nil
 	}
 	known := s.knownChannels(modelID)
+	if len(attempt.GatewayHas) > 0 {
+		known = GatewayChannels(s.store.ModelMeta(modelID), attempt.GatewayHas)
+	}
 	if len(known) == 0 {
 		return &apierr.Details{
 			Status:  http.StatusBadRequest,
@@ -830,7 +856,7 @@ func (s *Service) RoutingFailure(modelID string, attempt Attempt) *apierr.Detail
 		excluded[upstreamSlug] = struct{}{}
 	}
 	for _, upstreamSlug := range known {
-		if _, found := excluded[upstreamSlug]; !found {
+		if _, found := excluded[upstreamSlug]; !found && (len(attempt.AllowList) == 0 || containsProvider(attempt.AllowList, upstreamSlug)) {
 			return nil
 		}
 	}
@@ -853,6 +879,9 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 		}
 	}
 	known := s.knownChannels(modelID)
+	if len(attempt.GatewayHas) > 0 {
+		known = GatewayChannels(modelMeta, attempt.GatewayHas)
+	}
 	var allowList []string
 	if len(exclude) > 0 {
 		excluded := make(map[string]struct{}, len(exclude))
@@ -867,12 +896,19 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 	}
 	// No exclusion rules means no constraint; an empty allow list while rules
 	// exist is a conflict the attempt layer rejects before reaching here.
-	if attempt.Upstream == "" && len(attempt.ExcludeList) == 0 {
+	if len(attempt.AllowList) > 0 {
+		if len(exclude) > 0 && !attempt.PolicyResolved {
+			allowList = intersectProviders(allowList, attempt.AllowList)
+		} else {
+			allowList = slices.Clone(attempt.AllowList)
+		}
+	}
+	if attempt.Upstream == "" && len(attempt.ExcludeList) == 0 && len(attempt.GatewayHas) == 0 && len(attempt.AllowList) == 0 {
 		return cloned
 	}
 	pipeline := modelMeta.Pipeline
-	useVercel := pipeline == "planner" || pipeline == ""
-	useOpenRouter := pipeline == "direct" || pipeline == ""
+	useVercel := pipeline == "planner" || pipeline == "" || len(attempt.GatewayHas) > 0
+	useOpenRouter := (pipeline == "direct" || pipeline == "") && len(attempt.GatewayHas) == 0
 	if useVercel {
 		providerOptions := jsonx.Map(cloned["providerOptions"])
 		if providerOptions == nil {
@@ -886,6 +922,9 @@ func (s *Service) InjectPrefs(body map[string]any, modelID string, attempt Attem
 			gateway["only"] = []string{attempt.Upstream}
 		} else if len(allowList) > 0 {
 			gateway["only"] = allowList
+		}
+		if len(attempt.GatewayHas) > 0 {
+			gateway["has"] = slices.Clone(attempt.GatewayHas)
 		}
 		providerOptions["gateway"] = gateway
 		cloned["providerOptions"] = providerOptions
@@ -981,12 +1020,24 @@ func (s *Service) AttemptNonStream(ctx context.Context, modelID string, body map
 			Usage:   output["usage"],
 		}
 	}
+	routing := s.RoutingFor(modelID, root)
+	if len(attempt.GatewayHas) > 0 {
+		allowed := attempt.AllowList
+		if attempt.Upstream != "" {
+			allowed = []string{attempt.Upstream}
+		}
+		actual := ServingProvider(ParseMeta(root))
+		if actual != "" && len(allowed) > 0 && !containsProvider(allowed, actual) {
+			details := apierr.Details{Status: http.StatusBadGateway, Type: "upstream_error", Code: "provider_preference_ignored", Message: fmt.Sprintf("实际供应商 %s 不在本次允许列表中", actual)}
+			return AttemptResult{Status: details.Status, Out: apierr.Body(details), NetErr: details.Message, Routing: routing, Account: account, Usage: output["usage"]}
+		}
+	}
 	s.noteAccountStatus(account, http.StatusOK)
 	s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
 	return AttemptResult{
 		Status:  http.StatusOK,
 		Out:     output,
-		Routing: s.RoutingFor(modelID, root),
+		Routing: routing,
 		Account: account,
 		Usage:   output["usage"],
 	}

@@ -231,6 +231,7 @@ func NormalizeConfig(cfg *Config) {
 		cfg.PerModel = map[string]PerModelConfig{}
 	}
 	for id, modelConfig := range cfg.PerModel {
+		modelConfig.GatewayHas = NormalizeGatewayHas(modelConfig.GatewayHas)
 		if modelConfig.Upstreams == nil && modelConfig.Upstream != "" {
 			modelConfig.Upstreams = []string{modelConfig.Upstream}
 		}

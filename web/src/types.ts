@@ -16,6 +16,57 @@ export interface ModelConfig {
   upstream?: string
   upstreams: string[]
   exclude: string[]
+  gatewayHas?: string[]
+}
+
+export interface GatewayProvider {
+  slug: string
+  name: string
+  has: string[]
+  quantization?: string
+  context?: number
+  output?: number
+}
+
+export interface GatewayCatalog {
+  model: string
+  source: string
+  fetchedAt: number
+  providers: GatewayProvider[]
+}
+
+export interface RoutingCheck {
+  profile: string
+  accountId: string
+  account: string
+  has: string[]
+  targets: string[]
+  actual: string[]
+  matched: boolean
+  rejected: boolean
+  ok: boolean
+  current: boolean
+  error?: string
+  checkedAt: number
+  ms: number
+}
+
+export interface GatewayCapabilitiesResponse {
+  ok: boolean
+  catalog: GatewayCatalog
+  recommendedHas: string[]
+}
+
+export interface RoutingVerifyResponse {
+  ok: boolean
+  applied: boolean
+  checks: RoutingCheck[]
+}
+
+export interface GatewayRoutingActions {
+  accounts?: Account[]
+  onReadGateway?: (modelID: string, refresh: boolean) => Promise<GatewayCapabilitiesResponse>
+  onVerifyGateway?: (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean) => Promise<RoutingVerifyResponse>
 }
 
 export interface UpstreamDetail {
@@ -64,6 +115,9 @@ export interface ModelMeta {
   probedAt?: number
   upstreamStatus?: Record<string, UpstreamStatus>
   validatedAt?: number
+  gatewayCatalog?: GatewayCatalog
+  routingChecks?: Record<string, RoutingCheck>
+  gatewayStatusHas?: string[]
 }
 
 export interface SubscriptionModel {
@@ -261,6 +315,9 @@ export interface HistoryItem {
   session?: string
   gatewayAttempts?: GatewayAttempt[]
   generationId?: string
+  gatewayHas?: string[]
+  targetProviders?: string[]
+  routingStatus?: string
   ms: number
   ttftMs?: number
   stream: boolean
@@ -311,6 +368,7 @@ export interface TestResponse {
   ms?: number
   targets?: string[]
   exclude?: string[]
+  gatewayHas?: string[]
   actual?: string
   actualName?: string
   pipeline?: "direct" | "planner"

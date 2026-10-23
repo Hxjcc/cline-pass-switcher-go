@@ -73,7 +73,8 @@ func responsesShareKey(ctx context.Context, modelID string, requestBody, chatBod
 	caller, _ := callerKeyFrom(ctx)
 	accountPin, _ := upstream.AccountPinFrom(ctx)
 	view := map[string]any{
-		"model": modelID, "responses": withoutTransport(requestBody),
+		"effective_routing": ctx.Value(recordedRoutingKey{}),
+		"model":             modelID, "responses": withoutTransport(requestBody),
 		"chat": withoutTransport(chatBody), "routing": modelConfig,
 		"key_id": caller.ID, "account_pin": accountPin,
 		// Header-only affinity clients have no prompt_cache_key in the body.
@@ -565,7 +566,7 @@ func (s *Server) runSharedResponses(
 		if fatal || ctx.Err() != nil {
 			break
 		}
-		if s.stopFailover(job.last.Status, modelID) {
+		if s.stopFailover(job.last.Status, modelID, len(attempt.GatewayHas) > 0) {
 			break
 		}
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
 // maxRecordedErrorRunes bounds what one upstream failure can add to the
@@ -18,6 +19,27 @@ const maxRecordedErrorRunes = 2000
 // store can charge the spend of an issued key in the same journal entry; the
 // console and master-key traffic stamp nothing and stay uncapped.
 func (s *Server) record(ctx context.Context, entry model.HistoryEntry) {
+	if policy, ok := ctx.Value(recordedRoutingKey{}).(recordedRouting); ok {
+		entry.GatewayHas = policy.Has
+		entry.TargetProviders = policy.Targets
+		if len(policy.Has) > 0 {
+			entry.RoutingStatus = "unknown"
+			actual := firstNonEmpty(entry.Resolved, entry.Provider)
+			if actual != "" && len(policy.Targets) > 0 {
+				entry.RoutingStatus = "mismatch"
+				for _, target := range policy.Targets {
+					if upstream.SameProvider(actual, target) {
+						entry.RoutingStatus = "matched"
+						break
+					}
+				}
+				if entry.RoutingStatus == "mismatch" && entry.Error == nil {
+					message := "实际供应商不满足本次路由要求：" + actual
+					entry.Error = &message
+				}
+			}
+		}
+	}
 	entry = stampCallerKey(ctx, entry)
 	if entry.Session == "" {
 		entry.Session = recordedSession(ctx)

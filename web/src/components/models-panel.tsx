@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils"
 import type { ProbeBatchResult } from "@/lib/probe-batch"
 import type {
   ModelConfig,
+  GatewayRoutingActions,
   ModelsResponse,
   OfficialResponse,
   ProbeResponse,
@@ -36,7 +37,7 @@ import type {
   ValidationResponse,
 } from "@/types"
 
-interface ModelsPanelProps {
+interface ModelsPanelProps extends GatewayRoutingActions {
   data: ModelsResponse
   onRefresh: () => Promise<void>
   onProbe: (modelID: string) => Promise<ProbeResponse>
@@ -63,6 +64,9 @@ export function ModelsPanel({
   onUpdateConfig,
   onFetchOfficial,
   onRemove,
+  accounts,
+  onReadGateway,
+  onVerifyGateway,
 }: ModelsPanelProps) {
   const [filter, setFilter] = useState("")
   const [refreshing, setRefreshing] = useState(false)
@@ -214,6 +218,9 @@ export function ModelsPanel({
                     onUpdateConfig={onUpdateConfig}
                     onRemove={onRemove}
                     onRefresh={onRefresh}
+                    accounts={accounts}
+                    onReadGateway={onReadGateway}
+                    onVerifyGateway={onVerifyGateway}
                   />
                 ))}
                 {!models.length && (

@@ -79,6 +79,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	}
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
+	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	stream, _ := body["stream"].(bool)
 	strictStructured := bridgeContext.StrictOutput()
@@ -360,6 +361,7 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 	}
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
+	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	// Compaction needs the complete summary before it can be wrapped into one
 	// opaque output item, so the upstream call is always buffered.
@@ -656,6 +658,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	}
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
+	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))
 	bridgeContext.InputTokenCap = int64(s.store.ModelMeta(modelID).ContextWindow)
 	s.ensureCompactionBudget(chatBody)
 	bridgeContext.MaxOutputTokens = chatBody["max_tokens"]

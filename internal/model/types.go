@@ -48,9 +48,10 @@ func (a *Account) UnmarshalJSON(data []byte) error {
 }
 
 type PerModelConfig struct {
-	Upstream  string   `json:"upstream,omitempty"`
-	Upstreams []string `json:"upstreams"`
-	Exclude   []string `json:"exclude"`
+	Upstream   string   `json:"upstream,omitempty"`
+	Upstreams  []string `json:"upstreams"`
+	Exclude    []string `json:"exclude"`
+	GatewayHas []string `json:"gatewayHas,omitempty"`
 }
 
 type Config struct {
@@ -186,6 +187,9 @@ type ModelMeta struct {
 	ProbedAt            int64                     `json:"probedAt,omitempty"`
 	UpstreamStatus      map[string]UpstreamStatus `json:"upstreamStatus,omitempty"`
 	ValidatedAt         int64                     `json:"validatedAt,omitempty"`
+	GatewayCatalog      *GatewayCatalog           `json:"gatewayCatalog,omitempty"`
+	RoutingChecks       map[string]RoutingCheck   `json:"routingChecks,omitempty"`
+	GatewayStatusHas    []string                  `json:"gatewayStatusHas,omitempty"`
 }
 
 // SupportsOriginalImageDetail follows the gateway policy: every model with
@@ -303,6 +307,9 @@ type HistoryEntry struct {
 	// metadata and describe the work done inside the gateway for this request.
 	GatewayAttempts []GatewayAttempt `json:"gatewayAttempts,omitempty"`
 	GenerationID    string           `json:"generationId,omitempty"`
+	GatewayHas      []string         `json:"gatewayHas,omitempty"`
+	TargetProviders []string         `json:"targetProviders,omitempty"`
+	RoutingStatus   string           `json:"routingStatus,omitempty"`
 	// MissingSummarySections names the anchored summary sections a completed
 	// compaction left out. The compaction still succeeded, so this is an
 	// advisory note for the console rather than an error.

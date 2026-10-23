@@ -90,6 +90,7 @@ func (s *Store) ModelConfig(modelID string) model.PerModelConfig {
 	cfg := s.config.PerModel[modelID]
 	cfg.Upstreams = slices.Clone(cfg.Upstreams)
 	cfg.Exclude = slices.Clone(cfg.Exclude)
+	cfg.GatewayHas = slices.Clone(cfg.GatewayHas)
 	return cfg
 }
 
@@ -102,6 +103,7 @@ func (s *Store) PerModelConfigs() map[string]model.PerModelConfig {
 	for id, value := range s.config.PerModel {
 		value.Upstreams = slices.Clone(value.Upstreams)
 		value.Exclude = slices.Clone(value.Exclude)
+		value.GatewayHas = slices.Clone(value.GatewayHas)
 		configs[id] = value
 	}
 	return configs
@@ -257,6 +259,7 @@ func (s *Store) ModelsSnapshot() ModelsSnapshot {
 	for id, value := range s.config.PerModel {
 		value.Upstreams = slices.Clone(value.Upstreams)
 		value.Exclude = slices.Clone(value.Exclude)
+		value.GatewayHas = slices.Clone(value.GatewayHas)
 		snapshot.PerModel[id] = value
 	}
 	for id, value := range s.meta.Models {

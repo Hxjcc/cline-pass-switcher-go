@@ -21,6 +21,7 @@ func cloneConfig(cfg model.Config) model.Config {
 		for id, value := range cfg.PerModel {
 			value.Upstreams = slices.Clone(value.Upstreams)
 			value.Exclude = slices.Clone(value.Exclude)
+			value.GatewayHas = slices.Clone(value.GatewayHas)
 			perModel[id] = value
 		}
 		cfg.PerModel = perModel
@@ -66,6 +67,25 @@ func cloneMetadata(meta model.Metadata) model.Metadata {
 }
 
 func cloneModelMeta(meta model.ModelMeta) model.ModelMeta {
+	meta.GatewayStatusHas = slices.Clone(meta.GatewayStatusHas)
+	if meta.GatewayCatalog != nil {
+		catalog := *meta.GatewayCatalog
+		catalog.Providers = slices.Clone(catalog.Providers)
+		for i := range catalog.Providers {
+			catalog.Providers[i].Has = slices.Clone(catalog.Providers[i].Has)
+		}
+		meta.GatewayCatalog = &catalog
+	}
+	if meta.RoutingChecks != nil {
+		checks := make(map[string]model.RoutingCheck, len(meta.RoutingChecks))
+		for key, check := range meta.RoutingChecks {
+			check.Has = slices.Clone(check.Has)
+			check.Targets = slices.Clone(check.Targets)
+			check.Actual = slices.Clone(check.Actual)
+			checks[key] = check
+		}
+		meta.RoutingChecks = checks
+	}
 	meta.ReasoningEfforts = slices.Clone(meta.ReasoningEfforts)
 	meta.InputModalities = slices.Clone(meta.InputModalities)
 	meta.OutputModalities = slices.Clone(meta.OutputModalities)
@@ -82,6 +102,8 @@ func cloneModelMeta(meta model.ModelMeta) model.ModelMeta {
 }
 
 func cloneHistoryEntry(entry model.HistoryEntry) model.HistoryEntry {
+	entry.GatewayHas = slices.Clone(entry.GatewayHas)
+	entry.TargetProviders = slices.Clone(entry.TargetProviders)
 	entry.Attempts = slices.Clone(entry.Attempts)
 	entry.Trace = slices.Clone(entry.Trace)
 	entry.GatewayAttempts = slices.Clone(entry.GatewayAttempts)

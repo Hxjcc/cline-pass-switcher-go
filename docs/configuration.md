@@ -121,10 +121,27 @@
 |---|---|
 | `upstreams` | 优先使用的渠道，按顺序尝试，最多 10 个。出现在 `exclude` 里的渠道会被移除。 |
 | `exclude` | 排除的渠道，最多 10 个。 |
+| `gatewayHas` | 模型级能力过滤，默认空数组（关闭）。支持 `vision`、`implicit-caching`、`reasoning`、`tool-use`、`structured-output`、`free`，以及 `quantization:<格式>` / `!quantization:<格式>`。多项条件同时满足；控制台通过「验证并应用」保存。 |
 | `sort` | **已废弃**：旧版本用来让网关按成本/首字/吞吐挑选渠道，实测难以验证且与钉住互斥，现已不再读取，写回时会被丢弃。 |
 | `upstream` | 旧版的单渠道字段，读取时并入 `upstreams`。 |
 
 这些设置怎样影响请求，见[账号与渠道调度](routing.md#渠道钉住与排除)。
+
+例如，经当前账号对照验证后，可为 `cline-pass/deepseek-v4.1-flash-1017` 保存：
+
+```json
+{
+  "perModel": {
+    "cline-pass/deepseek-v4.1-flash-1017": {
+      "upstreams": ["deepseek"],
+      "exclude": [],
+      "gatewayHas": ["vision", "implicit-caching"]
+    }
+  }
+}
+```
+
+`gatewayHas` 是本项目的设置名，发给 Cline 时位于顶层 `providerOptions.gateway.has`，与同层 `only` 同时发送。能力条件并不打开或关闭模型功能；例如 `implicit-caching` 是要求上游支持隐式缓存。`free` 不代表 Cline Pass 账单扣费为零。关闭过滤并恢复默认路由时，清空该模型的过滤、优先和排除设置。
 
 ### proxyKeys
 

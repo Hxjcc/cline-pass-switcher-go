@@ -148,7 +148,7 @@ export function keyMask(length?: number): string {
 const providerLabels: Record<string, { label: string; hint: string }> = {
   "openai-compatible-private": {
     label: "私有接口",
-    hint: "Cline 在网关中私有注册的 OpenAI 兼容接口，通常为厂商自有 API；此类模型没有其他渠道可选。",
+    hint: "Cline 在网关中私有注册的 OpenAI 兼容接口。可读取供应商目录，验证能力过滤后的其他路由。",
   },
 }
 
@@ -170,7 +170,9 @@ export function pinReasonLabel(reason?: string): string {
     case "gateway_ignores_provider_preferences":
       return "网关已忽略上游偏好"
     case "single_provider":
-      return "仅有一个候选渠道，无需钉住"
+      return "当前探测仅发现一个渠道"
+    case "routing_unverified":
+      return "当前条件尚未验证钉住"
     case "probe_failed":
       return "无法确认网关是否支持钉住"
     case "no_channels":
@@ -197,11 +199,11 @@ export function pipelineHint(
   meta?: PipelineMeta | null,
 ): string {
   if (isPrivateLine(meta)) {
-    return "该模型由网关私有注册的接口直接提供，不经过 OpenRouter / Vercel 的渠道选择，也没有第二个渠道可选，因此不能钉住或排除。"
+    return "当前默认路由使用私有接口。可以启用能力过滤，读取供应商目录后重新验证钉住。"
   }
   const pinDisabled = isPinDisabled({ pinnable, pinReason })
   if (pinDisabled && pinReason === "single_provider") {
-    return "该模型仅有一个候选渠道，无需钉住，也没有其他渠道可供校验。"
+    return "当前探测仅发现一个渠道。可以读取供应商能力，验证筛选后的路由。"
   }
   if (pinDisabled) {
     const reason = pinReasonLabel(pinReason)
@@ -230,5 +232,6 @@ export function normalizeModelConfig(
     upstream: config?.upstream,
     upstreams: config?.upstreams ?? [],
     exclude: config?.exclude ?? [],
+    ...(config?.gatewayHas ? { gatewayHas: config.gatewayHas } : {}),
   }
 }

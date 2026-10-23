@@ -161,6 +161,14 @@ export function TestBench({ models, onTest }: TestBenchProps) {
             </Alert>
           )}
 
+          {config.gatewayHas?.length ? (
+            <div className="bg-muted/30 space-y-1 rounded-lg border px-3 py-2.5 text-xs">
+              <div className="text-muted-foreground">沿用已应用的能力过滤</div>
+              <div className="font-mono">{config.gatewayHas.join(" + ")}</div>
+              <div className="text-muted-foreground">更换目标供应商也会保留这些要求。</div>
+            </div>
+          ) : null}
+
           {config.upstreams.length > 0 && upstream === "auto" && (
             <div className="bg-muted/30 space-y-2 rounded-lg border px-3 py-2.5">
               <div className="text-muted-foreground text-xs">将按以下顺序尝试渠道</div>

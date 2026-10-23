@@ -99,6 +99,7 @@ func StructuredRepairBody(chatBody map[string]any, text string, schema any, effo
 		"stream":   false,
 		"messages": []any{map[string]any{"role": "user", "content": prompt}},
 	}
+	CopyRoutingOptions(chatBody, body)
 	limit := int64(4096)
 	if original := intValue(chatBody["max_tokens"]); original > 0 && original < limit {
 		limit = original

@@ -13,13 +13,16 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 	original := model.ModelMeta{
 		ReasoningEfforts: []string{"high"}, InputModalities: []string{"text"}, OutputModalities: []string{"text"},
 		AvailableProviders: []string{"a"}, Upstreams: []string{"a"}, Tier0: []string{"a"},
-		UpstreamDetail: map[string]model.UpstreamDetail{"a": {Name: "A"}},
-		UpstreamStatus: map[string]model.UpstreamStatus{"a": {Status: "ok"}},
-		Pinnable:       &pinnable,
+		UpstreamDetail:   map[string]model.UpstreamDetail{"a": {Name: "A"}},
+		UpstreamStatus:   map[string]model.UpstreamStatus{"a": {Status: "ok"}},
+		Pinnable:         &pinnable,
+		GatewayStatusHas: []string{"vision"},
+		GatewayCatalog:   &model.GatewayCatalog{Providers: []model.GatewayProvider{{Slug: "a", Has: []string{"vision"}}}},
+		RoutingChecks:    map[string]model.RoutingCheck{"profile": {Has: []string{"vision"}, Targets: []string{"a"}, Actual: []string{"a"}}},
 	}
 	s := &Store{meta: model.Metadata{Models: map[string]model.ModelMeta{"test": original}},
 		config: model.Config{ProxyKey: "key", UpstreamBase: "https://example.test", PerModel: map[string]model.PerModelConfig{
-			"test": {Upstreams: []string{"a"}, Exclude: []string{"b"}},
+			"test": {Upstreams: []string{"a"}, Exclude: []string{"b"}, GatewayHas: []string{"vision"}},
 		}}}
 	snapshot := s.ModelMeta("test")
 	for _, slice := range [][]string{snapshot.ReasoningEfforts, snapshot.InputModalities, snapshot.OutputModalities, snapshot.AvailableProviders, snapshot.Upstreams, snapshot.Tier0} {
@@ -28,13 +31,20 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 	snapshot.UpstreamDetail["a"] = model.UpstreamDetail{Name: "changed"}
 	snapshot.UpstreamStatus["a"] = model.UpstreamStatus{Status: "changed"}
 	*snapshot.Pinnable = false
+	snapshot.GatewayCatalog.Providers[0].Has[0] = "changed"
+	snapshot.GatewayStatusHas[0] = "changed"
+	check := snapshot.RoutingChecks["profile"]
+	check.Has[0] = "changed"
+	check.Targets[0] = "changed"
+	check.Actual[0] = "changed"
 	if !reflect.DeepEqual(s.ModelMeta("test"), original) {
 		t.Fatal("model snapshot aliases the store")
 	}
 	cfg := s.ModelConfig("test")
 	cfg.Upstreams[0], cfg.Exclude[0] = "x", "y"
+	cfg.GatewayHas[0] = "changed"
 	stored := s.ModelConfig("test")
-	if stored.Upstreams[0] != "a" || stored.Exclude[0] != "b" {
+	if stored.Upstreams[0] != "a" || stored.Exclude[0] != "b" || stored.GatewayHas[0] != "vision" {
 		t.Fatal("configuration snapshot aliases the store")
 	}
 	if !reflect.DeepEqual(s.ModelMeta("missing"), model.ModelMeta{}) || !reflect.DeepEqual(s.ModelConfig("missing"), model.PerModelConfig{}) {

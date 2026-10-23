@@ -224,6 +224,15 @@ function CostCell({ usage }: { usage?: UsageStats }) {
   )
 }
 
+function RoutingPolicy({ item }: { item: HistoryItem }) {
+  if (!item.gatewayHas?.length) return null
+  const labels: Record<string, string> = { matched: "已命中目标", mismatch: "未命中目标", unknown: "路由未确认", rejected: "无效上游已拒绝" }
+  return <details className="text-muted-foreground mt-1 text-2xs">
+    <summary className={cn("cursor-pointer", item.routingStatus === "mismatch" && "text-destructive")}>{item.kind === "routing-check" ? "路由对照" : "能力过滤"} · {labels[item.routingStatus ?? "unknown"] ?? "路由未确认"}</summary>
+    <div className="mt-1 space-y-0.5 font-mono wrap-anywhere"><div>has: {item.gatewayHas.join(", ")}</div><div>目标：{item.targetProviders?.join(", ") || "按能力自动选择"}</div><div>实际：{actualProvider(item) || "未知"}</div></div>
+  </details>
+}
+
 // HistoryCard is the phone layout of one history row: the same facts as the
 // table, stacked so nothing is clipped off the side of the screen.
 function HistoryCard({ item }: { item: HistoryItem }) {
@@ -259,6 +268,7 @@ function HistoryCard({ item }: { item: HistoryItem }) {
       </div>
 
       <div className="mt-1 font-mono text-xs wrap-anywhere">{item.model}</div>
+      <RoutingPolicy item={item} />
       {item.canonical ? (
         <div className="text-muted-foreground font-mono text-2xs wrap-anywhere">{item.canonical}</div>
       ) : null}
@@ -538,6 +548,7 @@ export function HistoryPanel({
                     <TableCell className={cell}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-mono text-xs">{item.model}</span>
+                        <RoutingPolicy item={item} />
                         {item.kind === "compact" && (
                           <Badge variant="secondary" className={chipClass}>
                             压缩

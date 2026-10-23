@@ -42,6 +42,8 @@ import type {
   KeysResponse,
   MetaResponse,
   ModelConfig,
+  GatewayCapabilitiesResponse,
+  RoutingVerifyResponse,
   ModelsResponse,
   OfficialResponse,
   ProbeResponse,
@@ -253,6 +255,7 @@ function App() {
     })
     const response = await api<AccountsResponse>("/api/accounts", { key: authKey })
     setAccounts(response)
+    await loadModels()
   }
 
   const testAccount = (key: string, id?: string) =>
@@ -399,6 +402,22 @@ function App() {
       key: authKey,
       body: { model: modelID, upstreams, exclude },
     })
+
+  const readGateway = async (modelID: string, refresh: boolean) => {
+    const response = await api<GatewayCapabilitiesResponse>("/api/gateway-capabilities", {
+      key: authKey, body: { model: modelID, refresh },
+    })
+    await loadModels()
+    return response
+  }
+
+  const verifyGateway = async (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean) => {
+    const response = await api<RoutingVerifyResponse>("/api/verify-routing", {
+      key: authKey, body: { model: modelID, config, accountId: accountID, allAccounts, apply: true },
+    })
+    await Promise.all([loadModels(), refreshHistory()])
+    return response
+  }
 
   const updateModelConfig = async (modelID: string, config: ModelConfig) => {
     const previous = models?.subscription.find((model) => model.id === modelID)?.config
@@ -624,6 +643,9 @@ function App() {
             {models && (
               <ModelsPanel
                 data={models}
+                accounts={accounts?.accounts ?? []}
+                onReadGateway={readGateway}
+                onVerifyGateway={verifyGateway}
                 onRefresh={async () => {
                   await loadModels()
                 }}

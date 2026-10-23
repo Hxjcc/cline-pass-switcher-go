@@ -173,7 +173,7 @@ func (s *Server) handleStreamingChat(writer http.ResponseWriter, request *http.R
 		if streamed {
 			return
 		}
-		if fatal || ctx.Err() != nil || s.stopFailover(last.Status, modelID) {
+		if fatal || ctx.Err() != nil || s.stopFailover(last.Status, modelID, len(attempt.GatewayHas) > 0) {
 			break
 		}
 	}

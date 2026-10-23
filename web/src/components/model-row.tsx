@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button"
 import { TableCell, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { GatewayRoutingPanel } from "@/components/gateway-routing-panel"
 import { ProviderName } from "@/components/provider-name"
 import { StatusDot } from "@/components/status-dot"
 import { TraceList } from "@/components/trace-list"
@@ -45,16 +46,18 @@ import {
   shortDuration,
 } from "@/lib/format"
 import { orderedUpstreams } from "@/lib/upstream-order"
+import { gatewayCapabilities, normalizeHas, providerMatches, routingConfigKey } from "@/lib/gateway-routing"
 import { cn } from "@/lib/utils"
 import type {
   ModelConfig,
+  GatewayRoutingActions,
   ProbeResponse,
   SubscriptionModel,
   TestResponse,
   ValidationResponse,
 } from "@/types"
 
-export interface ModelRowProps {
+export interface ModelRowProps extends GatewayRoutingActions {
   model: SubscriptionModel
   onProbe: (modelID: string) => Promise<ProbeResponse>
   onValidate: (modelID: string) => Promise<ValidationResponse>
@@ -103,11 +106,24 @@ export function ModelRow({
   onUpdateConfig,
   onRemove,
   onRefresh,
+  accounts,
+  onReadGateway,
+  onVerifyGateway,
 }: ModelRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<TestResponse | null>(null)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [draftConfig, setDraftConfig] = useState<ModelConfig | null>(null)
+  const [filterEnabled, setFilterEnabled] = useState(Boolean(model.config.gatewayHas?.length))
+  const savedKey = routingConfigKey(model.config)
+  const [previousKey, setPreviousKey] = useState(savedKey)
+  if (savedKey !== previousKey) {
+    setPreviousKey(savedKey)
+    setDraftConfig(null)
+    setFilterEnabled(Boolean(model.config.gatewayHas?.length))
+  }
+  const currentConfig = () => draftConfig ?? normalizeModelConfig(model.config)
 
   const probe = async () => {
     setBusy("probe")
@@ -138,7 +154,7 @@ export function ModelRow({
   }
 
   const runTest = async () => {
-    const config = normalizeModelConfig(model.config)
+    const config = currentConfig()
     setBusy("test")
     try {
       const response = await onTest(model.id, config.upstreams, config.exclude)
@@ -159,6 +175,7 @@ export function ModelRow({
   }
 
   const save = async (config: ModelConfig) => {
+    if (filterEnabled || draftConfig) { setDraftConfig(config); return }
     setBusy("save")
     try {
       await onUpdateConfig(model.id, config)
@@ -171,11 +188,11 @@ export function ModelRow({
   }
 
   const togglePriority = (upstreamSlug: string) => {
-    const config = normalizeModelConfig(model.config)
+    const config = currentConfig()
     const selected = config.upstreams.includes(upstreamSlug)
     // Keep removing stale pins possible, but never add a new one while the
     // gateway ignores the preference.
-    if (isPinDisabled(model.meta) && !selected) return
+    if (!filterEnabled && isPinDisabled(model.meta) && !selected) return
     const upstreams = selected
       ? config.upstreams.filter((value) => value !== upstreamSlug)
       : [...config.upstreams, upstreamSlug]
@@ -184,10 +201,10 @@ export function ModelRow({
   }
 
   const toggleExclude = (upstreamSlug: string) => {
-    const config = normalizeModelConfig(model.config)
+    const config = currentConfig()
     const excluded = config.exclude.includes(upstreamSlug)
     // As with pins, allow cleanup of an old exclusion but not new ones.
-    if (isPinDisabled(model.meta) && !excluded) return
+    if (!filterEnabled && isPinDisabled(model.meta) && !excluded) return
     const exclude = excluded
       ? config.exclude.filter((value) => value !== upstreamSlug)
       : [...config.exclude, upstreamSlug]
@@ -196,8 +213,8 @@ export function ModelRow({
   }
 
   const movePriority = (upstreamSlug: string, offset: number) => {
-    if (isPinDisabled(model.meta)) return
-    const config = normalizeModelConfig(model.config)
+    if (!filterEnabled && isPinDisabled(model.meta)) return
+    const config = currentConfig()
     const upstreams = [...config.upstreams]
     const index = upstreams.indexOf(upstreamSlug)
     const nextIndex = index + offset
@@ -207,15 +224,19 @@ export function ModelRow({
   }
 
   const bulkAll = () => {
-    if (isPinDisabled(model.meta)) return
-    const config = normalizeModelConfig(model.config)
-    const upstreams = orderedUpstreams(model).filter((value) => !config.exclude.includes(value))
+    if (!filterEnabled && isPinDisabled(model.meta)) return
+    const config = currentConfig()
+    const upstreams = orderedUpstreams({ ...model, config, meta: catalogMeta }).filter((value) => !config.exclude.includes(value)).slice(0, 10)
     void save({ ...config, upstreams })
   }
 
-  const clearConfig = () => {
-    const config = normalizeModelConfig(model.config)
-    void save({ ...config, upstreams: [], exclude: [] })
+  const clearConfig = async () => {
+    setBusy("save")
+    try {
+      await onUpdateConfig(model.id, { ...normalizeModelConfig(model.config), upstreams: [], exclude: [], gatewayHas: [] })
+      setDraftConfig(null)
+      setFilterEnabled(false)
+    } catch (error) { toast.error(errorMessage(error)) } finally { setBusy(null) }
   }
 
   const removeRow = async () => {
@@ -228,16 +249,25 @@ export function ModelRow({
     }
   }
 
-  const config = normalizeModelConfig(model.config)
+  const config = currentConfig()
   const action = busy
   const result = testResult
-  const pinDisabled = isPinDisabled(model.meta)
+  const pinDisabled = !filterEnabled && isPinDisabled(model.meta)
+  const mutationBusy = Boolean(action)
+  const routingDirty = routingConfigKey(config) !== savedKey
   const pinnedFirst = config.upstreams[0]
   const actualProvider = model.meta?.lastProvider
   const pinMismatch = Boolean(
-    pinnedFirst && actualProvider && pinnedFirst !== actualProvider,
+    !draftConfig && pinnedFirst && actualProvider && pinnedFirst !== actualProvider,
   )
-  const upstreams = orderedUpstreams(model)
+  const providers = model.meta?.gatewayCatalog?.providers.filter(provider => providerMatches(provider, config.gatewayHas ?? [])) ?? []
+  const catalogMeta = filterEnabled && model.meta?.gatewayCatalog ? {
+    ...model.meta,
+    upstreams: providers.map(provider => provider.slug),
+    upstreamDetail: Object.fromEntries(providers.map(provider => [provider.slug, { slug: provider.slug, name: provider.name, endpoints: 1, context: provider.context ?? 0, uptime: 0 }])),
+    upstreamStatus: normalizeHas(config.gatewayHas).join() === normalizeHas(model.config.gatewayHas).join() ? model.meta.upstreamStatus : {},
+  } : model.meta
+  const upstreams = orderedUpstreams({ ...model, config, meta: catalogMeta })
   const probed = Boolean(model.meta?.pipeline || model.meta?.probedAt)
 
   return (
@@ -325,7 +355,7 @@ export function ModelRow({
           </Tooltip>
         </TableCell>
         <TableCell className={cn("text-right font-mono tabular-nums", modelColumnClass.channels)}>
-          {model.meta?.upstreams?.length ?? 0}
+          {filterEnabled ? providers.length : model.meta?.upstreams?.length ?? 0}
         </TableCell>
         <TableCell className={modelColumnClass.lastHit}>
           {model.meta?.lastProvider ? (
@@ -384,15 +414,15 @@ export function ModelRow({
         </TableCell>
         <TableCell className="text-right">
           <div className="bg-background inline-flex items-center rounded-md border p-0.5 align-middle">
-            <RowAction label="探测渠道" disabled={action === "probe"} onClick={() => probe()}>
+            <RowAction label="探测渠道" disabled={Boolean(action) || routingDirty} onClick={() => probe()}>
               <Radar className={action === "probe" ? "animate-pulse" : ""} />
             </RowAction>
-            <RowAction label="发送测试请求" disabled={action === "test"} onClick={() => runTest()}>
+            <RowAction label="发送测试请求" disabled={Boolean(action) || routingDirty} onClick={() => runTest()}>
               <FlaskConical className={action === "test" ? "animate-pulse" : ""} />
             </RowAction>
             <RowAction
               label={pinDisabled ? `不可校验：${pinReasonLabel(model.meta?.pinReason)}` : "校验全部渠道"}
-              disabled={action === "validate" || !model.meta?.upstreams?.length || pinDisabled}
+              disabled={Boolean(action) || routingDirty || !upstreams.length || pinDisabled}
               onClick={() => validate()}
             >
               <ShieldCheck className={action === "validate" ? "animate-pulse" : ""} />
@@ -408,13 +438,31 @@ export function ModelRow({
         <TableRow>
           <TableCell colSpan={7} className="bg-muted/25 p-0 whitespace-normal">
             <div className="space-y-4 p-4">
+              <GatewayRoutingPanel
+                model={model}
+                config={config}
+                enabled={filterEnabled}
+                busy={Boolean(action)}
+                accounts={accounts}
+                onEnabledChange={setFilterEnabled}
+                onDraftChange={setDraftConfig}
+                onRestore={clearConfig}
+                onReadGateway={onReadGateway ? async (modelID, refresh) => {
+                  setBusy("capabilities")
+                  try { return await onReadGateway(modelID, refresh) } finally { setBusy(null) }
+                } : undefined}
+                onVerifyGateway={onVerifyGateway ? async (modelID, value, accountID, allAccounts) => {
+                  setBusy("verify")
+                  try { return await onVerifyGateway(modelID, value, accountID, allAccounts) } finally { setBusy(null) }
+                } : undefined}
+              />
               {pinDisabled && (
                 <Alert variant={model.meta?.pinReason === "single_provider" ? "default" : "destructive"}>
                   <TriangleAlert />
                   <AlertTitle>{pinReasonLabel(model.meta?.pinReason)}</AlertTitle>
                   <AlertDescription>
                     {model.meta?.pinReason === "single_provider"
-                      ? "该模型仅有一个候选渠道，没有其他渠道可供钉住或校验。"
+                      ? "当前探测仅发现一个渠道。可开启上方能力过滤，读取并选择其他供应商后重新验证。"
                       : "请求仍会正常发送，但实际渠道由 Cline 网关决定；以下钉住、排除与校验设置均不会生效。"}
                   </AlertDescription>
                 </Alert>
@@ -422,11 +470,11 @@ export function ModelRow({
 
               <div className="flex flex-wrap items-end gap-3">
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" disabled={pinDisabled} onClick={() => bulkAll()}>
+                  <Button variant="outline" size="sm" disabled={pinDisabled || mutationBusy} title="最多选择 10 个优先供应商" onClick={() => bulkAll()}>
                     <ListPlus data-icon="inline-start" />
                     全部设为优先
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => clearConfig()}>
+                  <Button variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void clearConfig()}>
                     恢复自动
                   </Button>
                 </div>
@@ -462,8 +510,9 @@ export function ModelRow({
               ) : (
                 <div className="bg-card max-h-[520px] overflow-y-auto rounded-lg border">
                   {upstreams.map((upstreamSlug) => {
-                    const status = model.meta?.upstreamStatus?.[upstreamSlug]
-                    const detail = model.meta?.upstreamDetail?.[upstreamSlug]
+                    const status = catalogMeta?.upstreamStatus?.[upstreamSlug]
+                    const detail = catalogMeta?.upstreamDetail?.[upstreamSlug]
+                    const providerCapabilities = filterEnabled ? model.meta?.gatewayCatalog?.providers.find(provider => provider.slug === upstreamSlug)?.has : undefined
                     const priorityIndex = config.upstreams.indexOf(upstreamSlug)
                     const pinned = priorityIndex >= 0
                     const excluded = config.exclude.includes(upstreamSlug)
@@ -476,6 +525,8 @@ export function ModelRow({
                     return (
                       <div
                         key={upstreamSlug}
+                        role="group"
+                        aria-label={`供应商 ${upstreamSlug}`}
                         className={cn(
                           "grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 last:border-b-0",
                           pinned && "bg-primary/[0.04] dark:bg-primary/[0.07]",
@@ -512,6 +563,7 @@ export function ModelRow({
                           <div className="text-muted-foreground mt-0.5 truncate text-2xs">
                             {summary || "尚未校验，暂无渠道详情"}
                           </div>
+                          {providerCapabilities?.length ? <div className="text-muted-foreground mt-0.5 text-2xs">目录能力：{providerCapabilities.map(value => gatewayCapabilities.find(capability => capability.value === value)?.label ?? value).join(" · ")}</div> : null}
                         </div>
                         <div className="flex items-center gap-1">
                           {pinned && (
@@ -520,7 +572,7 @@ export function ModelRow({
                                 label="提高优先级"
                                 variant="ghost"
                                 size="icon-sm"
-                                disabled={priorityIndex === 0 || action === "save" || pinDisabled}
+                                disabled={priorityIndex === 0 || mutationBusy || pinDisabled}
                                 onClick={() => movePriority(upstreamSlug, -1)}
                               >
                                 <ArrowUp />
@@ -530,7 +582,7 @@ export function ModelRow({
                                 variant="ghost"
                                 size="icon-sm"
                                 disabled={
-                                  priorityIndex === config.upstreams.length - 1 || action === "save" || pinDisabled
+                                  priorityIndex === config.upstreams.length - 1 || mutationBusy || pinDisabled
                                 }
                                 onClick={() => movePriority(upstreamSlug, 1)}
                               >
@@ -542,7 +594,7 @@ export function ModelRow({
                             variant={pinned ? "ghost" : "outline"}
                             size="sm"
                             className="w-20"
-                            disabled={action === "save" || (pinDisabled && !pinned)}
+                            disabled={mutationBusy || (pinDisabled && !pinned)}
                             onClick={() => togglePriority(upstreamSlug)}
                           >
                             {pinned ? "取消优先" : "设为优先"}
@@ -552,7 +604,7 @@ export function ModelRow({
                             variant="ghost"
                             size="icon-sm"
                             className={excluded ? "text-destructive hover:text-destructive" : "text-muted-foreground"}
-                            disabled={action === "save" || (pinDisabled && !excluded)}
+                            disabled={mutationBusy || (pinDisabled && !excluded)}
                             onClick={() => toggleExclude(upstreamSlug)}
                           >
                             <Ban />
