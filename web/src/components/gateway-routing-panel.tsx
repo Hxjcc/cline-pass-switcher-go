@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { errorMessage } from "@/lib/api"
 import { formatTime } from "@/lib/format"
 import { gatewayCapabilities, normalizeHas, providerMatches, recommendationProviders, recommendedHas, routingConfigKey } from "@/lib/gateway-routing"
@@ -32,6 +33,11 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
   const candidates = catalog?.providers.filter(provider => providerMatches(provider, has)) ?? []
   const suggestedProviders = recommendationProviders(catalog, config.upstreams)
   const usableAccounts = accounts.filter(account => account.enabled && account.hasKey)
+  const accountItems: Record<string, string> = {
+    "": "当前调度账号",
+    ...Object.fromEntries(usableAccounts.map(account => [account.id, account.name])),
+    ...(usableAccounts.length > 1 ? { all: "所有启用账号" } : {}),
+  }
   const selectedAccounts = accountID === "all" ? usableAccounts.length : 1
   const requestCount = selectedAccounts * ((config.upstreams.length || 1) + 1)
   const eligible = config.upstreams.length > 0 && config.upstreams.every(target => candidates.some(provider => provider.slug === target))
@@ -113,11 +119,14 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
         {catalog && !eligible && <p className="text-xs">请在下面将符合条件的供应商设为优先，再验证并应用。</p>}
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-muted-foreground text-xs" htmlFor={`verify-account-${model.id}`}>验证账号</label>
-          <select id={`verify-account-${model.id}`} aria-label="验证账号" value={accountID} onChange={event => setAccountID(event.target.value)} disabled={pending} className="bg-background h-8 max-w-52 rounded-md border px-2 text-xs">
-            <option value="">当前调度账号</option>
-            {usableAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
-            {usableAccounts.length > 1 && <option value="all">所有启用账号</option>}
-          </select>
+          <Select value={accountID} items={accountItems} onValueChange={value => setAccountID(value ?? "")} disabled={pending}>
+            <SelectTrigger id={`verify-account-${model.id}`} aria-label="验证账号" className="bg-background max-w-52 text-xs">
+              <SelectValue className="min-w-0 truncate" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(accountItems).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <Button size="sm" disabled={pending || !onVerifyGateway || !has.length || !eligible} onClick={() => void verify()}>{working ? "处理中…" : "验证并应用"}</Button>
           <span className="text-muted-foreground text-xs">最多 {requestCount} 次最小模型请求，可能产生费用</span>
         </div>

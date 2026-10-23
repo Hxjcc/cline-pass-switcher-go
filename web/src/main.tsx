@@ -39,7 +39,11 @@ createRoot(rootElement).render(
       >
       <TooltipProvider>
         <App />
-        <Toaster position="bottom-right" />
+        <Toaster
+          position="top-right"
+          offset={{ top: 'var(--toast-top-offset)', right: 24 }}
+          mobileOffset={{ top: 'var(--toast-top-offset)', left: 16, right: 16 }}
+        />
       </TooltipProvider>
     </ThemeProvider>
   </StrictMode>,

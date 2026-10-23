@@ -60,6 +60,7 @@
 
 :root {
   --radius: 0.625rem;
+  --toast-top-offset: 88px;
   color-scheme: light;
   --background: oklch(0.966 0.006 255);
   --foreground: oklch(0.2 0.018 255);
@@ -127,6 +128,13 @@
   --sidebar-accent-foreground: oklch(0.95 0.008 255);
   --sidebar-border: oklch(0.32 0.016 255);
   --sidebar-ring: oklch(0.58 0.14 255);
+}
+
+/* Keep notifications below the header when its controls wrap on mobile. */
+@media (width < 640px) {
+  :root {
+    --toast-top-offset: 152px;
+  }
 }
 
 @layer base {
