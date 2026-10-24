@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { HistoryPanel } from "./history-panel"
-import { HISTORY_COLUMNS_STORAGE, LEGACY_HISTORY_COLUMNS_STORAGE, PREVIOUS_HISTORY_COLUMNS_STORAGE } from "@/lib/history-columns"
+import { HISTORY_COLUMNS_STORAGE, HISTORY_COLUMN_ORDER_STORAGE, LEGACY_HISTORY_COLUMNS_STORAGE, PREVIOUS_HISTORY_COLUMNS_STORAGE } from "@/lib/history-columns"
 import type { HistoryItem } from "@/types"
 
 afterEach(() => {
@@ -10,6 +10,7 @@ afterEach(() => {
   localStorage.removeItem(HISTORY_COLUMNS_STORAGE)
   localStorage.removeItem(LEGACY_HISTORY_COLUMNS_STORAGE)
   localStorage.removeItem(PREVIOUS_HISTORY_COLUMNS_STORAGE)
+  localStorage.removeItem(HISTORY_COLUMN_ORDER_STORAGE)
 })
 
 const noop = async () => {}
@@ -153,6 +154,42 @@ test("existing column choices migrate while new common fields become available",
   expect(screen.queryByRole("columnheader", { name: "类型 / 方式" })).toBeNull()
 })
 
+test("saved order applies to headers and values while ignoring duplicate and unknown fields", () => {
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache", "cost"]))
+  localStorage.setItem(HISTORY_COLUMN_ORDER_STORAGE, JSON.stringify(["cost", "cache", "cost", "unknown", "model"]))
+  renderPanel()
+  expect(screen.getAllByRole("columnheader").map(node => node.textContent)).toEqual(["费用", "缓存命中", "原始请求模型", "详情"])
+  expect([...row().querySelectorAll("[data-history-column]")].map(node => node.getAttribute("data-history-column"))).toEqual(["cost", "cache", "model"])
+  const saved = JSON.parse(localStorage.getItem(HISTORY_COLUMN_ORDER_STORAGE)!)
+  expect(saved).toHaveLength(13)
+  expect(new Set(saved).size).toBe(13)
+  expect(saved).not.toContain("unknown")
+})
+
+test("keyboard sorting persists and reset restores both order and visibility", async () => {
+  renderPanel()
+  fireEvent.click(screen.getByRole("button", { name: "显示列" }))
+  const handle = await screen.findByRole("menuitem", { name: "调整原始请求模型顺序" })
+  fireEvent.keyDown(handle, { key: "ArrowUp", altKey: true })
+  expect(screen.getAllByRole("columnheader")[0].textContent).toBe("原始请求模型")
+  expect(screen.getByRole("menuitemcheckbox", { name: "原始请求模型" }).getAttribute("aria-disabled")).toBe("true")
+  await waitFor(() => expect(JSON.parse(localStorage.getItem(HISTORY_COLUMN_ORDER_STORAGE)!)[0]).toBe("model"))
+  cleanup()
+  renderPanel()
+  expect(screen.getAllByRole("columnheader")[0].textContent).toBe("原始请求模型")
+  fireEvent.click(screen.getByRole("button", { name: "显示列" }))
+  fireEvent.click(await screen.findByRole("menuitem", { name: "恢复默认" }))
+  expect(screen.getAllByRole("columnheader")[0].textContent).toBe("时间")
+  expect(screen.getAllByRole("columnheader")).toHaveLength(11)
+})
+
+test("invalid saved order keeps the existing visibility choices", () => {
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache"]))
+  localStorage.setItem(HISTORY_COLUMN_ORDER_STORAGE, "not-json")
+  renderPanel()
+  expect(screen.getAllByRole("columnheader").map(node => node.textContent)).toEqual(["原始请求模型", "缓存命中", "详情"])
+})
+
 test.each([
   ["length", "长度截断"],
   ["content_filter", "内容过滤"],
@@ -243,11 +280,13 @@ test("phone cards respect selected fields and open the same details", async () =
   const previous = window.matchMedia
   window.matchMedia = vi.fn((query: string) => ({ matches: true, media: query, onchange: null, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false }))
   localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache"]))
+  localStorage.setItem(HISTORY_COLUMN_ORDER_STORAGE, JSON.stringify(["cache", "model"]))
   try {
     renderPanel()
     const card = screen.getByRole("article")
     expect(within(card).getByText("94.0%")).toBeTruthy()
     expect(within(card).queryByText("账号1")).toBeNull()
+    expect([...card.querySelectorAll("[data-history-card-column]")].map(node => node.getAttribute("data-history-card-column"))).toEqual(["cache", "model"])
     expect(screen.queryByRole("table")).toBeNull()
     fireEvent.click(within(card).getByText("94.0%"))
     expect(within(await screen.findByRole("dialog")).getByText(entry.canonical!)).toBeTruthy()

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 export const HISTORY_COLUMNS_STORAGE = "cline-pass-switcher-history-columns-v3"
 export const PREVIOUS_HISTORY_COLUMNS_STORAGE = "cline-pass-switcher-history-columns-v2"
 export const LEGACY_HISTORY_COLUMNS_STORAGE = "cline-pass-switcher-history-hidden-columns-v1"
+export const HISTORY_COLUMN_ORDER_STORAGE = "cline-pass-switcher-history-column-order-v1"
 
 export type HistoryColumn = "time" | "model" | "account" | "provider" | "latency" | "tokens" | "cache" | "cost" | "effort" | "mode" | "reasoning" | "canonical" | "gatewayCost"
 
@@ -24,6 +25,16 @@ export const historyColumns: ReadonlyArray<{ id: HistoryColumn; label: string; t
 
 export const historyCollapseOrder: HistoryColumn[] = ["canonical", "gatewayCost", "reasoning", "account", "cost", "provider", "time", "effort", "mode", "latency", "tokens"]
 const defaults = () => new Set(historyColumns.filter(column => column.defaultVisible !== false).map(column => column.id))
+const defaultOrder = historyColumns.map(column => column.id)
+
+function normalizeOrder(value: unknown): HistoryColumn[] {
+  const stored = Array.isArray(value) ? value : []
+  return [...new Set<HistoryColumn>([...stored.filter((id): id is HistoryColumn => defaultOrder.includes(id)), ...defaultOrder])]
+}
+
+function readOrder(): HistoryColumn[] {
+  try { return normalizeOrder(JSON.parse(localStorage.getItem(HISTORY_COLUMN_ORDER_STORAGE) ?? "null")) } catch { return [...defaultOrder] }
+}
 
 function readColumns(): Set<HistoryColumn> {
   try {
@@ -48,7 +59,10 @@ function readColumns(): Set<HistoryColumn> {
 }
 
 export function useHistoryColumns() {
-  const [visibleColumns, setColumns] = useState(readColumns)
+  const [selectedColumns, setColumns] = useState(readColumns)
+  const [columnOrder, setColumnOrder] = useState(readOrder)
+  const orderedColumns = useMemo(() => columnOrder.map(id => historyColumns.find(column => column.id === id)!), [columnOrder])
+  const visibleColumns = useMemo(() => new Set(columnOrder.filter(id => selectedColumns.has(id))), [columnOrder, selectedColumns])
   useEffect(() => {
     try {
       localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify([...visibleColumns]))
@@ -56,6 +70,9 @@ export function useHistoryColumns() {
       // Column selection still works when browser storage is unavailable.
     }
   }, [visibleColumns])
+  useEffect(() => {
+    try { localStorage.setItem(HISTORY_COLUMN_ORDER_STORAGE, JSON.stringify(columnOrder)) } catch { /* Sorting also works without storage. */ }
+  }, [columnOrder])
 
   const toggleColumn = (column: HistoryColumn) => {
     if (column === "model") return
@@ -68,7 +85,9 @@ export function useHistoryColumns() {
   }
   return {
     visibleColumns,
+    orderedColumns,
     toggleColumn,
-    resetColumns: () => setColumns(defaults()),
+    reorderColumns: (order: readonly HistoryColumn[]) => setColumnOrder(normalizeOrder(order)),
+    resetColumns: () => { setColumns(defaults()); setColumnOrder([...defaultOrder]) },
   }
 }

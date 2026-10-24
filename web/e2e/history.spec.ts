@@ -43,6 +43,91 @@ test("column menu gives press feedback on the first interaction and later openin
   await expect(trigger).toBeFocused()
 })
 
+test("column handles drag, cancel, persist, and reset the displayed order", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
+  await signIn(page)
+  const trigger = page.getByRole("button", { name: "显示列", exact: true })
+  const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
+  await trigger.click()
+  const checked = await menu.getByRole("menuitemcheckbox").evaluateAll(nodes => nodes.map(node => [node.getAttribute("aria-label"), node.getAttribute("aria-checked")]))
+  const drag = async (from: string, to: string) => {
+    const source = await menu.locator(`[data-column-handle="${from}"]`).boundingBox()
+    const target = await menu.locator(`[data-column-option="${to}"]`).boundingBox()
+    await page.mouse.move(source!.x + source!.width / 2, source!.y + source!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(target!.x + 16, target!.y + 2, { steps: 12 })
+  }
+  await drag("cache", "time")
+  await page.screenshot({ path: test.info().outputPath("history-column-drag.png"), fullPage: true })
+  await page.mouse.up()
+  await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "cache")
+  const after = await menu.getByRole("menuitemcheckbox").evaluateAll(nodes => nodes.map(node => [node.getAttribute("aria-label"), node.getAttribute("aria-checked")]))
+  expect(new Map(after as [string, string][])).toEqual(new Map(checked as [string, string][]))
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("columnheader").first()).toHaveText("缓存命中")
+  const firstRow = page.getByRole("row").filter({ hasText: success.model })
+  await expect(firstRow.locator("[data-history-column]").first()).toHaveAttribute("data-history-column", "cache")
+
+  await trigger.click()
+  await drag("model", "cache")
+  await page.keyboard.press("Escape")
+  await page.mouse.up()
+  await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "cache")
+  await page.keyboard.press("Escape")
+  await page.reload()
+  await expect(page.getByRole("columnheader").first()).toHaveText("缓存命中")
+  await page.setViewportSize({ width: 390, height: 844 })
+  const card = page.getByRole("article").filter({ hasText: success.model })
+  await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "cache")
+  await trigger.click()
+  await menu.getByRole("menuitem", { name: "调整原始请求模型顺序", exact: true }).focus()
+  await page.keyboard.press("Alt+ArrowUp")
+  await page.keyboard.press("Alt+ArrowUp")
+  await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "model")
+  await expect(menu.getByRole("menuitem", { name: "调整原始请求模型顺序", exact: true })).toBeFocused()
+  await menu.getByRole("menuitem", { name: "恢复默认", exact: true }).click()
+  await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "time")
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await expect(page.getByRole("columnheader").first()).toHaveText("时间")
+})
+
+test.describe("touch column sorting", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+
+  test("dragging a hidden field scrolls the menu and preserves its visibility", async ({ page, context }) => {
+    await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
+    await signIn(page)
+    await page.getByRole("button", { name: "显示列", exact: true }).tap()
+    const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
+    const handle = menu.locator('[data-column-handle="gatewayCost"]')
+    await handle.scrollIntoViewIfNeeded()
+    const source = await handle.boundingBox()
+    const popup = await menu.boundingBox()
+    const cdp = await context.newCDPSession(page)
+    const x = source!.x + source!.width / 2
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x, y: source!.y + source!.height / 2 }] })
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ id: 1, x, y: popup!.y + 8 }] })
+    try {
+      await expect.poll(() => menu.evaluate(node => node.scrollTop)).toBe(0)
+      const first = await menu.locator('[data-column-option="time"]').boundingBox()
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ id: 1, x, y: first!.y + 2 }] })
+    } finally {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      await cdp.detach()
+    }
+    await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "gatewayCost")
+    const checkbox = menu.getByRole("menuitemcheckbox", { name: "网关市价", exact: true })
+    await expect(checkbox).not.toBeChecked()
+    await checkbox.tap()
+    await page.keyboard.press("Escape")
+    const card = page.getByRole("article").filter({ hasText: success.model })
+    await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "gatewayCost")
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
+    await page.screenshot({ path: test.info().outputPath("history-column-order-mobile.png"), fullPage: true })
+  })
+})
+
 for (const source of ["history panel", "global refresh"]) {
   test(`a late ${source} response cannot undo the failure filter`, async ({ page }) => {
     let holdNext = false

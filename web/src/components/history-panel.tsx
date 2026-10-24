@@ -24,6 +24,7 @@ import type { HistoryItem } from "@/types"
 
 const AUTO_REFRESH_STORAGE = "cline-pass-switcher-history-auto-refresh"
 const AUTO_REFRESH_MS = 5000
+const columnLabels = new Map(historyColumns.map(column => [column.id, column.label]))
 type OpenRequest = (item: HistoryItem, trigger: HTMLButtonElement | null) => void
 
 function Dash() { return <span className="text-muted-foreground/50">—</span> }
@@ -88,13 +89,13 @@ function openFromRow(event: MouseEvent<HTMLElement>, item: HistoryItem, onOpen: 
   onOpen(item, event.currentTarget.querySelector<HTMLButtonElement>("[data-history-open]"))
 }
 
-function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
+function historyCells(item: HistoryItem, card = false) {
   const status = historyStatus(item)
-  const cells = {
+  return {
     time: <span className="text-muted-foreground text-xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>,
-    model: <div className="space-y-1"><span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      {status.tone === "error" && <span className="inline-flex shrink-0" title={item.error ?? status.label}><CircleAlert className="text-destructive size-3.5" role="img" aria-label={status.label} aria-hidden={false} /></span>}
-      <span data-history-model className="text-foreground font-mono text-xs">{item.model}</span>
+    model: <div className="space-y-1"><span className={cn("inline-flex items-center gap-1.5", card ? "min-w-0 max-w-full" : "whitespace-nowrap")}>
+      {!card && status.tone === "error" && <span className="inline-flex shrink-0" title={item.error ?? status.label}><CircleAlert className="text-destructive size-3.5" role="img" aria-label={status.label} aria-hidden={false} /></span>}
+      <span data-history-model className={cn("text-foreground font-mono text-xs", card && "min-w-0 wrap-anywhere")}>{item.model}</span>
     </span><ModelBadges item={item} /></div>,
     account: <span className="text-xs">{item.account || <Dash />}</span>,
     provider: actualProvider(item) ? <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge> : <Dash />,
@@ -108,38 +109,30 @@ function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryIte
     cost: item.usage?.cost === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={costTitle(item.usage)}>{formatCost(item.usage.cost)}</span>,
     gatewayCost: <GatewayCostCell item={item} />,
   }
+}
+
+function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
+  const cells = historyCells(item)
   return <TableRow data-history-record data-state={selected ? "selected" : undefined} aria-selected={selected}
     className="cursor-pointer hover:bg-primary/5 data-[state=selected]:bg-primary/5" onClick={event => openFromRow(event, item, onOpen)}>
-    {historyColumns.filter(column => columns.has(column.id)).map(column => <TableCell key={column.id} data-history-column={column.id} className="align-middle whitespace-nowrap">{cells[column.id]}</TableCell>)}
+    {[...columns].map(column => <TableCell key={column} data-history-column={column} className="align-middle whitespace-nowrap">{cells[column]}</TableCell>)}
     <TableCell className="w-8 px-1! text-right"><OpenDetailsButton item={item} onOpen={onOpen} /></TableCell>
   </TableRow>
 }
 
 function HistoryCard({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
   const status = historyStatus(item)
+  const cells = historyCells(item, true)
   return <article data-history-record className={cn("bg-card cursor-pointer rounded-lg p-3 ring-1 ring-foreground/10 hover:bg-primary/5", selected && "bg-primary/5")}
     onClick={event => openFromRow(event, item, onOpen)}>
     <div className="mb-1 flex items-center justify-between gap-2">
-      {columns.has("time") && <span className="text-muted-foreground text-2xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>}
       <span className={cn("ml-auto text-2xs", status.tone === "error" ? "text-destructive" : status.tone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>{status.label}</span>
       <OpenDetailsButton item={item} onOpen={onOpen} />
     </div>
-    <div className="text-foreground font-mono text-xs wrap-anywhere" data-history-model>{item.model}</div>
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      {columns.has("provider") && actualProvider(item) && <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge>}
-      {columns.has("account") && item.account && <span className="text-muted-foreground text-2xs">{item.account}</span>}
-    </div>
-    <div className="mt-1.5"><ModelBadges item={item} /></div>
     <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
-      {columns.has("canonical") && <div className="col-span-2"><dt className="text-muted-foreground text-2xs">背后模型</dt><dd className="mt-0.5 font-mono text-xs wrap-anywhere">{item.canonical || <Dash />}</dd></div>}
-      {columns.has("effort") && <div><dt className="text-muted-foreground text-2xs">思考强度</dt><dd className="mt-0.5"><EffortCell item={item} /></dd></div>}
-      {columns.has("mode") && <div><dt className="text-muted-foreground text-2xs">类型 / 方式</dt><dd className="mt-0.5"><ModeCell item={item} /></dd></div>}
-      {columns.has("tokens") && <div><dt className="text-muted-foreground text-2xs">输入 → 输出</dt><dd className="mt-0.5"><UsageCell item={item} /></dd></div>}
-      {columns.has("reasoning") && <div><dt className="text-muted-foreground text-2xs">思考 Token</dt><dd className="mt-0.5"><ReasoningCell item={item} /></dd></div>}
-      {columns.has("cache") && <div><dt className="text-muted-foreground text-2xs">缓存命中</dt><dd className="mt-0.5"><CacheCell item={item} /></dd></div>}
-      {columns.has("latency") && <div><dt className="text-muted-foreground text-2xs">首字 / 总耗时</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{latencyText(item)}</dd></div>}
-      {columns.has("cost") && <div><dt className="text-muted-foreground text-2xs">费用</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{item.usage?.cost === undefined ? <Dash /> : formatCost(item.usage.cost)}</dd></div>}
-      {columns.has("gatewayCost") && <div><dt className="text-muted-foreground text-2xs">网关市价</dt><dd className="mt-0.5"><GatewayCostCell item={item} /></dd></div>}
+      {[...columns].map(column => <div key={column} data-history-card-column={column} className={cn(["time", "model", "canonical"].includes(column) && "col-span-2")}>
+        <dt className="text-muted-foreground text-2xs">{columnLabels.get(column)}</dt><dd className="mt-0.5 wrap-anywhere">{cells[column]}</dd>
+      </div>)}
     </dl>
   </article>
 }
@@ -164,7 +157,7 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
   const [search, setSearch] = useState(query.q)
   const [selected, setSelected] = useState<HistoryItem | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
-  const { visibleColumns, toggleColumn, resetColumns } = useHistoryColumns()
+  const { visibleColumns, orderedColumns, toggleColumn, reorderColumns, resetColumns } = useHistoryColumns()
   const narrow = useNarrowViewport()
   const { viewportRef, visibleColumns: tableColumns, collapsedColumns, cards } = useHistoryLayout(visibleColumns, history, narrow)
   const refreshRef = useRef(onRefresh)
@@ -217,7 +210,7 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
         </div>
         <ToggleChip pressed={query.onlyErrors} onPressedChange={pressed => onQueryChange({ ...query, onlyErrors: pressed })} icon={CircleAlert}>只看失败</ToggleChip>
         <ToggleChip pressed={autoRefresh} onPressedChange={setAutoRefresh} icon={RefreshCw}>自动刷新</ToggleChip>
-        <HistoryColumnsMenu visibleColumns={visibleColumns} collapsedColumns={collapsedColumns} onToggle={toggleColumn} onReset={resetColumns} />
+        <HistoryColumnsMenu columns={orderedColumns} visibleColumns={visibleColumns} collapsedColumns={collapsedColumns} onToggle={toggleColumn} onReorder={reorderColumns} onReset={resetColumns} />
         <span className="text-muted-foreground ml-auto text-xs tabular-nums">已显示 {history.length} / {total} 条{pending && <span className="ml-2">刷新中…</span>}</span>
       </div>
       <div ref={viewportRef} className="min-w-0">
@@ -227,7 +220,7 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
           : <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
             <Table className="[&_td]:px-2.5 [&_td]:py-3 [&_th]:px-2.5">
               <TableHeader><TableRow>
-                {historyColumns.filter(column => tableColumns.has(column.id)).map(column => <TableHead key={column.id} data-history-column={column.id} title={column.title}>{column.label}</TableHead>)}
+                {orderedColumns.filter(column => tableColumns.has(column.id)).map(column => <TableHead key={column.id} data-history-column={column.id} title={column.title}>{column.label}</TableHead>)}
                 <TableHead className="w-8 px-1!"><span className="sr-only">详情</span></TableHead>
               </TableRow></TableHeader>
               <TableBody>{history.map((item, index) => <HistoryTableRow key={item.id ?? `${item.ts}-${item.model}-${index}`} item={item} columns={tableColumns} selected={isSelected(item)} onOpen={openDetails} />)}</TableBody>

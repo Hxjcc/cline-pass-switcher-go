@@ -7,7 +7,7 @@ import type { HistoryItem } from "@/types"
 export function useHistoryLayout(preferred: ReadonlySet<HistoryColumn>, history: HistoryItem[], narrow: boolean) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
-  const key = [...preferred].sort().join(",")
+  const key = [...preferred].join(",")
   const [layout, setLayout] = useState({ key: "", width: 0, collapsed: [] as HistoryColumn[], cards: false })
   const current = layout.key === key && layout.width === width
   const collapsedColumns = new Set(current ? layout.collapsed : [])
