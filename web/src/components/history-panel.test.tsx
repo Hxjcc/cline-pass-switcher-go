@@ -33,15 +33,15 @@ async function openDetails() {
   return screen.findByRole("dialog", { name: "请求详情" })
 }
 
-test("the main row keeps the raw model, one-line token pair, and a dedicated cache percentage", () => {
+test("the main row groups reasoning and gateway price beneath their parent values", () => {
   renderPanel()
   expect(screen.getByRole("columnheader", { name: "原始请求模型" })).toBeTruthy()
   expect(screen.getByRole("columnheader", { name: "首字 / 总耗时" })).toBeTruthy()
   expect(within(row()).getByText("94.0%")).toBeTruthy()
   expect(within(row()).getByText("4.2s / 18.2s")).toBeTruthy()
   expect(screen.queryByText(entry.canonical!)).toBeNull()
-  expect(screen.queryByText("思考 5.7k")).toBeNull()
-  expect(screen.queryByText(/网关 \$/)).toBeNull()
+  expect(row().querySelector('[data-history-column="tokens"] [data-history-reasoning]')?.textContent).toBe("思考 5,740")
+  expect(row().querySelector('[data-history-column="cost"] [data-history-gateway-cost]')?.textContent).toBe("↳ 网关 $0.0085")
 })
 
 test("clicking a cache cell opens full details, and Escape closes them", async () => {
@@ -122,20 +122,18 @@ test("restored common fields show requested-to-upstream effort and the request t
   expect(screen.queryByRole("columnheader", { name: "网关市价" })).toBeNull()
 })
 
-test("optional columns expose full model, reasoning usage, and gateway price and persist", async () => {
+test("the full underlying model remains an optional column and persists", async () => {
   renderPanel()
   fireEvent.click(screen.getByRole("button", { name: "显示列" }))
-  for (const label of ["思考 Token", "背后模型", "网关市价"]) {
-    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: label }))
-    expect(screen.getByRole("columnheader", { name: label })).toBeTruthy()
-  }
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "背后模型" }))
+  expect(screen.getByRole("columnheader", { name: "背后模型" })).toBeTruthy()
+  expect(screen.queryByRole("menuitemcheckbox", { name: "思考 Token" })).toBeNull()
+  expect(screen.queryByRole("menuitemcheckbox", { name: "网关市价" })).toBeNull()
   expect(within(row()).getByText(entry.canonical!)).toBeTruthy()
-  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("5,740")
-  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("$0.0085 ×5.0")
-  await waitFor(() => expect(JSON.parse(localStorage.getItem(HISTORY_COLUMNS_STORAGE)!)).toContain("gatewayCost"))
+  await waitFor(() => expect(JSON.parse(localStorage.getItem(HISTORY_COLUMNS_STORAGE)!)).toContain("canonical"))
   cleanup()
   renderPanel()
-  expect(screen.getByRole("columnheader", { name: "网关市价" })).toBeTruthy()
+  expect(screen.getByRole("columnheader", { name: "背后模型" })).toBeTruthy()
   expect(within(row()).getByText(entry.canonical!)).toBeTruthy()
 })
 
@@ -161,8 +159,8 @@ test("saved order applies to headers and values while ignoring duplicate and unk
   expect(screen.getAllByRole("columnheader").map(node => node.textContent)).toEqual(["费用", "缓存命中", "原始请求模型", "详情"])
   expect([...row().querySelectorAll("[data-history-column]")].map(node => node.getAttribute("data-history-column"))).toEqual(["cost", "cache", "model"])
   const saved = JSON.parse(localStorage.getItem(HISTORY_COLUMN_ORDER_STORAGE)!)
-  expect(saved).toHaveLength(13)
-  expect(new Set(saved).size).toBe(13)
+  expect(saved).toHaveLength(11)
+  expect(new Set(saved).size).toBe(11)
   expect(saved).not.toContain("unknown")
 })
 
@@ -216,15 +214,36 @@ test("successful gateway legs and ordinary tool calls do not look like retries o
   expect(row().querySelector('[data-history-column="mode"] [title]')?.getAttribute("title")).toBe("调用工具")
 })
 
-test("zero optional usage differs from unreported usage", () => {
+test("former detail-column preferences merge into parent columns without losing order", () => {
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "reasoning", "gatewayCost"]))
+  localStorage.setItem(HISTORY_COLUMN_ORDER_STORAGE, JSON.stringify(["gatewayCost", "time", "reasoning", "model", "cost", "tokens"]))
+  renderPanel()
+  expect(screen.getAllByRole("columnheader").map(node => node.textContent)).toEqual(["费用", "输入 → 输出", "原始请求模型", "详情"])
+  expect(within(row()).getByText("思考 5,740")).toBeTruthy()
+  expect(within(row()).getByText("↳ 网关 $0.0085")).toBeTruthy()
+  expect(JSON.parse(localStorage.getItem(HISTORY_COLUMNS_STORAGE)!)).toEqual(["cost", "tokens", "model"])
+  const order = JSON.parse(localStorage.getItem(HISTORY_COLUMN_ORDER_STORAGE)!)
+  expect(order).not.toContain("reasoning")
+  expect(order).not.toContain("gatewayCost")
+})
+
+test("reported zero reasoning and gateway price differ from missing values", () => {
   localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "reasoning", "gatewayCost"]))
   renderPanel([{ ...entry, usage: { reasoningTokens: 0, gatewayCost: 0 } }])
-  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("0")
-  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("$0.000000")
+  expect(row().querySelector('[data-history-reasoning]')?.textContent).toBe("思考 0")
+  expect(row().querySelector('[data-history-gateway-cost]')?.textContent).toBe("↳ 网关 $0.000000")
   cleanup()
   renderPanel([{ ...entry, usage: undefined }])
-  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("—")
-  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("—")
+  expect(row().querySelector('[data-history-column="tokens"]')?.textContent).toBe("—")
+  expect(row().querySelector('[data-history-column="cost"]')?.textContent).toBe("—")
+  expect(row().querySelector('[data-history-reasoning]')).toBeNull()
+  expect(row().querySelector('[data-history-gateway-cost]')).toBeNull()
+})
+
+test("an identical gateway price is not repeated beneath the actual charge", () => {
+  renderPanel([{ ...entry, usage: { cost: 0, gatewayCost: 0 } }])
+  expect(row().querySelector('[data-history-column="cost"]')?.textContent).toBe("$0.000000")
+  expect(row().querySelector('[data-history-gateway-cost]')).toBeNull()
 })
 
 test("a reported zero cache rate differs from missing cache data", () => {

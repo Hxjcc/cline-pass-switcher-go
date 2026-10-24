@@ -93,15 +93,19 @@ test("column handles drag, cancel, persist, and reset the displayed order", asyn
 })
 
 test.describe("touch column sorting", () => {
-  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 500 } })
 
   test("dragging a hidden field scrolls the menu and preserves its visibility", async ({ page, context }) => {
+    await page.addInitScript(() => localStorage.setItem("cline-pass-switcher-history-column-order-v1", JSON.stringify(["time", "model", "account", "provider", "effort", "mode", "latency", "tokens", "cache", "cost", "canonical"])))
     await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
     await signIn(page)
-    await page.getByRole("button", { name: "显示列", exact: true }).tap()
+    const trigger = page.getByRole("button", { name: "显示列", exact: true })
+    await trigger.evaluate(node => node.scrollIntoView({ block: "center" }))
+    await trigger.tap()
     const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
-    const handle = menu.locator('[data-column-handle="gatewayCost"]')
+    const handle = menu.locator('[data-column-handle="canonical"]')
     await handle.scrollIntoViewIfNeeded()
+    await expect.poll(() => menu.evaluate(node => node.scrollTop)).toBeGreaterThan(0)
     const source = await handle.boundingBox()
     const popup = await menu.boundingBox()
     const cdp = await context.newCDPSession(page)
@@ -116,13 +120,13 @@ test.describe("touch column sorting", () => {
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
       await cdp.detach()
     }
-    await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "gatewayCost")
-    const checkbox = menu.getByRole("menuitemcheckbox", { name: "网关市价", exact: true })
+    await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "canonical")
+    const checkbox = menu.getByRole("menuitemcheckbox", { name: "背后模型", exact: true })
     await expect(checkbox).not.toBeChecked()
     await checkbox.tap()
     await page.keyboard.press("Escape")
     const card = page.getByRole("article").filter({ hasText: success.model })
-    await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "gatewayCost")
+    await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "canonical")
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
     await page.screenshot({ path: test.info().outputPath("history-column-order-mobile.png"), fullPage: true })
   })
@@ -315,19 +319,19 @@ test("restored history fields and warnings stay usable on desktop and phone", as
   await page.getByRole("button", { name: "显示列", exact: true }).click()
   // Make room for the optional details instead of relying on a wider screen:
   // the console deliberately caps its content width on desktop.
-  for (const label of ["时间", "账号", "实际上游", "首字 / 总耗时", "输入 → 输出", "费用"]) {
+  for (const label of ["时间", "账号", "实际上游", "首字 / 总耗时"]) {
     await page.getByRole("menuitemcheckbox", { name: label, exact: true }).click()
   }
-  for (const label of ["背后模型", "思考 Token", "网关市价"]) {
+  for (const label of ["背后模型"]) {
     await page.getByRole("menuitemcheckbox", { name: label, exact: true }).click()
   }
   await page.keyboard.press("Escape")
-  for (const label of ["背后模型", "思考 Token", "网关市价"]) {
+  for (const label of ["背后模型"]) {
     await expect(page.getByRole("columnheader", { name: label, exact: true })).toBeVisible()
   }
   await expect(row.getByText(restored.canonical, { exact: true })).toBeVisible()
-  await expect(row.locator('[data-history-column="reasoning"]')).toHaveText("523")
-  await expect(row.locator('[data-history-column="gatewayCost"]')).toHaveText("$0.000010 ×5.0")
+  await expect(row.locator('[data-history-column="tokens"] [data-history-reasoning]')).toHaveText("思考 523")
+  await expect(row.locator('[data-history-column="cost"] [data-history-gateway-cost]')).toHaveText("↳ 网关 $0.000010")
   for (const label of ["未命中目标", "忽略偏好", "重试 1 次", "网关重试 1 次", "长度截断", "内容过滤"]) {
     await expect(page.getByText(label, { exact: true })).toBeVisible()
   }
@@ -341,7 +345,8 @@ test("restored history fields and warnings stay usable on desktop and phone", as
   await page.setViewportSize({ width: 390, height: 844 })
   const card = page.getByRole("article").filter({ hasText: restored.model })
   await expect(card.getByText(restored.canonical, { exact: true })).toBeVisible()
-  await expect(card.getByText("523", { exact: true })).toBeVisible()
+  await expect(card.getByText("思考 523", { exact: true })).toBeVisible()
+  await expect(card.getByText("↳ 网关 $0.000010", { exact: true })).toBeVisible()
   await expect(card.getByText("xhigh → max", { exact: true })).toBeVisible()
   await expect(card.getByText("Responses · 流式", { exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
@@ -357,4 +362,23 @@ test("unusually long raw models remain complete without forcing the page to scro
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
   await page.getByRole("article").filter({ hasText: long.model }).getByRole("button", { name: "查看请求详情" }).click()
   await expect(page.getByRole("dialog").getByText(long.model, { exact: true })).toBeVisible()
+})
+
+test("reasoning and gateway price use compact secondary lines instead of standalone columns", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const grouped = { ...success, id: "grouped", model: "cline-pass/deepseek-v4.1-flash-1017", account: "账号1", provider: "deepseek", kind: "responses", stream: true, effort: "max", ttftMs: 1100, ms: 6200,
+    usage: { promptTokens: 5826, completionTokens: 694, reasoningTokens: 612, cachedTokens: 0, cost: 0.0013, gatewayCost: 0.0001 },
+  }
+  await page.route("**/api/history*", route => route.fulfill({ json: payload([grouped, success]) }))
+  await signIn(page)
+  const row = page.getByRole("row").filter({ hasText: grouped.model })
+  await expect(row.locator('[data-history-column="tokens"]')).toHaveText(/5,826.*694.*思考 612/)
+  await expect(row.locator('[data-history-column="cost"]')).toHaveText(/\$0\.0013.*↳ 网关 \$0\.0001/)
+  await expectFullTextWithinCell(row.getByText("思考 612", { exact: true }))
+  await expectFullTextWithinCell(row.getByText("↳ 网关 $0.0001", { exact: true }))
+  await row.screenshot({ path: test.info().outputPath("history-grouped-row.png") })
+  await page.getByRole("button", { name: "显示列", exact: true }).click()
+  await expect(page.getByRole("menuitemcheckbox")).toHaveCount(11)
+  await expect(page.getByRole("menuitemcheckbox", { name: "思考 Token", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("menuitemcheckbox", { name: "网关市价", exact: true })).toHaveCount(0)
 })
