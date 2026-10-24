@@ -12,10 +12,10 @@ export function HistoryColumnsMenu({ visibleColumns, collapsedColumns, onToggle,
 }) {
   return (
     <Menu.Root>
-      <Menu.Trigger render={<Button variant="outline" className="text-muted-foreground font-normal" aria-label="显示列" />}>
+      <Menu.Trigger render={<Button variant="outline" className="text-muted-foreground font-normal active:translate-y-px aria-expanded:border-primary/40 aria-expanded:bg-primary/10 aria-expanded:text-primary aria-expanded:hover:bg-primary/15 aria-expanded:hover:text-primary dark:aria-expanded:bg-primary/20 dark:aria-expanded:hover:bg-primary/25" aria-label="显示列" />}>
         <Columns3 data-icon="inline-start" />
         显示列
-        <span className="text-muted-foreground tabular-nums">{visibleColumns.size}/{historyColumns.length}</span>
+        <span className="tabular-nums">{visibleColumns.size}/{historyColumns.length}</span>
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
