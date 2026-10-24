@@ -1,376 +1,117 @@
-import { useEffect, useRef, useState } from "react"
-import { CircleAlert, History, RefreshCw, Search, Trash2 } from "lucide-react"
+import { useEffect, useRef, useState, type MouseEvent } from "react"
+import { ChevronRight, CircleAlert, History, RefreshCw, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { EmptyState, ToggleChip } from "@/components/console-kit"
+import { ConfirmDialog } from "@/components/confirm-dialog"
+import { HistoryColumnsMenu } from "@/components/history-columns-menu"
+import { HistoryDetailsSheet } from "@/components/history-details-sheet"
+import { ProviderName } from "@/components/provider-name"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { ConfirmDialog } from "@/components/confirm-dialog"
-import { ProviderName } from "@/components/provider-name"
-import { TraceList } from "@/components/trace-list"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
-import { formatCost, formatTime, formatTokenCount, shortDuration } from "@/lib/format"
+import { formatCompactTime, formatCost, formatTokenCount, shortDuration } from "@/lib/format"
+import { historyColumns, useHistoryColumns, type HistoryColumn } from "@/lib/history-columns"
+import { actualProvider, cacheStats, costTitle, formatCacheRate, fullHistoryTime, historyStatus, latencyText, usageTitle } from "@/lib/history-display"
+import { useHistoryLayout } from "@/lib/use-history-layout"
 import { useNarrowViewport } from "@/lib/use-media-query"
 import { cn } from "@/lib/utils"
-import type { GatewayAttempt, HistoryItem, UsageStats } from "@/types"
+import type { HistoryItem } from "@/types"
 
 const AUTO_REFRESH_STORAGE = "cline-pass-switcher-history-auto-refresh"
 const AUTO_REFRESH_MS = 5000
+type OpenRequest = (item: HistoryItem, trigger: HTMLButtonElement | null) => void
 
-const finishLabels: Record<string, string> = {
-  stop: "正常结束",
-  tool_calls: "调用工具",
-  function_call: "调用工具",
-  length: "长度截断",
-  content_filter: "内容过滤",
-}
-
-function finishLabel(reason?: string) {
-  if (!reason) return ""
-  return finishLabels[reason] || reason
-}
-
-// Quiet placeholder so a failed row (mostly empty cells) does not read as a
-// wall of dashes next to the red error text.
-function Dash() {
-  return <span className="text-muted-foreground/50">—</span>
-}
-
-function EffortCell({ item }: { item: HistoryItem }) {
-  const mapped = item.effort?.trim()
-  const requested = item.requestedEffort?.trim()
-  if (!mapped && !requested) {
-    return <Dash />
-  }
-  if (requested && mapped && requested !== mapped) {
-    return (
-      <span className="font-mono text-xs" title={`客户端请求 ${requested}，实际转发给上游 ${mapped}`}>
-        {requested}→{mapped}
-      </span>
-    )
-  }
-  return (
-    <span className="font-mono text-xs" title="实际转发给上游的思考强度">
-      {mapped || requested}
-    </span>
-  )
-}
-
-function hasFailover(item: HistoryItem) {
-  const trace = item.trace ?? []
-  if (trace.length > 1) return true
-  if (trace.some((attempt) => attempt.status !== 200)) return true
-  return (item.attempts?.length ?? 0) > 1
-}
-
-// actualProvider prefers the provider the gateway reports it really ran; that
-// is the one that generated (and billed) the response.
-function actualProvider(item: HistoryItem) {
-  return item.resolved || item.provider
-}
-
-// fallbackIgnored marks the case where the pinned channel never appears in the
-// gateway's attempt list: the preference had no effect rather than failing over.
-function fallbackIgnored(item: HistoryItem) {
-  return item.fallbackReason === "ignored"
-}
-
-function fallbackTitle(item: HistoryItem) {
-  return fallbackIgnored(item)
-    ? "网关从未尝试你钉的渠道：渠道偏好被忽略"
-    : "实际渠道与网关会话亲和或首选渠道不一致（网关自动降级）"
-}
-
-function usageTitle(usage?: UsageStats, finishReason?: string) {
-  if (!usage && !finishReason) return undefined
-  const parts: string[] = []
-  if (usage?.promptTokens) parts.push(`输入 ${formatTokenCount(usage.promptTokens)}`)
-  if (usage?.completionTokens) parts.push(`输出 ${formatTokenCount(usage.completionTokens)}`)
-  if (usage?.reasoningTokens) parts.push(`思考 ${formatTokenCount(usage.reasoningTokens)}`)
-  if (usage?.cachedTokens) {
-    const rate = cacheRate(usage).replace("缓存 ", "")
-    parts.push(`缓存 ${formatTokenCount(usage.cachedTokens)}${rate ? `（${rate}）` : ""}`)
-  }
-  // The provider's own hit/miss counters describe a single model leg, so they
-  // only line up with the summed usage on a plain one-leg turn. Anything else
-  // would show a rate that contradicts the token counts next to it.
-  if (usage && providerCountersCoverThePrompt(usage) && usage.cacheHitTokens !== undefined) {
-    parts.push(`命中 ${formatTokenCount(usage.cacheHitTokens ?? 0)} / 未命中 ${formatTokenCount(usage.cacheMissTokens ?? 0)}`)
-  }
-  if (usage?.totalTokens) parts.push(`合计 ${formatTokenCount(usage.totalTokens)}`)
-  if (usage?.cost !== undefined) parts.push(`费用 ${formatCost(usage.cost)}`)
-  if (finishReason) parts.push(finishLabel(finishReason))
-  return parts.join(" · ")
-}
-
-// providerCountersCoverThePrompt reports whether the provider's hit/miss split
-// accounts for (roughly) the whole prompt. On a multi-leg turn the counters
-// describe one leg while usage sums them all, and comparing the two produces a
-// rate that looks wrong next to the token counts.
-function providerCountersCoverThePrompt(usage?: UsageStats) {
-  if (!usage) return false
-  const counted = (usage.cacheHitTokens ?? 0) + (usage.cacheMissTokens ?? 0)
-  if (counted <= 0) return false
-  const prompt = usage.promptTokens ?? 0
-  return prompt <= 0 || counted >= prompt * 0.9
-}
-
-// cacheRate renders the prompt-cache hit rate from the token counts that the
-// row shows, so the percentage and the counts always agree. The provider's
-// per-leg counters are only a fallback for a response that reports no cached
-// token count at all.
-function cacheRate(usage?: UsageStats) {
-  if (!usage) return ""
-  if (usage.cachedTokens && usage.promptTokens) {
-    const rate = (usage.cachedTokens / usage.promptTokens) * 100
-    return `缓存 ${rate.toFixed(rate === 100 ? 0 : 1)}%`
-  }
-  const hit = usage.cacheHitTokens ?? 0
-  const miss = usage.cacheMissTokens ?? 0
-  const counted = hit + miss
-  if (counted > 0) {
-    return `缓存 ${((hit / counted) * 100).toFixed(hit === counted ? 0 : 1)}%`
-  }
-  return ""
-}
+function Dash() { return <span className="text-muted-foreground/50">—</span> }
 
 function UsageCell({ item }: { item: HistoryItem }) {
-  const usage = item.usage
-  if (!usage) {
-    return <Dash />
-  }
-  const extras = [
-    usage.reasoningTokens ? `思考 ${formatTokenCount(usage.reasoningTokens)}` : "",
-    cacheRate(usage) || (usage.cachedTokens ? `缓存 ${formatTokenCount(usage.cachedTokens)}` : ""),
-  ].filter(Boolean)
+  if (!item.usage) return <Dash />
+  return <span className="font-mono text-xs whitespace-nowrap tabular-nums" title={usageTitle(item.usage, item.finishReason)}>
+    {formatTokenCount(item.usage.promptTokens)}<span className="text-muted-foreground"> → </span>{formatTokenCount(item.usage.completionTokens)}
+  </span>
+}
 
-  // Two short lines keep the column narrow enough for the table to fit at
-  // 1400px without horizontal scrolling.
-  return (
-    <div className="font-mono text-xs whitespace-nowrap tabular-nums" title={usageTitle(usage, item.finishReason)}>
-      <div>
-        {formatTokenCount(usage.promptTokens)}
-        <span className="text-muted-foreground"> → </span>
-        {formatTokenCount(usage.completionTokens)}
-      </div>
-      {extras.length > 0 && <div className="text-muted-foreground text-2xs">{extras.join(" · ")}</div>}
+function CacheCell({ item }: { item: HistoryItem }) {
+  const rate = formatCacheRate(item.usage)
+  const cache = cacheStats(item.usage)
+  if (!rate) return <span title="未上报足够的缓存数据"><Dash /></span>
+  return <span className={cn("font-mono text-xs whitespace-nowrap tabular-nums", cache.rate && cache.rate > 0 ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}
+    title={cache.tokens === undefined ? undefined : `缓存 Token ${cache.tokens.toLocaleString("zh-CN")} · ${rate}`}>{rate}</span>
+}
+
+function ModelBadges({ item }: { item: HistoryItem }) {
+  const status = historyStatus(item)
+  return <>
+    {status.tone === "error" && <span className="inline-flex shrink-0" title={item.error ?? status.label}><CircleAlert className="text-destructive size-3.5" role="img" aria-label={status.label} aria-hidden={false} /></span>}
+    {item.kind === "compact" && <Badge variant="secondary" className={chipClass}>压缩</Badge>}
+    {item.degraded && <Badge variant="outline" className={warningChipClass} title={item.degradeReason}>压缩降级</Badge>}
+    {item.missingSummarySections?.length ? <Badge variant="outline" className={warningChipClass} title={`摘要缺 ${item.missingSummarySections.join("、")}`}>摘要缺段</Badge> : null}
+  </>
+}
+
+function OpenDetailsButton({ item, onOpen }: { item: HistoryItem; onOpen: OpenRequest }) {
+  return <button type="button" data-history-open aria-label="查看请求详情"
+    className="text-muted-foreground inline-flex size-6 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    onClick={event => { event.stopPropagation(); onOpen(item, event.currentTarget) }}><ChevronRight className="size-3.5" /></button>
+}
+
+function openFromRow(event: MouseEvent<HTMLElement>, item: HistoryItem, onOpen: OpenRequest) {
+  const selection = window.getSelection()
+  if (selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return
+  const target = event.target as HTMLElement
+  if (target.closest("a,input,select,textarea,[data-no-history-open]")) return
+  onOpen(item, event.currentTarget.querySelector<HTMLButtonElement>("[data-history-open]"))
+}
+
+function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
+  const cells = {
+    time: <span className="text-muted-foreground text-xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>,
+    model: <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><ModelBadges item={item} /><span data-history-model className="text-foreground font-mono text-xs">{item.model}</span></span>,
+    account: <span className="text-xs">{item.account || <Dash />}</span>,
+    provider: actualProvider(item) ? <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge> : <Dash />,
+    latency: <span className="font-mono text-xs tabular-nums" title={`首字 ${shortDuration(item.ttftMs)} · 总耗时 ${shortDuration(item.ms)}`}>{latencyText(item)}</span>,
+    tokens: <UsageCell item={item} />,
+    cache: <CacheCell item={item} />,
+    cost: item.usage?.cost === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={costTitle(item.usage)}>{formatCost(item.usage.cost)}</span>,
+  }
+  return <TableRow data-state={selected ? "selected" : undefined} aria-selected={selected}
+    className="cursor-pointer hover:bg-primary/5 data-[state=selected]:bg-primary/5" onClick={event => openFromRow(event, item, onOpen)}>
+    {historyColumns.filter(column => columns.has(column.id)).map(column => <TableCell key={column.id} data-history-column={column.id} className="align-middle whitespace-nowrap">{cells[column.id]}</TableCell>)}
+    <TableCell className="w-8 px-1! text-right"><OpenDetailsButton item={item} onOpen={onOpen} /></TableCell>
+  </TableRow>
+}
+
+function HistoryCard({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
+  const status = historyStatus(item)
+  return <article className={cn("bg-card cursor-pointer rounded-lg p-3 ring-1 ring-foreground/10 hover:bg-primary/5", selected && "bg-primary/5")}
+    onClick={event => openFromRow(event, item, onOpen)}>
+    <div className="mb-1 flex items-center justify-between gap-2">
+      {columns.has("time") && <span className="text-muted-foreground text-2xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>}
+      <span className={cn("ml-auto text-2xs", status.tone === "error" ? "text-destructive" : "text-muted-foreground")}>{status.label}</span>
+      <OpenDetailsButton item={item} onOpen={onOpen} />
     </div>
-  )
-}
-
-// gatewayMultiple is how much the gateway's own price list exceeds the ledger
-// charge: 2x on a channel Cline Pass discounts, 1x on one it does not, higher
-// when a per-call tool fee is added on top.
-function gatewayMultiple(usage: UsageStats) {
-  if (usage.gatewayCost === undefined || !usage.cost) return ""
-  const multiple = usage.gatewayCost / usage.cost
-  if (Math.abs(multiple - 1) < 0.005) return ""
-  return ` ×${multiple.toFixed(multiple >= 10 ? 0 : 1)}`
-}
-
-// costTitle spells out where a request's money went. The ledger number is the
-// only one spend limits use. The gateway number is the gateway's own price list
-// for the same turn: it is higher whenever the channel is discounted for Cline
-// Pass or a per-call tool ran, so it is informational rather than a fee.
-function costTitle(usage: UsageStats) {
-  const parts = [`账本 ${formatCost(usage.cost)}（实际扣费，计入密钥限额）`]
-  if (usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - (usage.cost ?? 0)) > 1e-9) {
-    parts.push(
-      `网关 ${formatCost(usage.gatewayCost)}（网关市价口径${gatewayMultiple(usage)}：含渠道差价与按次工具费，不影响扣费）`,
-    )
-  }
-  const split = [
-    usage.inputCost !== undefined ? `输入 ${formatCost(usage.inputCost)}` : "",
-    usage.outputCost !== undefined ? `输出 ${formatCost(usage.outputCost)}` : "",
-    usage.surchargeCost ? `附加 ${formatCost(usage.surchargeCost)}` : "",
-  ].filter(Boolean)
-  if (split.length > 0) parts.push(split.join(" · "))
-  return parts.join("\n")
-}
-
-function CostCell({ usage }: { usage?: UsageStats }) {
-  if (usage?.cost === undefined) {
-    return <Dash />
-  }
-  const gatewayDiffers = usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - usage.cost) > 1e-9
-  return (
-    <div className="font-mono text-xs tabular-nums" title={costTitle(usage)}>
-      <div>{formatCost(usage.cost)}</div>
-      {gatewayDiffers && (
-        <div className="text-muted-foreground text-2xs">
-          ↳ 网关 {formatCost(usage.gatewayCost)}
-          {gatewayMultiple(usage)}
-        </div>
-      )}
+    <div className="text-foreground font-mono text-xs wrap-anywhere" data-history-model>{item.model}</div>
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5"><ModelBadges item={{ ...item, error: null, routingStatus: undefined }} />
+      {columns.has("provider") && actualProvider(item) && <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge>}
+      {columns.has("account") && item.account && <span className="text-muted-foreground text-2xs">{item.account}</span>}
     </div>
-  )
+    <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+      {columns.has("tokens") && <div><dt className="text-muted-foreground text-2xs">输入 → 输出</dt><dd className="mt-0.5"><UsageCell item={item} /></dd></div>}
+      {columns.has("cache") && <div><dt className="text-muted-foreground text-2xs">缓存命中</dt><dd className="mt-0.5"><CacheCell item={item} /></dd></div>}
+      {columns.has("latency") && <div><dt className="text-muted-foreground text-2xs">首字 / 总耗时</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{latencyText(item)}</dd></div>}
+      {columns.has("cost") && <div><dt className="text-muted-foreground text-2xs">费用</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{item.usage?.cost === undefined ? <Dash /> : formatCost(item.usage.cost)}</dd></div>}
+    </dl>
+  </article>
 }
 
-function RoutingPolicy({ item }: { item: HistoryItem }) {
-  if (!item.gatewayHas?.length) return null
-  const labels: Record<string, string> = { matched: "已命中目标", mismatch: "未命中目标", unknown: "路由未确认", rejected: "无效上游已拒绝" }
-  return <details className="text-muted-foreground mt-1 text-2xs">
-    <summary className={cn("cursor-pointer", item.routingStatus === "mismatch" && "text-destructive")}>{item.kind === "routing-check" ? "路由对照" : "能力过滤"} · {labels[item.routingStatus ?? "unknown"] ?? "路由未确认"}</summary>
-    <div className="mt-1 space-y-0.5 font-mono wrap-anywhere"><div>has: {item.gatewayHas.join(", ")}</div><div>目标：{item.targetProviders?.join(", ") || "按能力自动选择"}</div><div>实际：{actualProvider(item) || "未知"}</div></div>
-  </details>
-}
-
-// HistoryCard is the phone layout of one history row: the same facts as the
-// table, stacked so nothing is clipped off the side of the screen.
-function HistoryCard({ item }: { item: HistoryItem }) {
-  const provider = actualProvider(item)
-  return (
-    <article className="bg-card rounded-lg px-3 py-2.5 ring-1 ring-foreground/10">
-      <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
-        <span title={item.session ? `会话 ${item.session}` : undefined}>{formatTime(item.ts)}</span>
-        <span className="flex flex-wrap items-center gap-1">
-          {item.kind === "compact" && (
-            <Badge variant="secondary" className={chipClass}>
-              压缩
-            </Badge>
-          )}
-          {item.degraded ? (
-            <Badge variant="outline" className={warningChipClass} title={item.degradeReason}>
-              压缩降级
-            </Badge>
-          ) : null}
-          {item.missingSummarySections?.length ? (
-            <Badge
-              variant="outline"
-              className={warningChipClass}
-              title={`摘要缺少段落：${item.missingSummarySections.join("、")}`}
-            >
-              摘要缺 {item.missingSummarySections.join("、")}
-            </Badge>
-          ) : null}
-          <Badge variant={item.stream ? "secondary" : "outline"} className={chipClass}>
-            {item.stream ? "流式" : "非流式"}
-          </Badge>
-        </span>
-      </div>
-
-      <div className="mt-1 font-mono text-xs wrap-anywhere">{item.model}</div>
-      <RoutingPolicy item={item} />
-      {item.canonical ? (
-        <div className="text-muted-foreground font-mono text-2xs wrap-anywhere">{item.canonical}</div>
-      ) : null}
-
-      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-        {provider && (
-          <Badge variant="outline" className={chipClass}>
-            <ProviderName slug={provider} />
-          </Badge>
-        )}
-        {item.fallback && (
-          <Badge
-            variant="outline"
-            className={cn(chipClass, fallbackIgnored(item) ? undefined : warningChipClass)}
-            title={fallbackTitle(item)}
-          >
-            {fallbackIgnored(item) ? "忽略偏好" : "降级"}
-          </Badge>
-        )}
-        <GatewayAttemptsBadge attempts={item.gatewayAttempts} />
-        {item.account && (
-          <span className="text-muted-foreground text-2xs">{item.account}</span>
-        )}
-      </div>
-
-      {hasFailover(item) && (
-        <div className="mt-1.5">
-          {item.trace?.length ? (
-            <TraceList trace={item.trace} compact />
-          ) : (
-            <span className="text-muted-foreground font-mono text-2xs">{item.attempts?.join(" → ")}</span>
-          )}
-        </div>
-      )}
-
-      <div className="mt-2 flex flex-wrap items-start gap-x-4 gap-y-1">
-        <UsageCell item={item} />
-        <CostCell usage={item.usage} />
-        <EffortCell item={item} />
-      </div>
-
-      <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 text-2xs tabular-nums">
-        <span>首字 {item.ttftMs ? shortDuration(item.ttftMs) : "—"}</span>
-        <span>总耗时 {shortDuration(item.ms)}</span>
-      </div>
-
-      {item.error && (
-        <div className="text-destructive mt-1.5 line-clamp-3 text-2xs wrap-anywhere" title={item.error}>
-          {item.error}
-        </div>
-      )}
-    </article>
-  )
-}
-
-// gatewayAttemptsBadge surfaces the retries that happened inside the gateway,
-// which the proxy's own trace cannot see.
-function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
-  if (!attempts || attempts.length === 0) return null
-  const failed = attempts.filter((attempt) => attempt.success === false || (attempt.status ?? 0) >= 400)
-  if (attempts.length === 1 && failed.length === 0) return null
-  const title = attempts
-    .map((attempt) => {
-      const failed = attempt.success === false || (attempt.status ?? 0) >= 400
-      // The status code is what tells a rate limit apart from a server error,
-      // so it belongs in the tooltip that explains a fallback.
-      const code = failed && attempt.status ? ` ${attempt.status}` : ""
-      const ms = attempt.ms ? ` ${shortDuration(attempt.ms)}` : ""
-      const reason = failed && attempt.error ? ` · ${attempt.error}` : ""
-      return `${attempt.provider ?? "未知渠道"} ${failed ? `失败${code}` : "成功"}${ms}${reason}`
-    })
-    .join(" → ")
-  return (
-    <Badge
-      variant="outline"
-      className={cn(chipClass, failed.length > 0 && warningChipClass)}
-      title={`网关内部尝试：${title}`}
-    >
-      网关 {attempts.length} 次
-    </Badge>
-  )
-}
-
-// Cells mix text-sm, text-xs and badges with different line heights; only
-// middle alignment puts a single-line row on one visual midline.
-const cell = "align-middle"
-
-export function HistoryPanel({
-  history,
-  total,
-  hasMore,
-  pending,
-  query,
-  onQueryChange,
-  onRefresh,
-  onLoadMore,
-  onClear,
-}: {
+export function HistoryPanel({ history, total, hasMore, pending, query, onQueryChange, onRefresh, onLoadMore, onClear }: {
   history: HistoryItem[]
   total: number
   hasMore: boolean
-  /** A filter change is still being confirmed by the server. */
   pending?: boolean
   query: { q: string; onlyErrors: boolean }
   onQueryChange: (next: { q: string; onlyErrors: boolean }) => void
@@ -379,302 +120,89 @@ export function HistoryPanel({
   onClear: () => Promise<void>
 }) {
   const [autoRefresh, setAutoRefresh] = useState(() => {
-    try {
-      return localStorage.getItem(AUTO_REFRESH_STORAGE) === "1"
-    } catch {
-      return false
-    }
+    try { return localStorage.getItem(AUTO_REFRESH_STORAGE) === "1" } catch { return false }
   })
   const [refreshing, setRefreshing] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState(query.q)
-  // Eleven columns cannot fit a phone, so narrow viewports get a card list with
-  // the same facts stacked instead of a sideways-scrolling table.
+  const [selected, setSelected] = useState<HistoryItem | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const { visibleColumns, toggleColumn, resetColumns } = useHistoryColumns()
   const narrow = useNarrowViewport()
+  const { viewportRef, visibleColumns: tableColumns, collapsedColumns, cards } = useHistoryLayout(visibleColumns, history, narrow)
+  const refreshRef = useRef(onRefresh)
 
-  // Typing filters as you go, but only after a pause: every keystroke would
-  // otherwise reload the log from the server.
+  const openDetails: OpenRequest = (item, trigger) => { triggerRef.current = trigger; setSelected(item) }
+  const isSelected = (item: HistoryItem) => selected !== null && (item.id ? item.id === selected.id : item.ts === selected.ts && item.model === selected.model && item.account === selected.account)
+
   useEffect(() => {
     if (search === query.q) return
     const timer = window.setTimeout(() => onQueryChange({ q: search, onlyErrors: query.onlyErrors }), 300)
     return () => window.clearTimeout(timer)
   }, [search, query.q, query.onlyErrors, onQueryChange])
 
-  const refresh = async () => {
-    setRefreshing(true)
-    try {
-      await onRefresh()
-    } finally {
-      setRefreshing(false)
-    }
-  }
-
-  // The parent hands us a fresh callback on every render; keep the latest one
-  // in a ref so toggling is the only thing that restarts the timer.
-  const refreshRef = useRef(onRefresh)
+  useEffect(() => { refreshRef.current = onRefresh }, [onRefresh])
   useEffect(() => {
-    refreshRef.current = onRefresh
-  }, [onRefresh])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(AUTO_REFRESH_STORAGE, autoRefresh ? "1" : "0")
-    } catch {
-      // Storage is optional in restricted browser contexts.
-    }
+    try { localStorage.setItem(AUTO_REFRESH_STORAGE, autoRefresh ? "1" : "0") } catch { /* Optional storage. */ }
     if (!autoRefresh) return
-    // The panel is only mounted while its tab is active, so polling stops on
-    // its own when the user looks elsewhere; skip ticks in hidden windows.
     const timer = window.setInterval(() => {
-      if (document.hidden) return
-      void refreshRef.current()
+      if (!document.hidden) void refreshRef.current()
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [autoRefresh])
 
-  const clear = async () => {
-    try {
-      await onClear()
-      toast.success("请求历史已清空")
-    } catch (error) {
-      toast.error(errorMessage(error))
-      throw error
-    }
+  const refresh = async () => {
+    setRefreshing(true)
+    try { await onRefresh() } finally { setRefreshing(false) }
   }
-
+  const clear = async () => {
+    try { await onClear(); toast.success("请求历史已清空") } catch (error) { toast.error(errorMessage(error)); throw error }
+  }
   const loadMore = async () => {
     setLoadingMore(true)
-    try {
-      await onLoadMore()
-    } catch (error) {
-      toast.error(errorMessage(error))
-    } finally {
-      setLoadingMore(false)
-    }
+    try { await onLoadMore() } catch (error) { toast.error(errorMessage(error)) } finally { setLoadingMore(false) }
   }
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>请求历史</CardTitle>
-        <CardDescription>保留最近 500 条代理请求，可按模型、账号、渠道或错误信息筛选。</CardDescription>
-        <CardAction className={cardActionClass}>
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}>
-            <RefreshCw className={refreshing ? "animate-spin" : ""} data-icon="inline-start" />
-            刷新
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setClearing(true)} disabled={!history.length}>
-            <Trash2 data-icon="inline-start" />
-            清空
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative mr-1 w-full max-w-xs">
-            <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="筛选模型、账号、渠道或错误"
-              aria-label="筛选请求历史"
-              className="pl-8"
-            />
-          </div>
-          <ToggleChip
-            pressed={query.onlyErrors}
-            onPressedChange={(pressed) => onQueryChange({ ...query, onlyErrors: pressed })}
-            icon={CircleAlert}
-          >
-            只看失败
-          </ToggleChip>
-          <ToggleChip pressed={autoRefresh} onPressedChange={setAutoRefresh} icon={RefreshCw}>
-            自动刷新
-          </ToggleChip>
-          <span className="text-muted-foreground ml-auto text-xs tabular-nums">
-            已显示 {history.length} / {total} 条
-            {pending && <span className="ml-2">刷新中…</span>}
-          </span>
+  return <Card>
+    <CardHeader>
+      <CardTitle>请求历史</CardTitle>
+      <CardDescription>保留最近 500 条代理请求。点击记录查看完整模型、路由、用量与费用明细。</CardDescription>
+      <CardAction className={cardActionClass}>
+        <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "animate-spin" : ""} data-icon="inline-start" />刷新</Button>
+        <Button variant="outline" size="sm" onClick={() => setClearing(true)} disabled={!history.length}><Trash2 data-icon="inline-start" />清空</Button>
+      </CardAction>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative mr-1 w-full max-w-xs">
+          <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+          <Input value={search} onChange={event => setSearch(event.target.value)} placeholder="筛选模型、账号、渠道或错误" aria-label="筛选请求历史" className="pl-8" />
         </div>
-
-        {!history.length ? (
-          <EmptyState
-            icon={History}
-            title={query.q || query.onlyErrors ? "没有符合条件的请求" : "暂无请求记录"}
-            description={
-              query.q || query.onlyErrors ? "请调整筛选条件后重试。" : "客户端通过代理发出的请求会记录在此处。"
-            }
-          />
-        ) : narrow ? (
-          <div className="space-y-2">
-            {history.map((item, index) => (
-              <HistoryCard key={item.id ?? `${item.ts}-${item.model}-${index}`} item={item} />
-            ))}
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
-            {/* Eleven columns: slightly tighter cell padding keeps failover rows
-                (trace badges, wrapped errors) inside 1400px without scrolling. */}
-            <Table className="[&_td]:px-2.5 [&_th]:px-2.5">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-28">时间</TableHead>
-                  <TableHead className="min-w-48">模型</TableHead>
-                  <TableHead className="w-20">账号</TableHead>
-                  <TableHead className="w-32">实际上游</TableHead>
-                  <TableHead className="min-w-44">背后模型</TableHead>
-                  <TableHead className="w-20" title="首个思考、正文或工具调用到达的时间">
-                    首字
-                  </TableHead>
-                  <TableHead className="w-20">总耗时</TableHead>
-                  <TableHead className="min-w-28">Token</TableHead>
-                  <TableHead className="w-24">费用</TableHead>
-                  <TableHead className="w-20" title="实际转发给上游的思考强度；「客户端→上游」表示强度经过映射">
-                    强度
-                  </TableHead>
-                  <TableHead className="w-20">方式</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {history.map((item, index) => (
-                  <TableRow key={item.id ?? `${item.ts}-${item.model}-${index}`}>
-                    <TableCell
-                      className={cn(cell, "text-muted-foreground text-xs")}
-                      title={item.session ? `会话 ${item.session}` : undefined}
-                    >
-                      {formatTime(item.ts)}
-                    </TableCell>
-                    <TableCell className={cell}>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-xs">{item.model}</span>
-                        <RoutingPolicy item={item} />
-                        {item.kind === "compact" && (
-                          <Badge variant="secondary" className={chipClass}>
-                            压缩
-                          </Badge>
-                        )}
-                        {item.degraded ? (
-                          <Badge
-                            variant="outline"
-                            className={warningChipClass}
-                            title={
-                              item.degradeReason
-                                ? `摘要生成失败，已返回降级结果：${item.degradeReason}`
-                                : "摘要生成失败，已返回降级结果"
-                            }
-                          >
-                            压缩降级
-                          </Badge>
-                        ) : null}
-                        {item.missingSummarySections?.length ? (
-                          <Badge
-                            variant="outline"
-                            className={warningChipClass}
-                            title={`摘要缺少段落：${item.missingSummarySections.join("、")}`}
-                          >
-                            摘要缺 {item.missingSummarySections.join("、")}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {item.error && (
-                        // Upstream errors can be ~1k chars of JSON; unwrapped they
-                        // stretch this column and push the rest of the table out
-                        // of view.
-                        <div
-                          className="text-destructive mt-1 line-clamp-3 max-w-60 text-2xs whitespace-normal wrap-anywhere"
-                          title={item.error}
-                        >
-                          {item.error}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className={cell}>{item.account || <Dash />}</TableCell>
-                    <TableCell className={cn(cell, "whitespace-normal")}>
-                      {actualProvider(item) && (
-                        <span className="inline-flex flex-wrap items-center gap-1">
-                          <Badge variant="outline" className={chipClass}>
-                            <ProviderName slug={actualProvider(item)} />
-                          </Badge>
-                          {item.fallback && (
-                            <Badge
-                              variant="outline"
-                              className={cn(chipClass, fallbackIgnored(item) ? undefined : warningChipClass)}
-                              title={fallbackTitle(item)}
-                            >
-                              {fallbackIgnored(item) ? "忽略偏好" : "降级"}
-                            </Badge>
-                          )}
-                          <GatewayAttemptsBadge attempts={item.gatewayAttempts} />
-                        </span>
-                      )}
-                      {/* A failed request has no winning provider; the attempt
-                          badges already say which upstream was tried. */}
-                      {hasFailover(item) ? (
-                        <div className={actualProvider(item) ? "mt-1.5" : undefined}>
-                          {item.trace?.length ? (
-                            <TraceList trace={item.trace} compact />
-                          ) : (
-                            <span className="text-muted-foreground font-mono text-2xs">
-                              {item.attempts?.join(" → ")}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        !actualProvider(item) && <Dash />
-                      )}
-                    </TableCell>
-                    <TableCell className={cn(cell, "text-muted-foreground font-mono text-xs")}>
-                      {item.canonical || <Dash />}
-                    </TableCell>
-                    <TableCell className={cn(cell, "font-mono text-xs tabular-nums")}>
-                      {item.ttftMs === undefined || item.ttftMs === null ? <Dash /> : shortDuration(item.ttftMs)}
-                    </TableCell>
-                    <TableCell className={cn(cell, "font-mono text-xs tabular-nums")}>
-                      {shortDuration(item.ms)}
-                    </TableCell>
-                    <TableCell className={cell}>
-                      <UsageCell item={item} />
-                    </TableCell>
-                    <TableCell className={cell}>
-                      <CostCell usage={item.usage} />
-                    </TableCell>
-                    <TableCell className={cell}>
-                      <EffortCell item={item} />
-                    </TableCell>
-                    <TableCell className={cell}>
-                      <Badge
-                        variant={item.stream ? "secondary" : "outline"}
-                        className={chipClass}
-                        title={finishLabel(item.finishReason)}
-                      >
-                        {item.stream ? "流式" : "非流式"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
+        <ToggleChip pressed={query.onlyErrors} onPressedChange={pressed => onQueryChange({ ...query, onlyErrors: pressed })} icon={CircleAlert}>只看失败</ToggleChip>
+        <ToggleChip pressed={autoRefresh} onPressedChange={setAutoRefresh} icon={RefreshCw}>自动刷新</ToggleChip>
+        <HistoryColumnsMenu visibleColumns={visibleColumns} collapsedColumns={collapsedColumns} onToggle={toggleColumn} onReset={resetColumns} />
+        <span className="text-muted-foreground ml-auto text-xs tabular-nums">已显示 {history.length} / {total} 条{pending && <span className="ml-2">刷新中…</span>}</span>
+      </div>
+      <div ref={viewportRef} className="min-w-0">
+        {!history.length ? <EmptyState icon={History} title={query.q || query.onlyErrors ? "没有符合条件的请求" : "暂无请求记录"}
+          description={query.q || query.onlyErrors ? "请调整筛选条件后重试。" : "客户端通过代理发出的请求会记录在此处。"} />
+          : cards ? <div className="space-y-2">{history.map((item, index) => <HistoryCard key={item.id ?? `${item.ts}-${item.model}-${index}`} item={item} columns={visibleColumns} selected={isSelected(item)} onOpen={openDetails} />)}</div>
+          : <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
+            <Table className="[&_td]:px-2.5 [&_td]:py-3 [&_th]:px-2.5">
+              <TableHeader><TableRow>
+                {historyColumns.filter(column => tableColumns.has(column.id)).map(column => <TableHead key={column.id} data-history-column={column.id} title={column.title}>{column.label}</TableHead>)}
+                <TableHead className="w-8 px-1!"><span className="sr-only">详情</span></TableHead>
+              </TableRow></TableHeader>
+              <TableBody>{history.map((item, index) => <HistoryTableRow key={item.id ?? `${item.ts}-${item.model}-${index}`} item={item} columns={tableColumns} selected={isSelected(item)} onOpen={openDetails} />)}</TableBody>
             </Table>
-          </div>
-        )}
-
-        {hasMore && (
-          <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore || pending}>
-              {loadingMore ? "加载中…" : `加载更多（还有 ${Math.max(total - history.length, 0)} 条）`}
-            </Button>
-          </div>
-        )}
-      </CardContent>
-      <ConfirmDialog
-        open={clearing}
-        onOpenChange={setClearing}
-        title="清空请求历史"
-        description="将删除全部请求记录，账号的累计请求数不受影响。"
-        confirmLabel="清空"
-        destructive
-        onConfirm={clear}
-      />
-    </Card>
-  )
+          </div>}
+      </div>
+      {hasMore && <div className="flex justify-center"><Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore || pending}>
+        {loadingMore ? "加载中…" : `加载更多（还有 ${Math.max(total - history.length, 0)} 条）`}
+      </Button></div>}
+    </CardContent>
+    <HistoryDetailsSheet item={selected} triggerRef={triggerRef} onClose={() => setSelected(null)} />
+    <ConfirmDialog open={clearing} onOpenChange={setClearing} title="清空请求历史" description="将删除全部请求记录，账号的累计请求数不受影响。" confirmLabel="清空" destructive onConfirm={clear} />
+  </Card>
 }
