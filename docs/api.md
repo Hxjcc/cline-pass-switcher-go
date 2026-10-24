@@ -144,9 +144,9 @@
 | `GET` | `/api/models` | 订阅模型及其渠道设置、探测信息。 |
 | `POST` | `/api/models/remove` | 移除订阅模型。请求体 `{"model": "..."}`。 |
 | `POST` | `/api/fetch-official-models` | 从 Cline 推荐目录和 models.dev 拉取 Cline Pass 模型列表，把新模型加入订阅。models.dev 拉取失败返回 500，不会伪装成「没有新模型」。 |
-| `POST` | `/api/probe` | 探测模型的渠道与路由方式。请求体 `{"model": "..."}`。**产生费用。** |
+| `POST` | `/api/probe` | 合并默认路由发现与适用单渠道模型的能力路由对照。请求体 `{"model":"...","force":false}`；`force:true` 强制刷新。返回 `defaultRoute` 与 `routingDiscovery`，不修改模型配置。**未命中缓存时产生费用。** |
 | `POST` | `/api/gateway-capabilities` | 读取并缓存模型的 Vercel 供应商能力，请求体 `{"model":"...","refresh":true,"upstreams":["deepseek"]}`，`upstreams` 可省略。返回 `catalog` 和 `recommendedHas`：单个供应商取其支持的能力标签，多个取交集，未指定则优先使用模型原厂供应商；不提交模型推理。 |
-| `POST` | `/api/verify-routing` | 固定账号做上游正反对照。请求体 `{"model":"...","config":{"upstreams":["deepseek"],"exclude":[],"gatewayHas":["vision","implicit-caching"]},"accountId":"可选","allAccounts":false,"apply":true}`。返回 `ok`、`applied`、`checks`。失败不应用；验证期间配置或凭据发生变化则返回 409。**产生费用。** |
+| `POST` | `/api/verify-routing` | 固定账号做上游正反对照。请求体 `{"model":"...","config":{"upstreams":["deepseek"],"exclude":[],"gatewayHas":["vision","implicit-caching"]},"accountId":"可选","allAccounts":false,"apply":true,"force":true}`。返回 `ok`、`applied`、`checks`。`force:false` 可复用完全相同的近期成功验证；额外指定 `adopt:true` 仅允许采用当前发现方案，必须明确指定原验证账号并 `apply:true`，失效则返回 409，不重新推理。失败不应用；验证期间配置或凭据变化也返回 409。**实际验证产生费用。** |
 | `POST` | `/api/validate-upstreams` | 逐个校验模型的候选渠道。请求体 `{"model": "..."}`。**产生费用。** |
 | `POST` | `/api/test` | 发送一次测试请求。请求体 `{"model": "...", "upstreams": [...], "exclude": [...]}`，后两项可省略，省略时使用已保存的设置。**产生费用。** |
 | `GET` / `POST` | `/api/config` | 读取配置摘要；保存模型渠道设置，请求体 `{"perModel": {"<模型>": {...}}}`。 |

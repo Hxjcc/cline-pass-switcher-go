@@ -266,7 +266,11 @@ func TestPickAccountSkipsAFullWindowWhenAnotherAccountHasRoom(t *testing.T) {
 func TestPickAccountKeepsTheOnlyFullAccountAndIgnoresProbeFailures(t *testing.T) {
 	var hits atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		hits.Add(1)
+		// The optional usage-limits read can finish after the failed plan read.
+		// Count only plan requests so that completion cannot look like a retry.
+		if request.URL.Path == "/users/me/plan" {
+			hits.Add(1)
+		}
 		http.Error(writer, "quota down", http.StatusBadGateway)
 	}))
 	defer upstreamServer.Close()

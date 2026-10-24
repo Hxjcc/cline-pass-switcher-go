@@ -46,6 +46,7 @@ import {
   shortDuration,
 } from "@/lib/format"
 import { orderedUpstreams } from "@/lib/upstream-order"
+import { canExploreGateway, discoveryLabel } from "@/lib/smart-routing"
 import { gatewayCapabilities, normalizeHas, providerMatches, routingConfigKey } from "@/lib/gateway-routing"
 import { cn } from "@/lib/utils"
 import type {
@@ -129,7 +130,10 @@ export function ModelRow({
     setBusy("probe")
     try {
       const response = await onProbe(model.id)
-      toast.success(`探测完成，发现 ${response.upstreams?.length ?? 0} 个渠道`)
+      const status = response.routingDiscovery?.status
+      if (status === "available") toast.success("发现已验证的能力路由，可展开模型采用方案")
+      else if (status === "unconfirmed") toast.warning(response.routingDiscovery?.reason || "探测完成，路由暂未能确认")
+      else toast.success(`探测完成，默认发现 ${response.defaultRoute?.providers.length ?? response.upstreams?.length ?? 0} 个渠道`)
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -290,6 +294,7 @@ export function ModelRow({
               {model.meta?.canonicalSlug || "尚未识别背后模型"}
             </span>
           </div>
+          {model.meta?.routingDiscovery && <div className="mt-1"><Badge variant="outline" className={cn(chipClass, model.meta.routingDiscovery.status === "available" && model.meta.routingDiscovery.current && "text-emerald-700 dark:text-emerald-300")}>{discoveryLabel(model)}</Badge></div>}
           {/* Every capability chip shares one line under the slug: inline they
               wrap away from it on long models and the cell looks torn apart. */}
           {(model.meta?.reasoning ||
@@ -438,7 +443,7 @@ export function ModelRow({
         <TableRow>
           <TableCell colSpan={7} className="bg-muted/25 p-0 whitespace-normal">
             <div className="space-y-4 p-4">
-              <GatewayRoutingPanel
+              {(filterEnabled || canExploreGateway(model)) && <GatewayRoutingPanel
                 model={model}
                 config={config}
                 enabled={filterEnabled}
@@ -447,22 +452,23 @@ export function ModelRow({
                 onEnabledChange={setFilterEnabled}
                 onDraftChange={setDraftConfig}
                 onRestore={clearConfig}
+                onDiscover={probe}
                 onReadGateway={onReadGateway ? async (modelID, refresh, upstreams) => {
                   setBusy("capabilities")
                   try { return await onReadGateway(modelID, refresh, upstreams) } finally { setBusy(null) }
                 } : undefined}
-                onVerifyGateway={onVerifyGateway ? async (modelID, value, accountID, allAccounts) => {
+                onVerifyGateway={onVerifyGateway ? async (modelID, value, accountID, allAccounts, force) => {
                   setBusy("verify")
-                  try { return await onVerifyGateway(modelID, value, accountID, allAccounts) } finally { setBusy(null) }
+                  try { return force === undefined ? await onVerifyGateway(modelID, value, accountID, allAccounts) : await onVerifyGateway(modelID, value, accountID, allAccounts, force) } finally { setBusy(null) }
                 } : undefined}
-              />
+              />}
               {pinDisabled && (
                 <Alert variant={model.meta?.pinReason === "single_provider" ? "default" : "destructive"}>
                   <TriangleAlert />
                   <AlertTitle>{pinReasonLabel(model.meta?.pinReason)}</AlertTitle>
                   <AlertDescription>
                     {model.meta?.pinReason === "single_provider"
-                      ? "当前探测仅发现一个渠道。可开启上方能力过滤，读取并选择其他供应商后重新验证。"
+                      ? "当前默认探测仅发现一个渠道。适用的线路会自动补测能力路由；展开上方方案可查看验证结果，采用前原配置继续生效。"
                       : "请求仍会正常发送，但实际渠道由 Cline 网关决定；以下钉住、排除与校验设置均不会生效。"}
                   </AlertDescription>
                 </Alert>

@@ -1,5 +1,60 @@
 import { expect, test } from "@playwright/test"
 
+test("batch probing combines ordinary discovery and single-channel plans without applying them", async ({ page }) => {
+  const singleID = "cline-pass/deepseek-test"
+  const nativeID = "cline-pass/native-test"
+  const plan = { upstreams: ["deepseek"], exclude: [], gatewayHas: ["implicit-caching", "vision"] }
+  const catalog = { model: "deepseek/test", source: "directory", fetchedAt: Date.now(), providers: [{ slug: "deepseek", name: "DeepSeek", has: ["implicit-caching", "vision"] }, { slug: "other", name: "Other", has: ["vision"] }] }
+  const probed = new Set<string>()
+  let adopted = false
+  let adoptionCalls = 0
+  const discovery = (id: string) => ({ profile: "baseline", sourceConfig: "original", accountId: "one", account: "账号一", checkedAt: Date.now(), current: true, status: id === singleID ? "available" : "native", config: id === singleID ? plan : {}, reason: id === singleID ? "正反对照通过，可采用该供应商路由" : "", checkProfile: "proof" })
+  const baseline = (id: string) => ({ profile: "baseline", accountId: "one", account: "账号一", pipeline: "planner", canonical: id === singleID ? "private/test" : "vendor/test", providers: id === singleID ? ["openai-compatible-private"] : ["alpha", "beta"], private: id === singleID, pinnable: id !== singleID, current: true, checkedAt: Date.now() })
+  await page.route("**/api/accounts", route => route.fulfill({ json: { accounts: [{ id: "one", name: "账号一", keyPreview: "", hasKey: true, enabled: true }], mode: "single", active: 0, stats: {} } }))
+  await page.route("**/api/models", route => route.fulfill({ json: { proxyBase: "http://127.0.0.1:3133", officialFetch: null, subscription: [singleID, nativeID].map(id => ({ id, config: id === singleID && adopted ? plan : { upstreams: [], exclude: [] }, meta: {
+    pipeline: "planner", pinnable: id !== singleID || adopted, pinReason: id === singleID && !adopted ? "single_provider" : "", upstreams: id === nativeID ? ["alpha", "beta"] : adopted ? ["deepseek", "other"] : ["openai-compatible-private"],
+    canonicalSlug: id === singleID ? adopted ? "deepseek/test" : "private/test" : "vendor/test", gatewayCatalog: id === singleID && probed.has(id) ? catalog : undefined,
+    defaultRoute: probed.has(id) ? baseline(id) : undefined, routingDiscovery: probed.has(id) ? discovery(id) : undefined,
+  } })) } }))
+  await page.route("**/api/probe", async route => {
+    const body = route.request().postDataJSON()
+    expect(body.force).toBe(false)
+    probed.add(body.model)
+    await route.fulfill({ json: { ok: true, ms: 10, defaultRoute: baseline(body.model), routingDiscovery: discovery(body.model) } })
+  })
+  await page.route("**/api/verify-routing", async route => {
+    const body = route.request().postDataJSON()
+    expect(body).toEqual({ model: singleID, config: plan, accountId: "one", allAccounts: false, apply: true, force: false, adopt: true })
+    adoptionCalls++
+    adopted = true
+    await route.fulfill({ json: { ok: true, applied: true, checks: [] } })
+  })
+  await page.route("**/api/gateway-capabilities", () => { throw new Error("adoption must not reload the directory") })
+  await page.goto("/")
+  await page.getByLabel("管理密钥").fill("sk-e2e-admin")
+  await page.getByRole("button", { name: "进入控制台" }).click()
+  await page.getByRole("button", { name: "批量探测", exact: true }).click()
+  await expect(page.getByText(/批量探测完成：普通可钉 1，能力路由可用 1/)).toBeVisible()
+  expect(adopted).toBe(false)
+  const nativeRow = page.getByRole("row").filter({ has: page.getByText(nativeID, { exact: true }) })
+  await nativeRow.getByRole("button", { name: "展开模型" }).click()
+  await expect(page.getByText("高级：能力过滤与供应商设置")).toHaveCount(0)
+  const singleRow = page.getByRole("row").filter({ has: page.getByText(singleID, { exact: true }) })
+  await singleRow.getByRole("button", { name: "展开模型" }).click()
+  await expect(page.getByRole("button", { name: "采用此方案" })).toBeEnabled()
+  await expect(page.getByRole("switch", { name: "启用能力过滤" })).toBeHidden()
+  await page.screenshot({ path: test.info().outputPath("smart-routing-plan.png"), fullPage: true })
+  await page.getByRole("button", { name: "采用此方案" }).click()
+  await expect(page.getByText("此方案正在使用", { exact: true })).toBeVisible()
+  expect(adoptionCalls).toBe(1)
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
+  const panel = await page.getByRole("region", { name: "供应商能力过滤" }).boundingBox()
+  expect(panel).not.toBeNull()
+  expect(panel!.x + panel!.width).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: test.info().outputPath("smart-routing-mobile.png"), fullPage: true })
+})
+
 test("a private-only model discovers suppliers and applies verified capability routing", async ({ page }) => {
   const modelID = "cline-pass/deepseek-v4.1-flash-1017"
   const has = ["implicit-caching", "reasoning", "structured-output", "tool-use", "vision"]
@@ -43,6 +98,7 @@ test("a private-only model discovers suppliers and applies verified capability r
   await page.getByRole("button", { name: "进入控制台" }).click()
   await page.getByRole("button", { name: "展开模型" }).click()
   await expect(page.getByText("当前探测仅发现一个渠道", { exact: true })).toBeVisible()
+  await page.getByText("高级：能力过滤与供应商设置").click()
   await page.getByRole("switch", { name: "启用能力过滤" }).click()
   const deepseek = page.getByRole("group", { name: "供应商 deepseek" })
   await expect(deepseek).toBeVisible()

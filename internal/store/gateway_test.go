@@ -21,6 +21,8 @@ func TestGatewayRoutingSurvivesJournalRecovery(t *testing.T) {
 	_, err := s.UpdateModelMeta("test", func(meta *model.ModelMeta) {
 		meta.GatewayCatalog = &model.GatewayCatalog{Model: "deepseek/test", Providers: []model.GatewayProvider{{Slug: "deepseek", Has: []string{"vision", "implicit-caching"}}}}
 		meta.RoutingChecks = map[string]model.RoutingCheck{profile: {Profile: profile, AccountID: account.ID, Has: cfg.GatewayHas, Targets: []string{"deepseek"}, Actual: []string{"deepseek"}, OK: true, Matched: true, Rejected: true}}
+		meta.DefaultRoute = &model.DefaultRouteProbe{Providers: []string{"openai-compatible-private"}, Private: true}
+		meta.RoutingDiscovery = &model.RoutingDiscovery{Status: "available", Config: cfg, CheckProfile: profile}
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +40,9 @@ func TestGatewayRoutingSurvivesJournalRecovery(t *testing.T) {
 	meta := recovered.ModelMeta("test")
 	if len(meta.GatewayCatalog.Providers) != 1 || !meta.RoutingChecks[profile].OK {
 		t.Fatalf("catalog or verification lost on recovery: %+v", meta)
+	}
+	if meta.DefaultRoute == nil || !meta.DefaultRoute.Private || meta.RoutingDiscovery == nil || meta.RoutingDiscovery.CheckProfile != profile || !slices.Equal(meta.RoutingDiscovery.Config.GatewayHas, cfg.GatewayHas) {
+		t.Fatalf("discovery lost on recovery: %+v", meta)
 	}
 	if model.RoutingProfile("test", recovered.UpstreamBase(), recovered.Accounts()[0], saved) != profile {
 		t.Fatal("verification did not remain valid after recovery")

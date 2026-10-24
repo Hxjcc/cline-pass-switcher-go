@@ -21,6 +21,83 @@ func cachedGatewayCatalog() *model.GatewayCatalog {
 	return &model.GatewayCatalog{Model: "deepseek/test", Source: "https://example.test/endpoints", FetchedAt: time.Now().UnixMilli(), Providers: []model.GatewayProvider{{Slug: "deepseek", Name: "DeepSeek", Has: []string{"vision", "implicit-caching", "tool-use"}}, {Slug: "other", Name: "Other", Has: []string{"tool-use"}}}}
 }
 
+func TestAdoptDiscoveredRouteUsesOnlyExactCurrentProof(t *testing.T) {
+	for _, name := range []string{"valid", "expired", "rotated-key", "changed-base", "changed-config", "changed-plan", "other-account", "force", "no-apply", "failed-proof"} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); w.WriteHeader(500) }))
+			defer upstreamServer.Close()
+			st, server := newTestServer(t)
+			_ = st.UpdateConfig(func(c *model.Config) {
+				c.UpstreamBase = upstreamServer.URL
+				c.Accounts = []model.Account{{Name: "one", Key: "test", Enabled: true}, {Name: "two", Key: "other", Enabled: true}}
+			})
+			account := st.Accounts()[0]
+			plan := model.PerModelConfig{Upstreams: []string{"deepseek"}, GatewayHas: []string{"vision", "implicit-caching"}}
+			profile := model.RoutingProfile("cline-pass/test", st.UpstreamBase(), account, plan)
+			baselineProfile := model.RoutingProfile("cline-pass/test", st.UpstreamBase(), account, model.PerModelConfig{})
+			now := time.Now().UnixMilli()
+			_, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+				meta.GatewayCatalog = cachedGatewayCatalog()
+				meta.RoutingDiscovery = &model.RoutingDiscovery{
+					Profile:      baselineProfile,
+					SourceConfig: model.RoutingProfile("", "", model.Account{}, model.PerModelConfig{}), AccountID: account.ID,
+					Status: "available", Config: plan, CheckProfile: profile, CheckedAt: now,
+				}
+				meta.RoutingChecks = map[string]model.RoutingCheck{profile: {Profile: profile, AccountID: account.ID, OK: true, Matched: true, Rejected: true, CheckedAt: now}}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]any{"model": "cline-pass/test", "config": plan, "accountId": account.ID, "adopt": true, "apply": true}
+			switch name {
+			case "expired":
+				_, _ = st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+					c := meta.RoutingChecks[profile]
+					c.CheckedAt = time.Now().Add(-7 * time.Hour).UnixMilli()
+					meta.RoutingChecks[profile] = c
+				})
+			case "rotated-key":
+				_ = st.UpdateConfig(func(c *model.Config) { c.Accounts[0].Key = "changed" })
+			case "changed-base":
+				_ = st.UpdateConfig(func(c *model.Config) { c.UpstreamBase += "/changed" })
+			case "changed-config":
+				_ = st.UpdateConfig(func(c *model.Config) {
+					c.PerModel["cline-pass/test"] = model.PerModelConfig{Exclude: []string{"other"}}
+				})
+			case "changed-plan":
+				body["config"] = model.PerModelConfig{Upstreams: []string{"other"}, GatewayHas: []string{"vision"}}
+			case "other-account":
+				body["accountId"] = st.Accounts()[1].ID
+			case "force":
+				body["force"] = true
+			case "no-apply":
+				body["apply"] = false
+			case "failed-proof":
+				_, _ = st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) {
+					c := meta.RoutingChecks[profile]
+					c.OK = false
+					meta.RoutingChecks[profile] = c
+				})
+			}
+			before := st.ModelConfig("cline-pass/test")
+			raw, _ := json.Marshal(body)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, localRequest(http.MethodPost, "/api/verify-routing", bytes.NewReader(raw)))
+			if calls.Load() != 0 {
+				t.Fatal("adoption made an inference request")
+			}
+			if name == "valid" {
+				if response.Code != 200 || !routingConfigEqual(st.ModelConfig("cline-pass/test"), plan) {
+					t.Fatalf("adopt failed: %d %s", response.Code, response.Body.String())
+				}
+			} else if response.Code != 409 || !routingConfigEqual(before, st.ModelConfig("cline-pass/test")) {
+				t.Fatalf("stale plan applied: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestGatewayCapabilitiesRecommendsForSelectedSuppliers(t *testing.T) {
 	st, server := newTestServer(t)
 	_, err := st.UpdateModelMeta("cline-pass/test", func(meta *model.ModelMeta) { meta.GatewayCatalog = cachedGatewayCatalog() })

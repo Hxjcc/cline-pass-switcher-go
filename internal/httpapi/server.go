@@ -290,6 +290,7 @@ func (s *Server) handleStatus(writer http.ResponseWriter) {
 func (s *Server) handleProbe(writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Model string `json:"model"`
+		Force bool   `json:"force"`
 	}
 	if err := readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
@@ -299,7 +300,7 @@ func (s *Server) handleProbe(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": "model required"})
 		return
 	}
-	result, err := s.upstream.ProbeModel(request.Context(), body.Model)
+	result, err := s.upstream.SmartProbeModel(request.Context(), body.Model, body.Force)
 	if err != nil {
 		writeJSON(writer, http.StatusBadGateway, map[string]any{"ok": false, "error": upstream.ErrorMessage(err)})
 		return

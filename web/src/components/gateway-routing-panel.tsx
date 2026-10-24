@@ -7,7 +7,8 @@ import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { errorMessage } from "@/lib/api"
-import { formatTime } from "@/lib/format"
+import { formatTime, normalizeModelConfig } from "@/lib/format"
+import { discoveryLabel } from "@/lib/smart-routing"
 import { gatewayCapabilities, normalizeHas, providerMatches, recommendationProviders, recommendedHas, routingConfigKey } from "@/lib/gateway-routing"
 import type { GatewayRoutingActions, ModelConfig, RoutingVerifyResponse, SubscriptionModel } from "@/types"
 
@@ -19,14 +20,18 @@ interface Props extends GatewayRoutingActions {
   onEnabledChange: (enabled: boolean) => void
   onDraftChange: (config: ModelConfig) => void
   onRestore: () => Promise<void>
+  onDiscover?: () => Promise<void>
 }
 
-export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [], onEnabledChange, onDraftChange, onRestore, onReadGateway, onVerifyGateway }: Props) {
+export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [], onEnabledChange, onDraftChange, onRestore, onDiscover, onReadGateway, onVerifyGateway }: Props) {
   const [accountID, setAccountID] = useState("")
   const [working, setWorking] = useState(false)
   const [openedAt] = useState(() => Date.now())
   const [lastResult, setLastResult] = useState<{ key: string; result: RoutingVerifyResponse } | null>(null)
   const catalog = model.meta?.gatewayCatalog
+  const discovery = model.meta?.routingDiscovery
+  const plan = normalizeModelConfig(discovery?.config)
+  const planApplied = routingConfigKey(plan) === routingConfigKey(model.config)
   const has = config.gatewayHas ?? []
   const pending = busy || working
   const dirty = routingConfigKey(config) !== routingConfigKey(model.config)
@@ -81,8 +86,36 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
     } catch (error) { toast.error(errorMessage(error)) } finally { setWorking(false) }
   }
 
+  const adopt = async () => {
+    if (!onVerifyGateway || !discovery?.current || discovery.status !== "available") return
+    setWorking(true)
+    try {
+      const result = await onVerifyGateway(model.id, plan, discovery.accountId, false, false)
+      if (result.applied) toast.success("已采用验证通过的供应商路由")
+      else toast.error(result.checks.find(check => !check.ok)?.error || "方案未应用，请重新探测")
+    } catch (error) { toast.error(errorMessage(error)) } finally { setWorking(false) }
+  }
+
   return (
-    <section className="bg-card space-y-3 rounded-lg border p-4" aria-label="供应商能力过滤">
+    <section className="bg-card max-w-[calc(100vw-6rem)] space-y-3 rounded-lg border p-4 sm:max-w-none" aria-label="供应商能力过滤">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-medium">供应商路由</h3>
+          {discovery && <Badge variant="outline">{discoveryLabel(model)}</Badge>}
+        </div>
+        {onDiscover && <Button variant="outline" size="sm" disabled={pending || dirty} onClick={() => void onDiscover()}>重新探测</Button>}
+      </div>
+      <p className="text-muted-foreground text-xs">默认单渠道模型会补测能力路由。探测只发现方案，采用后才用于后续请求。</p>
+      {discovery ? <div className="space-y-2 text-xs">
+        <p className="text-muted-foreground">{discovery.reason} · {discovery.account} · {formatTime(discovery.checkedAt)}</p>
+        {!discovery.current && <p className="text-amber-700 dark:text-amber-300">账号、设置或验证时效已变化，请重新探测后确认。</p>}
+        {discovery.status === "available" && <>
+          <p>已验证供应商：<span className="font-mono">{plan.upstreams.join("、")}</span>；其他目录供应商仍是未验证候选。</p>
+          {planApplied ? <Badge variant="secondary">此方案正在使用</Badge> : <Button size="sm" disabled={pending || dirty || !discovery.current || !onVerifyGateway} onClick={() => void adopt()}>采用此方案</Button>}
+        </>}
+      </div> : <p className="text-muted-foreground text-xs">尚无合并探测结果，可点击“重新探测”或使用批量探测。</p>}
+      <details className="text-xs">
+        <summary className="text-muted-foreground cursor-pointer">高级：能力过滤与供应商设置</summary>
+        <div className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <label className="flex items-center gap-2 text-sm font-medium">
@@ -139,6 +172,8 @@ export function GatewayRoutingPanel({ model, config, enabled, busy, accounts = [
       </>}
 
       {!enabled && dirty && <Button size="sm" disabled={pending} onClick={() => void onRestore()}>应用默认路由</Button>}
+        </div>
+      </details>
     </section>
   )
 }

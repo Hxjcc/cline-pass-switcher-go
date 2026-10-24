@@ -175,6 +175,18 @@ func GatewayChannels(meta model.ModelMeta, has []string) []string {
 func (s *Service) RoutingMeta(modelID string, cfg model.PerModelConfig, meta model.ModelMeta) model.ModelMeta {
 	accounts := s.store.Accounts()
 	base := s.store.UpstreamBase()
+	if meta.DefaultRoute != nil {
+		meta.DefaultRoute.Current = false
+		for _, account := range accounts {
+			if account.Enabled && account.Key != "" && meta.DefaultRoute.Profile == model.RoutingProfile(modelID, base, account, model.PerModelConfig{}) && recentRoutingEvidence(meta.DefaultRoute.CheckedAt, routingEvidenceTTL) {
+				meta.DefaultRoute.Current = true
+				meta.DefaultRoute.Account = account.Name
+			}
+		}
+	}
+	if meta.RoutingDiscovery != nil {
+		meta.RoutingDiscovery.Current = s.discoveryCurrent(modelID, cfg, meta.RoutingDiscovery, accounts, base)
+	}
 	verified := false
 	profiles := make(map[string]string, len(accounts))
 	for _, account := range accounts {
@@ -184,7 +196,7 @@ func (s *Service) RoutingMeta(modelID string, cfg model.PerModelConfig, meta mod
 	}
 	for key, check := range meta.RoutingChecks {
 		check.Current = false
-		if name, current := profiles[check.Profile]; current {
+		if name, current := profiles[check.Profile]; current && recentRoutingEvidence(check.CheckedAt, routingEvidenceTTL) {
 			check.Current = true
 			check.Account = name
 			verified = verified || check.OK

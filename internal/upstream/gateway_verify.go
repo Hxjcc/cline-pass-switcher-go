@@ -33,7 +33,7 @@ type gatewayObservation struct {
 
 // Complete the stream before deciding: a 200, role delta or [DONE] can coexist
 // with a routing error, and the provider metadata commonly arrives last.
-func (s *Service) observeGatewayRoute(ctx context.Context, modelID, target string, has []string, account model.Account) (out gatewayObservation) {
+func (s *Service) observeGatewayRoute(ctx context.Context, base, modelID, target string, has []string, account model.Account) (out gatewayObservation) {
 	started := time.Now()
 	defer func() { out.ms = time.Since(started).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -51,7 +51,7 @@ func (s *Service) observeGatewayRoute(ctx context.Context, modelID, target strin
 		body["reasoning_effort"] = "none"
 	}
 	rawBody, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.store.UpstreamBase()+"/chat/completions", bytes.NewReader(rawBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(rawBody))
 	if err != nil {
 		out.err = err.Error()
 		return
@@ -180,6 +180,7 @@ func (s *Service) recordGatewayObservation(modelID, target string, has []string,
 
 func (s *Service) VerifyGatewayRouting(ctx context.Context, modelID string, cfg model.PerModelConfig, account model.Account) (model.RoutingCheck, error) {
 	started := time.Now()
+	base := s.store.UpstreamBase()
 	cfg.GatewayHas = model.NormalizeGatewayHas(cfg.GatewayHas)
 	if err := model.ValidateGatewayHas(cfg.GatewayHas); err != nil {
 		return model.RoutingCheck{}, err
@@ -219,15 +220,22 @@ func (s *Service) VerifyGatewayRouting(ctx context.Context, modelID string, cfg 
 	if len(targets) == 0 {
 		return model.RoutingCheck{}, fmt.Errorf("没有满足所选能力的候选供应商")
 	}
-	check := model.RoutingCheck{Profile: model.RoutingProfile(modelID, s.store.UpstreamBase(), account, cfg), AccountID: account.ID, Account: account.Name, Has: slices.Clone(cfg.GatewayHas), Targets: targets, Actual: []string{}, Matched: true}
+	check := model.RoutingCheck{Profile: model.RoutingProfile(modelID, base, account, cfg), AccountID: account.ID, Account: account.Name, Has: slices.Clone(cfg.GatewayHas), Targets: targets, Actual: []string{}, Matched: true}
 	for _, target := range targets {
-		out := s.observeGatewayRoute(ctx, modelID, target, cfg.GatewayHas, account)
+		out := s.observeGatewayRoute(ctx, base, modelID, target, cfg.GatewayHas, account)
 		if err := s.recordGatewayObservation(modelID, target, cfg.GatewayHas, account, out, false); err != nil {
 			return check, err
 		}
 		check.Actual = append(check.Actual, out.actual)
 		if out.err != "" || !out.choices || !out.terminal || !SameProvider(target, out.actual) {
 			check.Matched = false
+			check.Code = "unconfirmed"
+			if out.err == "" && out.choices && out.terminal && out.actual != "" && !SameProvider(target, out.actual) {
+				check.Code = "preference_ignored"
+			}
+			if (out.status == 200 || out.status == 400 || out.status == 404 || out.status == 422) && out.err != "" && routingRejectionRE.MatchString(out.err) && (strings.Contains(strings.ToLower(out.err), "only") || strings.Contains(strings.ToLower(out.err), "filter")) {
+				check.Code = "no_matching_provider"
+			}
 			check.Error = out.err
 			if check.Error == "" {
 				check.Error = fmt.Sprintf("目标 %s，实际 %s；缺少完整路由证据时无法确认钉住", target, firstNonEmptyString(out.actual, "未知"))
@@ -236,14 +244,18 @@ func (s *Service) VerifyGatewayRouting(ctx context.Context, modelID string, cfg 
 		}
 	}
 	if check.Matched && ctx.Err() == nil {
-		out := s.observeGatewayRoute(ctx, modelID, pinProbeSlug, cfg.GatewayHas, account)
+		out := s.observeGatewayRoute(ctx, base, modelID, pinProbeSlug, cfg.GatewayHas, account)
 		// Only the specific impossible-provider rejection counts. Authentication,
 		// capability mismatches, timeouts and a local allow-list error do not.
-		check.Rejected = out.err != "" && strings.Contains(out.err, pinProbeSlug) && strings.Contains(strings.ToLower(out.err), "only") && routingRejectionRE.MatchString(out.err) && out.actual == "" && !out.generated
+		check.Rejected = (out.status == 200 || out.status == 400 || out.status == 404 || out.status == 422) && out.err != "" && strings.Contains(out.err, pinProbeSlug) && strings.Contains(strings.ToLower(out.err), "only") && routingRejectionRE.MatchString(out.err) && out.actual == "" && !out.generated
 		if err := s.recordGatewayObservation(modelID, pinProbeSlug, cfg.GatewayHas, account, out, check.Rejected); err != nil {
 			return check, err
 		}
 		if !check.Rejected {
+			check.Code = "unconfirmed"
+			if out.actual != "" || out.generated {
+				check.Code = "preference_ignored"
+			}
 			check.Error = "无效上游未被明确拒绝，无法确认 only 生效"
 			if out.err != "" {
 				check.Error = out.err
@@ -253,6 +265,9 @@ func (s *Service) VerifyGatewayRouting(ctx context.Context, modelID string, cfg 
 	check.OK = check.Matched && check.Rejected
 	check.CheckedAt = time.Now().UnixMilli()
 	check.MS = time.Since(started).Milliseconds()
+	if err := ctx.Err(); err != nil {
+		return check, err
+	}
 	_, err = s.store.UpdateModelMeta(modelID, func(meta *model.ModelMeta) {
 		if meta.RoutingChecks == nil {
 			meta.RoutingChecks = map[string]model.RoutingCheck{}

@@ -67,6 +67,18 @@ func cloneMetadata(meta model.Metadata) model.Metadata {
 }
 
 func cloneModelMeta(meta model.ModelMeta) model.ModelMeta {
+	if meta.DefaultRoute != nil {
+		value := *meta.DefaultRoute
+		value.Providers = slices.Clone(value.Providers)
+		meta.DefaultRoute = &value
+	}
+	if meta.RoutingDiscovery != nil {
+		value := *meta.RoutingDiscovery
+		value.Config.Upstreams = slices.Clone(value.Config.Upstreams)
+		value.Config.Exclude = slices.Clone(value.Config.Exclude)
+		value.Config.GatewayHas = slices.Clone(value.Config.GatewayHas)
+		meta.RoutingDiscovery = &value
+	}
 	meta.GatewayStatusHas = slices.Clone(meta.GatewayStatusHas)
 	if meta.GatewayCatalog != nil {
 		catalog := *meta.GatewayCatalog

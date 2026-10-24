@@ -190,6 +190,8 @@ type ModelMeta struct {
 	GatewayCatalog      *GatewayCatalog           `json:"gatewayCatalog,omitempty"`
 	RoutingChecks       map[string]RoutingCheck   `json:"routingChecks,omitempty"`
 	GatewayStatusHas    []string                  `json:"gatewayStatusHas,omitempty"`
+	DefaultRoute        *DefaultRouteProbe        `json:"defaultRoute,omitempty"`
+	RoutingDiscovery    *RoutingDiscovery         `json:"routingDiscovery,omitempty"`
 }
 
 // SupportsOriginalImageDetail follows the gateway policy: every model with

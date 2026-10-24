@@ -77,7 +77,7 @@ export function ModelsPanel({
     if (!query) return data.subscription
     return data.subscription.filter((model) => model.id.toLowerCase().includes(query))
   }, [data.subscription, filter])
-  const probedCount = data.subscription.filter((model) => model.meta?.probedAt).length
+  const probedCount = data.subscription.filter((model) => model.meta?.defaultRoute?.checkedAt || model.meta?.probedAt).length
 
   const refresh = async () => {
     setRefreshing(true)
@@ -93,12 +93,14 @@ export function ModelsPanel({
   const probeAll = async () => {
     try {
       const result = await onProbeAll()
+      const routes = result.routes
+      const summary = routes ? `普通可钉 ${routes.native}，能力路由可用 ${routes.available}，当前未通过 ${routes.unavailable}，未确认 ${routes.unconfirmed}，保持原路由 ${routes.not_applicable}` : ""
       if (result.aborted) {
-        toast.info(`批量探测已停止，已完成 ${result.ok} 个模型`)
+        toast.info(`批量探测已停止，已完成 ${result.ok} 个模型${summary ? `：${summary}` : ""}`)
       } else if (result.failed > 0) {
-        toast.warning(`批量探测完成：成功 ${result.ok} 个，失败 ${result.failed} 个`)
+        toast.warning(`批量探测完成：${summary || `成功 ${result.ok} 个，失败 ${result.failed} 个`}`)
       } else {
-        toast.success(`批量探测完成，共 ${result.ok} 个模型`)
+        toast.success(summary ? `批量探测完成：${summary}` : `批量探测完成，共 ${result.ok} 个模型`)
       }
     } catch (error) {
       toast.error(errorMessage(error))
@@ -132,6 +134,7 @@ export function ModelsPanel({
         <CardTitle>订阅模型</CardTitle>
         <CardDescription>
           管理已订阅的模型及其上游渠道偏好。客户端通过 /v1/models 获取的即为此列表。
+          批量探测会识别默认渠道，并为适用的单渠道模型补测能力路由；发现的方案可手动采用。
         </CardDescription>
         <CardAction className={cardActionClass}>
           <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>

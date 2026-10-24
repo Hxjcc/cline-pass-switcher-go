@@ -16,12 +16,13 @@ const catalog: GatewayCatalog = { model: "deepseek/deepseek-v4.1-flash-1017", so
 
 const privateModel: SubscriptionModel = { id: "cline-pass/deepseek-v4.1-flash-1017", config: { upstreams: [], exclude: [] }, meta: { pipeline: "planner", pinnable: false, pinReason: "single_provider", canonicalSlug: "private/deepseek-contributor", upstreams: ["openai-compatible-private"], gatewayCatalog: catalog } }
 
-function setup(ok = true, model = privateModel) {
+function setup(ok = true, model = privateModel, advanced = true) {
   const onUpdateConfig = vi.fn(async () => {})
   const onReadGateway = vi.fn(async (_modelID: string, _refresh: boolean, upstreams: string[] = []) => ({ ok: true, catalog, recommendedHas: recommendedHas(catalog, upstreams) }))
   const onVerifyGateway = vi.fn(async (): Promise<RoutingVerifyResponse> => ({ ok, applied: ok, checks: [{ profile: "check", accountId: "one", account: "账号一", has: ["vision", "implicit-caching"], targets: ["deepseek"], actual: [ok ? "deepseek" : "openai-compatible-private"], matched: ok, rejected: ok, ok, current: ok, checkedAt: Date.now(), ms: 1, error: ok ? undefined : "上游忽略了 only" }] }))
   render(<TooltipProvider><Table><TableBody><ModelRow model={model} onProbe={async () => ({ ok: true, ms: 1 })} onValidate={async () => ({ ok: true, summary: { ok: 0, limited: 0, bad: 0, auth: 0, unknown: 0 }, results: {}, upstreams: [] })} onTest={async () => ({ ok: true })} onUpdateConfig={onUpdateConfig} onRemove={async () => {}} onRefresh={async () => {}} onReadGateway={onReadGateway} onVerifyGateway={onVerifyGateway} /></TableBody></Table></TooltipProvider>)
   fireEvent.click(screen.getByRole("button", { name: "展开模型" }))
+  if (advanced && screen.queryByText("高级：能力过滤与供应商设置")) fireEvent.click(screen.getByText("高级：能力过滤与供应商设置"))
   return { onUpdateConfig, onVerifyGateway, onReadGateway }
 }
 
@@ -72,4 +73,32 @@ test("a failed routing control retains the original configuration and displays t
   await waitFor(() => expect(screen.getByText("上游忽略了 only")).toBeTruthy())
   expect(onUpdateConfig).not.toHaveBeenCalled()
   expect(screen.getByText("待应用")).toBeTruthy()
+})
+
+test("ordinary multi-channel models retain channel settings without capability controls", () => {
+  setup(true, { ...privateModel, meta: { pipeline: "planner", pinnable: true, upstreams: ["deepseek", "other"] } }, false)
+  expect(screen.queryByRole("region", { name: "供应商能力过滤" })).toBeNull()
+  expect(screen.queryByText("高级：能力过滤与供应商设置")).toBeNull()
+  expect(screen.getByRole("group", { name: "供应商 deepseek" })).toBeTruthy()
+})
+
+test("a discovered plan can be adopted with its original account and without another control pair", async () => {
+  const plan = { upstreams: ["deepseek"], exclude: [], gatewayHas: ["vision", "implicit-caching"] }
+  const { onVerifyGateway, onReadGateway, onUpdateConfig } = setup(true, { ...privateModel, meta: { ...privateModel.meta, routingDiscovery: {
+    profile: "discovery", sourceConfig: "original", accountId: "one", account: "账号一", status: "available", reason: "正反对照通过", current: true, checkedAt: Date.now(), config: plan,
+  } } }, false)
+  expect(screen.getByText("高级：能力过滤与供应商设置").closest("details")?.open).toBe(false)
+  fireEvent.click(screen.getByRole("button", { name: "采用此方案" }))
+  await waitFor(() => expect(onVerifyGateway).toHaveBeenCalledWith(privateModel.id, expect.objectContaining(plan), "one", false, false))
+  expect(onReadGateway).not.toHaveBeenCalled()
+  expect(onUpdateConfig).not.toHaveBeenCalled()
+})
+
+test("stale discoveries cannot be adopted", () => {
+  const { onVerifyGateway } = setup(true, { ...privateModel, meta: { ...privateModel.meta, routingDiscovery: {
+    profile: "discovery", sourceConfig: "original", accountId: "one", account: "账号一", status: "available", current: false, checkedAt: 1, config: { upstreams: ["deepseek"], gatewayHas: ["vision"] },
+  } } }, false)
+  expect((screen.getByRole("button", { name: "采用此方案" }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText("账号、设置或验证时效已变化，请重新探测后确认。")).toBeTruthy()
+  expect(onVerifyGateway).not.toHaveBeenCalled()
 })

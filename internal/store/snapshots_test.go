@@ -19,6 +19,8 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 		GatewayStatusHas: []string{"vision"},
 		GatewayCatalog:   &model.GatewayCatalog{Providers: []model.GatewayProvider{{Slug: "a", Has: []string{"vision"}}}},
 		RoutingChecks:    map[string]model.RoutingCheck{"profile": {Has: []string{"vision"}, Targets: []string{"a"}, Actual: []string{"a"}}},
+		DefaultRoute:     &model.DefaultRouteProbe{Providers: []string{"a"}},
+		RoutingDiscovery: &model.RoutingDiscovery{Config: model.PerModelConfig{Upstreams: []string{"a"}, Exclude: []string{"b"}, GatewayHas: []string{"vision"}}},
 	}
 	s := &Store{meta: model.Metadata{Models: map[string]model.ModelMeta{"test": original}},
 		config: model.Config{ProxyKey: "key", UpstreamBase: "https://example.test", PerModel: map[string]model.PerModelConfig{
@@ -37,6 +39,10 @@ func TestRequestSnapshotsAreDetached(t *testing.T) {
 	check.Has[0] = "changed"
 	check.Targets[0] = "changed"
 	check.Actual[0] = "changed"
+	snapshot.DefaultRoute.Providers[0] = "changed"
+	snapshot.RoutingDiscovery.Config.Upstreams[0] = "changed"
+	snapshot.RoutingDiscovery.Config.Exclude[0] = "changed"
+	snapshot.RoutingDiscovery.Config.GatewayHas[0] = "changed"
 	if !reflect.DeepEqual(s.ModelMeta("test"), original) {
 		t.Fatal("model snapshot aliases the store")
 	}

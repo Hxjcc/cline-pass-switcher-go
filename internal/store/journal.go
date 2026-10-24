@@ -179,12 +179,14 @@ func (s *Store) applyEntry(entry journalEntry) {
 			model.NormalizeConfig(&s.config)
 		}
 		current := s.meta.Models[e.Model]
-		current.LastProvider, current.LastMS = e.Provider, e.MS
-		if e.Canonical != "" {
-			current.CanonicalSlug = e.Canonical
-		}
-		if e.Error == nil && !e.Degraded {
-			current.ObserveUpstreamSuccess(e.Provider, e.GatewayAttempts, e.TS, e.MS)
+		if e.Kind != "routing-check" {
+			current.LastProvider, current.LastMS = e.Provider, e.MS
+			if e.Canonical != "" {
+				current.CanonicalSlug = e.Canonical
+			}
+			if e.Error == nil && !e.Degraded {
+				current.ObserveUpstreamSuccess(e.Provider, e.GatewayAttempts, e.TS, e.MS)
+			}
 		}
 		s.meta.Models[e.Model] = current
 		history := s.meta.History

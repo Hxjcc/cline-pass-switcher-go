@@ -338,17 +338,18 @@ function App() {
   }
 
   const probe = async (modelID: string) => {
-    const response = await api<ProbeResponse>("/api/probe", {
-      key: authKey,
-      body: { model: modelID },
-    })
-    await loadModels()
-    return response
+    try {
+      return await api<ProbeResponse>("/api/probe", {
+        key: authKey,
+        body: { model: modelID, force: true },
+      })
+    } finally {
+      try { await loadModels() } catch (error) { handleError(error) }
+    }
   }
 
-  // Probing every model is one real upstream request each, so the batch runs a
-  // few at a time, reports progress, and can be stopped without leaving the
-  // panel stuck on "probing".
+  // Each request completes both default discovery and any applicable single-
+  // channel control pair. A shared abort signal cancels the entire pipeline.
   const probeAll = async () => {
     const list = models?.subscription ?? []
     if (!list.length || batchProbeAbort.current) {
@@ -357,15 +358,23 @@ function App() {
     const controller = new AbortController()
     batchProbeAbort.current = controller
     let result: ProbeBatchResult = { ok: 0, failed: 0, aborted: false }
+    const routes = { native: 0, available: 0, unavailable: 0, unconfirmed: 0, not_applicable: 0 }
     try {
       result = await runProbeBatch(
         list.map((model) => model.id),
         async (modelID, signal) => {
-          await api<ProbeResponse>("/api/probe", {
-            key: authKey,
-            body: { model: modelID },
-            signal,
-          })
+          try {
+            const response = await api<ProbeResponse>("/api/probe", {
+              key: authKey,
+              body: { model: modelID, force: false },
+              signal,
+            })
+            const status = response.routingDiscovery?.status
+            if (status) routes[status] += 1
+          } catch (error) {
+            if (!signal.aborted) routes.unconfirmed += 1
+            throw error
+          }
         },
         {
           signal: controller.signal,
@@ -376,14 +385,8 @@ function App() {
       batchProbeAbort.current = null
       setBatchProbe(null)
     }
-    if (!result.aborted) {
-      try {
-        await loadModels()
-      } catch (error) {
-        handleError(error)
-      }
-    }
-    return result
+    try { await loadModels() } catch (error) { handleError(error) }
+    return { ...result, routes }
   }
 
   const cancelProbeAll = () => batchProbeAbort.current?.abort()
@@ -411,9 +414,9 @@ function App() {
     return response
   }
 
-  const verifyGateway = async (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean) => {
+  const verifyGateway = async (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean, force = true) => {
     const response = await api<RoutingVerifyResponse>("/api/verify-routing", {
-      key: authKey, body: { model: modelID, config, accountId: accountID, allAccounts, apply: true },
+      key: authKey, body: { model: modelID, config, accountId: accountID, allAccounts, apply: true, force, adopt: !force },
     })
     await Promise.all([loadModels(), refreshHistory()])
     return response

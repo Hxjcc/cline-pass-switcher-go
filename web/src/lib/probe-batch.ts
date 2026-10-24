@@ -2,6 +2,7 @@ export interface ProbeBatchResult {
   ok: number
   failed: number
   aborted: boolean
+  routes?: { native: number; available: number; unavailable: number; unconfirmed: number; not_applicable: number }
 }
 
 /**

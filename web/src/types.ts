@@ -47,6 +47,7 @@ export interface RoutingCheck {
   ok: boolean
   current: boolean
   error?: string
+  code?: string
   checkedAt: number
   ms: number
 }
@@ -66,7 +67,35 @@ export interface RoutingVerifyResponse {
 export interface GatewayRoutingActions {
   accounts?: Account[]
   onReadGateway?: (modelID: string, refresh: boolean, upstreams?: string[]) => Promise<GatewayCapabilitiesResponse>
-  onVerifyGateway?: (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean) => Promise<RoutingVerifyResponse>
+  onVerifyGateway?: (modelID: string, config: ModelConfig, accountID: string, allAccounts: boolean, force?: boolean) => Promise<RoutingVerifyResponse>
+}
+
+export interface DefaultRouteProbe {
+  profile: string
+  accountId: string
+  account: string
+  pipeline: string
+  canonical: string
+  providers: string[]
+  private: boolean
+  pinnable: boolean
+  reason?: string
+  checkedAt: number
+  current: boolean
+}
+
+export interface RoutingDiscovery {
+  profile: string
+  sourceConfig: string
+  accountId: string
+  account: string
+  status: "native" | "available" | "unavailable" | "unconfirmed" | "not_applicable"
+  reason?: string
+  config?: Partial<ModelConfig>
+  checkProfile?: string
+  checkedAt: number
+  current: boolean
+  cached?: boolean
 }
 
 export interface UpstreamDetail {
@@ -118,6 +147,8 @@ export interface ModelMeta {
   gatewayCatalog?: GatewayCatalog
   routingChecks?: Record<string, RoutingCheck>
   gatewayStatusHas?: string[]
+  defaultRoute?: DefaultRouteProbe
+  routingDiscovery?: RoutingDiscovery
 }
 
 export interface SubscriptionModel {
@@ -355,6 +386,8 @@ export interface AccountTestResponse {
 }
 
 export interface ProbeResponse {
+  defaultRoute?: DefaultRouteProbe
+  routingDiscovery?: RoutingDiscovery
   ok: boolean
   ms: number
   error?: string

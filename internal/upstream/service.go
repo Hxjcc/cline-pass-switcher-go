@@ -159,10 +159,14 @@ func New(st *store.Store) *Service {
 
 func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, error) {
 	account := s.store.PickAccount()
+	return s.probeModel(ctx, modelID, account, false)
+}
+
+func (s *Service) probeModel(ctx context.Context, modelID string, account model.Account, defaultRoute bool) (ProbeResult, error) {
 	if account.Key == "" {
 		return ProbeResult{}, errNoAccount
 	}
-	if cfg := s.store.ModelConfig(modelID); len(cfg.GatewayHas) > 0 {
+	if cfg := s.store.ModelConfig(modelID); !defaultRoute && len(cfg.GatewayHas) > 0 {
 		check, err := s.VerifyGatewayRouting(ctx, modelID, cfg, account)
 		if err != nil {
 			return ProbeResult{}, err
@@ -174,6 +178,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		return ProbeResult{OK: true, MS: check.MS, ModelMeta: meta}, nil
 	}
 	started := time.Now()
+	base := s.store.UpstreamBase()
 	body := map[string]any{
 		"model": modelID,
 		"messages": []any{
@@ -189,12 +194,12 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	// the request carried our own restriction: a restricted plan only names
 	// the allowed channel, so it cannot be used to count the model's channels.
 	probeRestricted := false
-	if attempts := s.BuildAttempts(modelID, s.store.ModelConfig(modelID)); len(attempts) > 0 {
+	if attempts := s.BuildAttempts(modelID, s.store.ModelConfig(modelID)); !defaultRoute && len(attempts) > 0 {
 		attempt := attempts[0]
 		body = s.InjectPrefs(body, modelID, attempt)
 		probeRestricted = attempt.Upstream != "" || len(attempt.ExcludeList) > 0
 	}
-	_, raw, err := s.fetchJSON(ctx, http.MethodPost, s.store.UpstreamBase()+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
+	_, raw, err := s.fetchJSON(ctx, http.MethodPost, base+"/chat/completions", chatHeaders(account.Key), body, 180*time.Second)
 	if err != nil {
 		return ProbeResult{}, err
 	}
@@ -213,7 +218,7 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	var probeErr error
 	if routing.Pipeline != "" {
 		planned = parsePlannedProviders(routing.Plan)
-		probe, probeErr = s.probeRoutingPreference(ctx, modelID, routing.Pipeline, account)
+		probe, probeErr = s.probeRoutingPreference(ctx, base, modelID, routing.Pipeline, account)
 	}
 	var endpoints []model.UpstreamDetail
 	orSlug := ""
@@ -281,7 +286,22 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 	// The channel list was just (re)built; resolve the hit against it rather
 	// than against whatever the previous probe knew.
 	routing.FinalProvider = CanonicalProvider(model.ModelMeta{Upstreams: upstreams, UpstreamDetail: detail}, routing.FinalProvider)
+	if err := ctx.Err(); err != nil {
+		return ProbeResult{}, err
+	}
+	savedConfig := s.store.ModelConfig(modelID)
+	defaultProfile := model.RoutingProfile(modelID, base, account, model.PerModelConfig{})
 	meta, err := s.store.UpdateModelMeta(modelID, func(current *model.ModelMeta) {
+		if defaultRoute {
+			current.DefaultRoute = &model.DefaultRouteProbe{
+				Profile:   defaultProfile,
+				AccountID: account.ID, Account: account.Name, Pipeline: routing.Pipeline, Canonical: routing.CanonicalSlug,
+				Providers: slices.Clone(upstreams), Private: privateRoute, Pinnable: pinnable, Reason: pinReason, CheckedAt: time.Now().UnixMilli(),
+			}
+			if len(savedConfig.GatewayHas) > 0 {
+				return
+			}
+		}
 		current.OK = true
 		current.Pipeline = routing.Pipeline
 		current.Pinnable = &pinnable
@@ -289,8 +309,10 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 		current.CanonicalSlug = routing.CanonicalSlug
 		current.OpenRouterSlug = orSlug
 		current.Upstreams = upstreams
-		current.LastProvider = routing.FinalProvider
-		current.LastMS = time.Since(started).Milliseconds()
+		if !defaultRoute || (len(savedConfig.Upstreams) == 0 && len(savedConfig.Exclude) == 0) {
+			current.LastProvider = routing.FinalProvider
+			current.LastMS = time.Since(started).Milliseconds()
+		}
 		current.ProbedAt = time.Now().UnixMilli()
 		if privateRoute {
 			// The model has one channel and no OpenRouter endpoints, so
@@ -322,11 +344,10 @@ func (s *Service) ProbeModel(ctx context.Context, modelID string) (ProbeResult, 
 // provider-routing field for the model's pipeline. A routing rejection proves
 // the field is read and also yields the candidate list; a normal completion
 // means the gateway silently ignored the impossible pin.
-func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline string, account model.Account) (routingProbe, error) {
+func (s *Service) probeRoutingPreference(ctx context.Context, base, modelID, pipeline string, account model.Account) (routingProbe, error) {
 	if account.Key == "" {
 		return routingProbe{}, errNoAccount
 	}
-	cfg := s.store.Config()
 	body := map[string]any{
 		"model": modelID,
 		"messages": []any{
@@ -340,7 +361,7 @@ func (s *Service) probeRoutingPreference(ctx context.Context, modelID, pipeline 
 	} else {
 		body["provider"] = map[string]any{"only": []string{pinProbeSlug}}
 	}
-	_, raw, err := s.fetchJSON(ctx, http.MethodPost, cfg.UpstreamBase+"/chat/completions", chatHeaders(account.Key), body, 60*time.Second)
+	_, raw, err := s.fetchJSON(ctx, http.MethodPost, base+"/chat/completions", chatHeaders(account.Key), body, 60*time.Second)
 	if err != nil {
 		return routingProbe{}, err
 	}

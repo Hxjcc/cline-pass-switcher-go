@@ -60,6 +60,8 @@ func (s *Server) handleVerifyRouting(w http.ResponseWriter, r *http.Request) {
 		AccountID   string               `json:"accountId"`
 		AllAccounts bool                 `json:"allAccounts"`
 		Apply       bool                 `json:"apply"`
+		Force       bool                 `json:"force"`
+		Adopt       bool                 `json:"adopt"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeRequestError(w, err)
@@ -101,10 +103,26 @@ func (s *Server) handleVerifyRouting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	previous := s.store.ModelConfig(body.Model)
+	if body.Adopt {
+		meta := s.upstream.RoutingMeta(body.Model, previous, s.store.ModelMeta(body.Model))
+		d := meta.RoutingDiscovery
+		if !body.Apply || body.Force || body.AllAccounts || d == nil || !d.Current || d.Status != "available" || len(accounts) != 1 || accounts[0].ID != d.AccountID || !routingConfigEqual(body.Config, d.Config) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "可采用的方案已改变或过期，请重新探测"})
+			return
+		}
+	}
 	checks := []model.RoutingCheck{}
 	ok := true
 	for _, account := range accounts {
-		check, err := s.upstream.VerifyGatewayRouting(r.Context(), body.Model, body.Config, account)
+		check, cached := s.upstream.CachedRoutingCheck(body.Model, body.Config, account)
+		var err error
+		if body.Adopt && !cached {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "验证记录已失效，请重新探测"})
+			return
+		}
+		if body.Force || !cached {
+			check, err = s.upstream.VerifyGatewayRouting(r.Context(), body.Model, body.Config, account)
+		}
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
@@ -113,6 +131,9 @@ func (s *Server) handleVerifyRouting(w http.ResponseWriter, r *http.Request) {
 		ok = ok && check.OK
 	}
 	applied := false
+	if err := r.Context().Err(); err != nil {
+		return
+	}
 	if body.Apply && ok {
 		err := s.store.UpdateConfig(func(cfg *model.Config) {
 			if !routingConfigEqual(previous, cfg.PerModel[body.Model]) {
@@ -120,6 +141,9 @@ func (s *Server) handleVerifyRouting(w http.ResponseWriter, r *http.Request) {
 			}
 			// Rotation or disabling during the probe invalidates its evidence.
 			for _, check := range checks {
+				if !upstream.RoutingCheckFresh(check) {
+					return
+				}
 				valid := false
 				for _, account := range cfg.Accounts {
 					if account.Enabled && account.Key != "" && check.Profile == model.RoutingProfile(body.Model, cfg.UpstreamBase, account, body.Config) {

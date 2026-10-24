@@ -40,8 +40,39 @@ type RoutingCheck struct {
 	OK        bool     `json:"ok"`
 	Current   bool     `json:"current"`
 	Error     string   `json:"error,omitempty"`
+	Code      string   `json:"code,omitempty"`
 	CheckedAt int64    `json:"checkedAt"`
 	MS        int64    `json:"ms"`
+}
+
+// DefaultRouteProbe is observed without client pins or capability requirements.
+// Profiles contain credential digests, never the credential itself.
+type DefaultRouteProbe struct {
+	Profile   string   `json:"profile"`
+	AccountID string   `json:"accountId"`
+	Account   string   `json:"account"`
+	Pipeline  string   `json:"pipeline"`
+	Canonical string   `json:"canonical"`
+	Providers []string `json:"providers"`
+	Private   bool     `json:"private"`
+	Pinnable  bool     `json:"pinnable"`
+	Reason    string   `json:"reason,omitempty"`
+	CheckedAt int64    `json:"checkedAt"`
+	Current   bool     `json:"current"`
+}
+
+type RoutingDiscovery struct {
+	Profile      string         `json:"profile"`
+	SourceConfig string         `json:"sourceConfig"`
+	AccountID    string         `json:"accountId"`
+	Account      string         `json:"account"`
+	Status       string         `json:"status"`
+	Reason       string         `json:"reason,omitempty"`
+	Config       PerModelConfig `json:"config"`
+	CheckProfile string         `json:"checkProfile,omitempty"`
+	CheckedAt    int64          `json:"checkedAt"`
+	Current      bool           `json:"current"`
+	Cached       bool           `json:"cached,omitempty"`
 }
 
 var quantizationCondition = regexp.MustCompile(`^!?quantization:[a-z0-9][a-z0-9._-]{0,31}$`)
