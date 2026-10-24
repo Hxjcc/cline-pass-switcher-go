@@ -351,6 +351,7 @@ type Metadata struct {
 	// restarting the proxy.
 	KeyUsage            map[string]KeyUsage `json:"keyUsage,omitempty"`
 	OfficialModelsFetch *OfficialFetch      `json:"officialModelsFetch,omitempty"`
+	UsageLedger         *UsageLedger        `json:"usageLedger,omitempty"`
 }
 
 func DefaultConfig() Config {

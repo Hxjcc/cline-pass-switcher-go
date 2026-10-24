@@ -170,6 +170,9 @@ func (s *Store) applyEntry(entry journalEntry) {
 		s.meta.Models[entry.ModelID] = *entry.ModelMeta
 	case "record":
 		e := *entry.Record
+		// Recovery applies each journal sequence once, so the same record
+		// atomically updates both the history and the long-term usage totals.
+		s.recordUsage(e)
 		if e.ID == "" {
 			// Records written before row IDs existed still replay identically.
 			e.ID = fmt.Sprintf("journal_%d", entry.Sequence)

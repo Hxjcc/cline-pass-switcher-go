@@ -30,6 +30,11 @@ func cloneConfig(cfg model.Config) model.Config {
 }
 
 func cloneMetadata(meta model.Metadata) model.Metadata {
+	if meta.UsageLedger != nil {
+		ledger := *meta.UsageLedger
+		ledger.Buckets = maps.Clone(ledger.Buckets)
+		meta.UsageLedger = &ledger
+	}
 	if meta.Models != nil {
 		models := make(map[string]model.ModelMeta, len(meta.Models))
 		for id, value := range meta.Models {

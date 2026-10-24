@@ -219,6 +219,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleRemoveModel(writer, request)
 	case request.Method == http.MethodGet && path == "/api/history":
 		s.handleHistory(writer, request)
+	case request.Method == http.MethodGet && path == "/api/usage":
+		s.handleUsage(writer, request)
 	case request.Method == http.MethodPost && path == "/api/history/clear":
 		s.handleClearHistory(writer)
 	case request.Method == http.MethodGet && path == "/api/config":

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
+  BarChart3,
   Boxes,
   Check,
   Copy,
@@ -18,6 +19,7 @@ import { toast } from "sonner"
 import { AccountsPanel } from "@/components/accounts-panel"
 import { BrandMark } from "@/components/brand-mark"
 import { HistoryPanel } from "@/components/history-panel"
+import { UsagePanel } from "@/components/usage-panel"
 import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
@@ -63,6 +65,7 @@ const TABS = [
   { value: "security", label: "访问与安全", icon: ShieldCheck },
   { value: "test", label: "测试台", icon: TestTube2 },
   { value: "history", label: "请求历史", icon: Activity },
+  { value: "usage", label: "Token 统计", icon: BarChart3 },
 ] as const
 
 // The session may remember a tab this build no longer has.
@@ -91,6 +94,7 @@ function App() {
   const [tab, setTab] = useState(initialTab)
   const [visitedTabs, setVisitedTabs] = useState(() => new Set([tab]))
   const [refreshing, setRefreshing] = useState(false)
+  const [usageRevision, setUsageRevision] = useState(0)
   const [proxyBaseCopied, setProxyBaseCopied] = useState(false)
   const [batchProbe, setBatchProbe] = useState<{ done: number; total: number } | null>(null)
   const batchProbeAbort = useRef<AbortController | null>(null)
@@ -133,6 +137,7 @@ function App() {
     const snapshot = await fetchSnapshot(authKey)
     applySnapshot(snapshot)
     await refreshHistory()
+    setUsageRevision(value => value + 1)
   }
 
   useEffect(() => {
@@ -728,6 +733,9 @@ function App() {
               }}
               onClear={clearHistory}
             />
+          </TabsContent>
+          <TabsContent value="usage" keepMounted={visitedTabs.has("usage")}>
+            <UsagePanel authKey={authKey} active={tab === "usage" && Boolean(authKey || meta && !meta.authRequired)} refreshKey={usageRevision} onError={handleError} />
           </TabsContent>
         </Tabs>
       </main>

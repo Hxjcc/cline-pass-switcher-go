@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 )
@@ -77,7 +78,8 @@ func Open(dataDir string) (*Store, error) {
 	model.ApplyEnvironment(&store.config)
 	model.NormalizeConfig(&store.config)
 	historyMigrated := ensureHistoryIDs(&store.meta)
-	if migrateStatsToIDs(store.config, &store.meta) || historyMigrated {
+	usageMigrated := store.initializeUsageLedger(time.Now())
+	if migrateStatsToIDs(store.config, &store.meta) || historyMigrated || usageMigrated {
 		// The rewrite has to be part of the durable state before any new
 		// journal record is written. Otherwise a crash can leave a snapshot
 		// that still counts under the old name while the journal counts under

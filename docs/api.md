@@ -158,7 +158,16 @@
 | `GET` / `POST` | `/api/security` | 读取或保存 `proxyKey`、`adminKey`、`publicBaseUrl`。 |
 | `GET` | `/api/settings` | 运行参数的当前生效值及来源，见[配置参考](configuration.md#查看当前生效值)。 |
 | `GET` | `/api/history` | 请求历史，见下文。 |
+| `GET` | `/api/usage` | 按日 Token 与实际费用统计，支持日期、模型、账号和代理密钥筛选。 |
 | `POST` | `/api/history/clear` | 清空请求历史。账号的请求计数和密钥用量不受影响。 |
+
+### GET /api/usage
+
+使用管理接口认证，代理客户端密钥不能读取。查询参数 `from`、`to` 为包含首尾的 `YYYY-MM-DD`，默认最近 7 天，单次最多 365 天；统计日界线固定为 UTC+8。`model` 按请求模型 ID 匹配，`account`、`key` 使用响应 `filters` 中的 ID，省略表示全部。
+
+响应包含 `summary` 汇总、`trend` 逐日序列，以及 `models`、`accounts`、`keys` 分组明细；`filters` 保留所有仍留存的筛选选项，不随当前条件缩窄。`usageRequests`、`costRequests` 分别表示有 Token 用量、实际费用报告的请求数；未上报的数值不估算。思考 Token 是输出的一部分，不再次加入总 Token。失败请求已报告的费用同样累计。
+
+汇总保存在 `metadata.json` 的 `usageLedger`，与请求日志一起提交和恢复；保留近 365 天，清空请求历史不清空汇总。首次升级仅能补入当时仍保留的历史，`importedRequests` 表示已补入的请求数。
 
 ### GET /api/history
 

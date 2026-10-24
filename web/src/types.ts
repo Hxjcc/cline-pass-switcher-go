@@ -377,6 +377,40 @@ export interface HistoryResponse {
   nextCursor?: string
 }
 
+export interface UsageTotals {
+  requests: number
+  errors: number
+  usageRequests: number
+  costRequests: number
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  totalTokens: number
+  cost: number
+}
+
+export interface UsageFilter { from: string; to: string; model: string; account: string; key: string }
+export interface UsageOption { id: string; name: string }
+export interface UsageGroup extends UsageTotals { id: string; name: string }
+export interface UsageDay extends UsageTotals { day: string }
+export interface UsageReport {
+  from: string
+  to: string
+  timezone: string
+  retentionDays: number
+  startedAt: number
+  importedRequests: number
+  availableFrom: string
+  generatedAt: number
+  summary: UsageTotals
+  trend: UsageDay[]
+  models: UsageGroup[]
+  accounts: UsageGroup[]
+  keys: UsageGroup[]
+  filters: { models: UsageOption[]; accounts: UsageOption[]; keys: UsageOption[] }
+}
+
 export interface AccountTestResponse {
   ok: boolean
   ms: number

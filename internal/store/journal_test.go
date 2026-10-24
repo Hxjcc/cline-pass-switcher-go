@@ -310,18 +310,19 @@ func TestEnvironmentOverridesRecoveredConfiguration(t *testing.T) {
 
 func TestRecordsSyncJournalInBatches(t *testing.T) {
 	s, _ := testStore(t)
+	startupSyncs := s.journalSyncs
 	for i := 0; i < journalSyncInterval-1; i++ {
 		if err := s.Record(model.HistoryEntry{Model: "test", TS: int64(i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s.journalSyncs != 0 {
+	if s.journalSyncs != startupSyncs {
 		t.Fatalf("records must not fsync one by one: %d syncs", s.journalSyncs)
 	}
 	if err := s.Record(model.HistoryEntry{Model: "test", TS: -1}); err != nil {
 		t.Fatal(err)
 	}
-	if s.journalSyncs != 1 {
+	if s.journalSyncs != startupSyncs+1 {
 		t.Fatalf("batch boundary must fsync once: %d", s.journalSyncs)
 	}
 	// Configuration cannot be rebuilt from anything else, so it always waits
@@ -329,7 +330,7 @@ func TestRecordsSyncJournalInBatches(t *testing.T) {
 	if err := s.UpdateConfig(func(config *model.Config) { config.ProxyKey = "batched" }); err != nil {
 		t.Fatal(err)
 	}
-	if s.journalSyncs != 2 {
+	if s.journalSyncs != startupSyncs+2 {
 		t.Fatalf("configuration change must fsync: %d", s.journalSyncs)
 	}
 	if s.Config().ProxyKey != "batched" {
@@ -339,18 +340,19 @@ func TestRecordsSyncJournalInBatches(t *testing.T) {
 
 func TestCloseFlushesBatchedRecords(t *testing.T) {
 	s, dir := testStore(t)
+	startupSyncs := s.journalSyncs
 	for i := 0; i < 3; i++ {
 		if err := s.Record(model.HistoryEntry{Model: "test", TS: int64(i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s.journalSyncs != 0 {
+	if s.journalSyncs != startupSyncs {
 		t.Fatalf("records should still be in the page cache: %d", s.journalSyncs)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if s.journalSyncs != 1 {
+	if s.journalSyncs != startupSyncs+1 {
 		t.Fatalf("close must flush the journal: %d", s.journalSyncs)
 	}
 	reopened, err := Open(dir)

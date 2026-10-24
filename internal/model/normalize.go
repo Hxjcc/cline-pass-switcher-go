@@ -263,6 +263,9 @@ func NormalizeConfig(cfg *Config) {
 }
 
 func NormalizeMetadata(meta *Metadata) {
+	if meta.UsageLedger != nil && meta.UsageLedger.Buckets == nil {
+		meta.UsageLedger.Buckets = map[string]UsageBucket{}
+	}
 	if meta.Models == nil {
 		meta.Models = map[string]ModelMeta{}
 	}
