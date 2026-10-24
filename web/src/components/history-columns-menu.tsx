@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Menu } from "@base-ui/react/menu"
 import { Check, Columns3, RotateCcw } from "lucide-react"
 
@@ -10,9 +11,28 @@ export function HistoryColumnsMenu({ visibleColumns, collapsedColumns, onToggle,
   onToggle: (column: HistoryColumn) => void
   onReset: () => void
 }) {
+  const [pressing, setPressing] = useState(false)
+
+  // Opening the menu transfers focus and clears the native :active state
+  // before mouseup. Keep pointer feedback until the actual press ends.
+  useEffect(() => {
+    if (!pressing) return
+    const release = () => setPressing(false)
+    window.addEventListener("pointerup", release, true)
+    window.addEventListener("pointercancel", release, true)
+    window.addEventListener("blur", release)
+    return () => {
+      window.removeEventListener("pointerup", release, true)
+      window.removeEventListener("pointercancel", release, true)
+      window.removeEventListener("blur", release)
+    }
+  }, [pressing])
+
   return (
     <Menu.Root>
-      <Menu.Trigger render={<Button variant="outline" className="text-muted-foreground font-normal active:translate-y-px aria-expanded:border-primary/40 aria-expanded:bg-primary/10 aria-expanded:text-primary aria-expanded:hover:bg-primary/15 aria-expanded:hover:text-primary dark:aria-expanded:bg-primary/20 dark:aria-expanded:hover:bg-primary/25" aria-label="显示列" />}>
+      <Menu.Trigger data-pressing={pressing || undefined} onPointerDown={event => { if (event.button === 0) setPressing(true) }}
+        onPointerLeave={() => setPressing(false)}
+        render={<Button variant="outline" className="text-muted-foreground font-normal active:translate-y-px data-pressing:translate-y-px aria-expanded:border-primary/40 aria-expanded:bg-primary/10 aria-expanded:text-primary aria-expanded:hover:bg-primary/15 aria-expanded:hover:text-primary dark:aria-expanded:bg-primary/20 dark:aria-expanded:hover:bg-primary/25" aria-label="显示列" />}>
         <Columns3 data-icon="inline-start" />
         显示列
         <span className="tabular-nums">{visibleColumns.size}/{historyColumns.length}</span>

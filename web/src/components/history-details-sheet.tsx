@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { chipClass, successChipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCost, shortDuration } from "@/lib/format"
-import { actualProvider, cacheStats, fallbackTitle, finishLabel, formatCacheRate, fullHistoryTime, gatewayMultiple, historyError, historyStatus } from "@/lib/history-display"
+import { actualProvider, cacheStats, fallbackTitle, finishLabel, formatCacheRate, fullHistoryTime, gatewayMultiple, historyError, historyStatus, requestKindLabel } from "@/lib/history-display"
 import { cn } from "@/lib/utils"
 import type { HistoryItem } from "@/types"
 
@@ -74,6 +74,7 @@ export function HistoryDetailsSheet({ item, triggerRef, onClose }: {
               {usage?.outputCost !== undefined && <Field label="输出费用">{formatCost(usage.outputCost)}</Field>}
               {usage?.surchargeCost !== undefined && <Field label="附加费用">{formatCost(usage.surchargeCost)}</Field>}
               <Field label="响应方式">{item.stream ? "流式" : "非流式"}</Field>
+              <Field label="请求类型">{requestKindLabel(item.kind)}</Field>
               {item.finishReason && <Field label="结束原因">{finishLabel(item.finishReason)}</Field>}
               {item.effort && <Field label="上游思考强度">{item.effort}</Field>}
               {item.requestedEffort && <Field label="请求思考强度">{item.requestedEffort}</Field>}

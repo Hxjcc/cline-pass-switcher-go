@@ -12,6 +12,37 @@ async function signIn(page: Page) {
   await expect(page.getByText(success.model, { exact: true })).toBeVisible()
 }
 
+test("column menu gives press feedback on the first interaction and later openings", async ({ page }) => {
+  await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
+  await signIn(page)
+  const trigger = page.getByRole("button", { name: "显示列", exact: true })
+  const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
+
+  for (let opening = 0; opening < 2; opening += 1) {
+    await trigger.hover()
+    await page.mouse.down()
+    try {
+      await expect(menu).toBeVisible()
+      await expect(trigger).toHaveAttribute("aria-expanded", "true")
+      await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate), {
+        message: `press ${opening + 1} should have the same feedback while the pointer is held`,
+      }).toBe("0px 1px")
+    } finally {
+      await page.mouse.up()
+    }
+    await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate)).toBe("none")
+    await page.keyboard.press("Escape")
+    await expect(menu).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+  }
+  await trigger.press("Enter")
+  await expect(menu).toBeVisible()
+  await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate)).toBe("none")
+  await page.keyboard.press("Escape")
+  await expect(menu).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+})
+
 for (const source of ["history panel", "global refresh"]) {
   test(`a late ${source} response cannot undo the failure filter`, async ({ page }) => {
     let holdNext = false
@@ -86,7 +117,7 @@ test("compact history keeps raw models and cache visible, opens row details, and
     ...success, id: "routed", model: "cline-pass/deepseek-v4.1-flash-1017", stream: true,
     account: "账号1", provider: "deepseek", resolved: "deepseek", canonical: "deepseek/deepseek-v4.1-flash-1017",
     gatewayHas: ["implicit-caching", "reasoning", "structured-output", "tool-use", "vision"],
-    targetProviders: ["deepseek"], routingStatus: "matched", ttftMs: 1300, ms: 6500,
+    targetProviders: ["deepseek"], routingStatus: "matched", ttftMs: 1300, ms: 6500, kind: "responses", requestedEffort: "xhigh", effort: "max",
     usage: { promptTokens: 126600, completionTokens: 640, reasoningTokens: 523, cachedTokens: 126000, cost: 0.000002 },
   }
   await page.route("**/api/history*", route => route.fulfill({ json: payload([routed, success, failure]) }))
@@ -109,7 +140,7 @@ test("compact history keeps raw models and cache visible, opens row details, and
   await page.getByRole("menuitemcheckbox", { name: "费用", exact: true }).click()
   await page.screenshot({ path: test.info().outputPath("history-columns-menu.png"), fullPage: true })
   await page.keyboard.press("Escape")
-  await expect(page.getByRole("columnheader")).toHaveCount(8)
+  await expect(page.getByRole("columnheader")).toHaveCount(10)
   await expect(page.getByRole("columnheader", { name: "背后模型", exact: true })).toHaveCount(0)
   const scroller = page.locator('[data-slot="table-container"]').last()
   await row.getByText("99.5%", { exact: true }).click()
@@ -147,12 +178,12 @@ test("compact history keeps raw models and cache visible, opens row details, and
     await expectFullTextWithinCell(row.getByText("99.5%", { exact: true }))
   }
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await expect(page.getByRole("columnheader")).toHaveCount(8)
+  await expect(page.getByRole("columnheader")).toHaveCount(10)
   await scroller.locator('xpath=ancestor::*[@data-slot="card"][1]').screenshot({ path: test.info().outputPath("history-panel.png") })
   await page.screenshot({ path: test.info().outputPath("history-columns-desktop.png"), fullPage: true })
 
   await page.reload()
-  await expect(page.getByRole("columnheader")).toHaveCount(8)
+  await expect(page.getByRole("columnheader")).toHaveCount(10)
   await expect(page.getByRole("columnheader", { name: "费用", exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 390, height: 844 })
   const card = page.getByRole("article").filter({ hasText: routed.model })
@@ -173,7 +204,63 @@ test("compact history keeps raw models and cache visible, opens row details, and
   await page.getByRole("menuitem", { name: "恢复默认", exact: true }).click()
   await expect(card.getByText("$0.000002", { exact: true })).toBeVisible()
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await expect(page.getByRole("columnheader")).toHaveCount(9)
+  await expect(page.getByRole("columnheader")).toHaveCount(11)
+})
+
+test("restored history fields and warnings stay usable on desktop and phone", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" })
+  await page.setViewportSize({ width: 1920, height: 1100 })
+  const restored = {
+    ...success, id: "restored", model: "cline-pass/deepseek-v4.1-flash-1017", kind: "responses", stream: true,
+    account: "账号1", provider: "deepseek", canonical: "deepseek/deepseek-v4.1-flash-1017", effort: "max", requestedEffort: "xhigh",
+    ttftMs: 1100, ms: 6200, usage: { promptTokens: 126600, completionTokens: 640, reasoningTokens: 523, cachedTokens: 126000, cost: 0.000002, gatewayCost: 0.00001 },
+  }
+  const rerouted = { ...restored, id: "rerouted", model: "cline-pass/retried", resolved: "baseten", routingStatus: "mismatch", targetProviders: ["deepseek"], fallback: true, fallbackReason: "ignored", error: "目标 deepseek，实际 baseten",
+    trace: [{ upstream: "deepseek", status: 503, ms: 100 }, { upstream: "baseten", status: 200, ms: 150 }],
+    gatewayAttempts: [{ provider: "deepseek", status: 429, success: false }, { provider: "baseten", status: 200, success: true }],
+  }
+  const truncated = { ...restored, id: "truncated", model: "cline-pass/truncated", finishReason: "length" }
+  const filtered = { ...failure, id: "filtered", model: "cline-pass/filtered", kind: "test", finishReason: "content_filter" }
+  await page.route("**/api/history*", route => route.fulfill({ json: payload([restored, rerouted, truncated, filtered, success]) }))
+  await signIn(page)
+  const row = page.getByRole("row").filter({ hasText: restored.model })
+  await expect(row.getByText("xhigh → max", { exact: true })).toBeVisible()
+  await expect(row.getByText("Responses · 流式", { exact: true })).toBeVisible()
+  await page.screenshot({ path: test.info().outputPath("history-restored-default.png"), fullPage: true })
+  await page.getByRole("button", { name: "显示列", exact: true }).click()
+  // Make room for the optional details instead of relying on a wider screen:
+  // the console deliberately caps its content width on desktop.
+  for (const label of ["时间", "账号", "实际上游", "首字 / 总耗时", "输入 → 输出", "费用"]) {
+    await page.getByRole("menuitemcheckbox", { name: label, exact: true }).click()
+  }
+  for (const label of ["背后模型", "思考 Token", "网关市价"]) {
+    await page.getByRole("menuitemcheckbox", { name: label, exact: true }).click()
+  }
+  await page.keyboard.press("Escape")
+  for (const label of ["背后模型", "思考 Token", "网关市价"]) {
+    await expect(page.getByRole("columnheader", { name: label, exact: true })).toBeVisible()
+  }
+  await expect(row.getByText(restored.canonical, { exact: true })).toBeVisible()
+  await expect(row.locator('[data-history-column="reasoning"]')).toHaveText("523")
+  await expect(row.locator('[data-history-column="gatewayCost"]')).toHaveText("$0.000010 ×5.0")
+  for (const label of ["未命中目标", "忽略偏好", "重试 1 次", "网关重试 1 次", "长度截断", "内容过滤"]) {
+    await expect(page.getByText(label, { exact: true })).toBeVisible()
+  }
+  await page.screenshot({ path: test.info().outputPath("history-restored-desktop.png"), fullPage: true })
+  await page.getByRole("button", { name: "切换到暗色", exact: true }).click()
+  await expect(page.locator("html")).toHaveClass(/dark/)
+  await page.mouse.move(10, 1000)
+  await page.screenshot({ path: test.info().outputPath("history-restored-dark.png"), fullPage: true, animations: "disabled" })
+  const mismatchColor = await page.getByRole("img", { name: "未命中目标", exact: true }).evaluate(node => getComputedStyle(node).color)
+  await expect.poll(() => page.getByText("未命中目标", { exact: true }).evaluate(node => getComputedStyle(node).color)).toBe(mismatchColor)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const card = page.getByRole("article").filter({ hasText: restored.model })
+  await expect(card.getByText(restored.canonical, { exact: true })).toBeVisible()
+  await expect(card.getByText("523", { exact: true })).toBeVisible()
+  await expect(card.getByText("xhigh → max", { exact: true })).toBeVisible()
+  await expect(card.getByText("Responses · 流式", { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
+  await page.screenshot({ path: test.info().outputPath("history-restored-mobile.png"), fullPage: true, animations: "disabled" })
 })
 
 test("unusually long raw models remain complete without forcing the page to scroll sideways", async ({ page }) => {

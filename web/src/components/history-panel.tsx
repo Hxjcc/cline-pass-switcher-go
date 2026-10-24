@@ -16,7 +16,7 @@ import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCompactTime, formatCost, formatTokenCount, shortDuration } from "@/lib/format"
 import { historyColumns, useHistoryColumns, type HistoryColumn } from "@/lib/history-columns"
-import { actualProvider, cacheStats, costTitle, formatCacheRate, fullHistoryTime, historyStatus, latencyText, usageTitle } from "@/lib/history-display"
+import { actualProvider, cacheStats, costTitle, finishLabel, formatCacheRate, fullHistoryTime, gatewayMultiple, historyNotices, historyStatus, latencyText, reasoningEffort, requestKindLabel, usageTitle } from "@/lib/history-display"
 import { useHistoryLayout } from "@/lib/use-history-layout"
 import { useNarrowViewport } from "@/lib/use-media-query"
 import { cn } from "@/lib/utils"
@@ -44,13 +44,34 @@ function CacheCell({ item }: { item: HistoryItem }) {
 }
 
 function ModelBadges({ item }: { item: HistoryItem }) {
-  const status = historyStatus(item)
-  return <>
-    {status.tone === "error" && <span className="inline-flex shrink-0" title={item.error ?? status.label}><CircleAlert className="text-destructive size-3.5" role="img" aria-label={status.label} aria-hidden={false} /></span>}
-    {item.kind === "compact" && <Badge variant="secondary" className={chipClass}>压缩</Badge>}
-    {item.degraded && <Badge variant="outline" className={warningChipClass} title={item.degradeReason}>压缩降级</Badge>}
-    {item.missingSummarySections?.length ? <Badge variant="outline" className={warningChipClass} title={`摘要缺 ${item.missingSummarySections.join("、")}`}>摘要缺段</Badge> : null}
-  </>
+  const notices = historyNotices(item)
+  if (!notices.length) return null
+  return <div className="flex flex-wrap gap-1 whitespace-normal" aria-label="请求提示">{notices.map(notice =>
+    <Badge key={notice.id} variant="outline" className={notice.error ? cn(chipClass, "border-destructive/20 bg-destructive/5 text-destructive dark:border-destructive/40 dark:bg-destructive/10") : warningChipClass} title={notice.title}>{notice.label}</Badge>,
+  )}</div>
+}
+
+function EffortCell({ item }: { item: HistoryItem }) {
+  const effort = reasoningEffort(item)
+  return effort.text ? <span className="font-mono text-xs whitespace-nowrap" title={effort.title}>{effort.text}</span> : <Dash />
+}
+
+function ModeCell({ item }: { item: HistoryItem }) {
+  return <Badge variant="secondary" className={cn(chipClass, "font-normal")} title={finishLabel(item.finishReason) || undefined}>
+    {requestKindLabel(item.kind)} · {item.stream ? "流式" : "非流式"}
+  </Badge>
+}
+
+function ReasoningCell({ item }: { item: HistoryItem }) {
+  const tokens = item.usage?.reasoningTokens
+  return tokens === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={`${tokens.toLocaleString("zh-CN")} 个思考 Token，包含在输出 Token 中`}>{formatTokenCount(tokens)}</span>
+}
+
+function GatewayCostCell({ item }: { item: HistoryItem }) {
+  const usage = item.usage
+  return usage?.gatewayCost === undefined ? <Dash /> : <span className="font-mono text-xs whitespace-nowrap tabular-nums" title={costTitle(usage)}>
+    {formatCost(usage.gatewayCost)}<span className="text-muted-foreground">{gatewayMultiple(usage)}</span>
+  </span>
 }
 
 function OpenDetailsButton({ item, onOpen }: { item: HistoryItem; onOpen: OpenRequest }) {
@@ -68,15 +89,24 @@ function openFromRow(event: MouseEvent<HTMLElement>, item: HistoryItem, onOpen: 
 }
 
 function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
+  const status = historyStatus(item)
   const cells = {
     time: <span className="text-muted-foreground text-xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>,
-    model: <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><ModelBadges item={item} /><span data-history-model className="text-foreground font-mono text-xs">{item.model}</span></span>,
+    model: <div className="space-y-1"><span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      {status.tone === "error" && <span className="inline-flex shrink-0" title={item.error ?? status.label}><CircleAlert className="text-destructive size-3.5" role="img" aria-label={status.label} aria-hidden={false} /></span>}
+      <span data-history-model className="text-foreground font-mono text-xs">{item.model}</span>
+    </span><ModelBadges item={item} /></div>,
     account: <span className="text-xs">{item.account || <Dash />}</span>,
     provider: actualProvider(item) ? <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge> : <Dash />,
+    canonical: item.canonical ? <span className="font-mono text-xs">{item.canonical}</span> : <Dash />,
+    effort: <EffortCell item={item} />,
+    mode: <ModeCell item={item} />,
     latency: <span className="font-mono text-xs tabular-nums" title={`首字 ${shortDuration(item.ttftMs)} · 总耗时 ${shortDuration(item.ms)}`}>{latencyText(item)}</span>,
     tokens: <UsageCell item={item} />,
+    reasoning: <ReasoningCell item={item} />,
     cache: <CacheCell item={item} />,
     cost: item.usage?.cost === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={costTitle(item.usage)}>{formatCost(item.usage.cost)}</span>,
+    gatewayCost: <GatewayCostCell item={item} />,
   }
   return <TableRow data-history-record data-state={selected ? "selected" : undefined} aria-selected={selected}
     className="cursor-pointer hover:bg-primary/5 data-[state=selected]:bg-primary/5" onClick={event => openFromRow(event, item, onOpen)}>
@@ -91,19 +121,25 @@ function HistoryCard({ item, columns, selected, onOpen }: { item: HistoryItem; c
     onClick={event => openFromRow(event, item, onOpen)}>
     <div className="mb-1 flex items-center justify-between gap-2">
       {columns.has("time") && <span className="text-muted-foreground text-2xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>}
-      <span className={cn("ml-auto text-2xs", status.tone === "error" ? "text-destructive" : "text-muted-foreground")}>{status.label}</span>
+      <span className={cn("ml-auto text-2xs", status.tone === "error" ? "text-destructive" : status.tone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>{status.label}</span>
       <OpenDetailsButton item={item} onOpen={onOpen} />
     </div>
     <div className="text-foreground font-mono text-xs wrap-anywhere" data-history-model>{item.model}</div>
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5"><ModelBadges item={{ ...item, error: null, routingStatus: undefined }} />
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
       {columns.has("provider") && actualProvider(item) && <Badge variant="outline" className={chipClass}><ProviderName slug={actualProvider(item)} /></Badge>}
       {columns.has("account") && item.account && <span className="text-muted-foreground text-2xs">{item.account}</span>}
     </div>
+    <div className="mt-1.5"><ModelBadges item={item} /></div>
     <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+      {columns.has("canonical") && <div className="col-span-2"><dt className="text-muted-foreground text-2xs">背后模型</dt><dd className="mt-0.5 font-mono text-xs wrap-anywhere">{item.canonical || <Dash />}</dd></div>}
+      {columns.has("effort") && <div><dt className="text-muted-foreground text-2xs">思考强度</dt><dd className="mt-0.5"><EffortCell item={item} /></dd></div>}
+      {columns.has("mode") && <div><dt className="text-muted-foreground text-2xs">类型 / 方式</dt><dd className="mt-0.5"><ModeCell item={item} /></dd></div>}
       {columns.has("tokens") && <div><dt className="text-muted-foreground text-2xs">输入 → 输出</dt><dd className="mt-0.5"><UsageCell item={item} /></dd></div>}
+      {columns.has("reasoning") && <div><dt className="text-muted-foreground text-2xs">思考 Token</dt><dd className="mt-0.5"><ReasoningCell item={item} /></dd></div>}
       {columns.has("cache") && <div><dt className="text-muted-foreground text-2xs">缓存命中</dt><dd className="mt-0.5"><CacheCell item={item} /></dd></div>}
       {columns.has("latency") && <div><dt className="text-muted-foreground text-2xs">首字 / 总耗时</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{latencyText(item)}</dd></div>}
       {columns.has("cost") && <div><dt className="text-muted-foreground text-2xs">费用</dt><dd className="mt-0.5 font-mono text-xs tabular-nums">{item.usage?.cost === undefined ? <Dash /> : formatCost(item.usage.cost)}</dd></div>}
+      {columns.has("gatewayCost") && <div><dt className="text-muted-foreground text-2xs">网关市价</dt><dd className="mt-0.5"><GatewayCostCell item={item} /></dd></div>}
     </dl>
   </article>
 }

@@ -2,13 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { HistoryPanel } from "./history-panel"
-import { HISTORY_COLUMNS_STORAGE, LEGACY_HISTORY_COLUMNS_STORAGE } from "@/lib/history-columns"
+import { HISTORY_COLUMNS_STORAGE, LEGACY_HISTORY_COLUMNS_STORAGE, PREVIOUS_HISTORY_COLUMNS_STORAGE } from "@/lib/history-columns"
 import type { HistoryItem } from "@/types"
 
 afterEach(() => {
   cleanup()
   localStorage.removeItem(HISTORY_COLUMNS_STORAGE)
   localStorage.removeItem(LEGACY_HISTORY_COLUMNS_STORAGE)
+  localStorage.removeItem(PREVIOUS_HISTORY_COLUMNS_STORAGE)
 })
 
 const noop = async () => {}
@@ -69,7 +70,7 @@ test("selecting model text for copying does not open the drawer", () => {
   expect(screen.queryByRole("dialog")).toBeNull()
 })
 
-test("column choices persist, keep the model, and reset to all eight common fields", async () => {
+test("column choices persist, keep the model, and reset to the ten common fields", async () => {
   renderPanel()
   fireEvent.click(screen.getByRole("button", { name: "显示列" }))
   fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "费用" }))
@@ -83,13 +84,13 @@ test("column choices persist, keep the model, and reset to all eight common fiel
   fireEvent.click(await screen.findByRole("menuitem", { name: "恢复默认" }))
   expect(screen.getByRole("columnheader", { name: "费用" })).toBeTruthy()
   expect(screen.getByRole("columnheader", { name: "缓存命中" })).toBeTruthy()
-  expect(screen.getAllByRole("columnheader")).toHaveLength(9)
+  expect(screen.getAllByRole("columnheader")).toHaveLength(11)
 })
 
 test.each(["not-json", JSON.stringify({ cost: true })])("invalid preferences restore the common columns: %s", saved => {
   localStorage.setItem(HISTORY_COLUMNS_STORAGE, saved)
   renderPanel()
-  expect(screen.getAllByRole("columnheader")).toHaveLength(9)
+  expect(screen.getAllByRole("columnheader")).toHaveLength(11)
 })
 
 test("legacy preferences migrate to combined latency and enable the new cache column", () => {
@@ -107,6 +108,86 @@ test("unknown column keys are ignored and the model cannot be removed by saved p
   expect(screen.getByRole("columnheader", { name: "原始请求模型" })).toBeTruthy()
   expect(screen.getByRole("columnheader", { name: "缓存命中" })).toBeTruthy()
   expect(screen.getAllByRole("columnheader")).toHaveLength(3)
+})
+
+test("restored common fields show requested-to-upstream effort and the request type", () => {
+  renderPanel([{ ...entry, kind: "responses", requestedEffort: "xhigh", effort: "max" }])
+  expect(screen.getByRole("columnheader", { name: "思考强度" })).toBeTruthy()
+  expect(screen.getByRole("columnheader", { name: "类型 / 方式" })).toBeTruthy()
+  expect(within(row()).getByText("xhigh → max").title).toContain("实际转发给上游 max")
+  expect(within(row()).getByText("Responses · 流式")).toBeTruthy()
+  expect(screen.queryByRole("columnheader", { name: "思考 Token" })).toBeNull()
+  expect(screen.queryByRole("columnheader", { name: "背后模型" })).toBeNull()
+  expect(screen.queryByRole("columnheader", { name: "网关市价" })).toBeNull()
+})
+
+test("optional columns expose full model, reasoning usage, and gateway price and persist", async () => {
+  renderPanel()
+  fireEvent.click(screen.getByRole("button", { name: "显示列" }))
+  for (const label of ["思考 Token", "背后模型", "网关市价"]) {
+    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: label }))
+    expect(screen.getByRole("columnheader", { name: label })).toBeTruthy()
+  }
+  expect(within(row()).getByText(entry.canonical!)).toBeTruthy()
+  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("5,740")
+  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("$0.0085 ×5.0")
+  await waitFor(() => expect(JSON.parse(localStorage.getItem(HISTORY_COLUMNS_STORAGE)!)).toContain("gatewayCost"))
+  cleanup()
+  renderPanel()
+  expect(screen.getByRole("columnheader", { name: "网关市价" })).toBeTruthy()
+  expect(within(row()).getByText(entry.canonical!)).toBeTruthy()
+})
+
+test("existing column choices migrate while new common fields become available", () => {
+  localStorage.setItem(PREVIOUS_HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache", "tokens"]))
+  renderPanel()
+  for (const label of ["原始请求模型", "缓存命中", "输入 → 输出", "思考强度", "类型 / 方式"]) {
+    expect(screen.getByRole("columnheader", { name: label })).toBeTruthy()
+  }
+  expect(screen.queryByRole("columnheader", { name: "费用" })).toBeNull()
+  expect(screen.queryByRole("columnheader", { name: "网关市价" })).toBeNull()
+  cleanup()
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache"]))
+  renderPanel()
+  expect(screen.queryByRole("columnheader", { name: "思考强度" })).toBeNull()
+  expect(screen.queryByRole("columnheader", { name: "类型 / 方式" })).toBeNull()
+})
+
+test.each([
+  ["length", "长度截断"],
+  ["content_filter", "内容过滤"],
+])("an abnormal finish stays visible in the main row: %s", (finishReason, label) => {
+  renderPanel([{ ...entry, finishReason }])
+  expect(within(row()).getByText(label)).toBeTruthy()
+})
+
+test("routing warnings and retry counts stay visible with the provider column hidden", () => {
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "cache"]))
+  renderPanel([{ ...entry, routingStatus: "mismatch", fallback: true, fallbackReason: "ignored",
+    trace: [{ upstream: "deepseek", status: 503, ms: 10 }, { upstream: "baseten", status: 200, ms: 10 }],
+    gatewayAttempts: [{ provider: "deepseek", status: 429, success: false }, { provider: "deepseek", status: 503, success: false }, { provider: "baseten", status: 200, success: true }],
+  }])
+  for (const label of ["未命中目标", "忽略偏好", "重试 1 次", "网关重试 2 次"]) {
+    expect(within(row()).getByText(label)).toBeTruthy()
+  }
+  expect(screen.queryByRole("columnheader", { name: "实际上游" })).toBeNull()
+})
+
+test("successful gateway legs and ordinary tool calls do not look like retries or failures", () => {
+  renderPanel([{ ...entry, finishReason: "tool_calls", gatewayAttempts: [{ provider: "deepseek", status: 200, success: true }, { provider: "deepseek", status: 200, success: true }] }])
+  expect(within(row()).queryByText(/重试|长度截断|内容过滤/)).toBeNull()
+  expect(row().querySelector('[data-history-column="mode"] [title]')?.getAttribute("title")).toBe("调用工具")
+})
+
+test("zero optional usage differs from unreported usage", () => {
+  localStorage.setItem(HISTORY_COLUMNS_STORAGE, JSON.stringify(["model", "reasoning", "gatewayCost"]))
+  renderPanel([{ ...entry, usage: { reasoningTokens: 0, gatewayCost: 0 } }])
+  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("0")
+  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("$0.000000")
+  cleanup()
+  renderPanel([{ ...entry, usage: undefined }])
+  expect(row().querySelector('[data-history-column="reasoning"]')?.textContent).toBe("—")
+  expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("—")
 })
 
 test("a reported zero cache rate differs from missing cache data", () => {
@@ -144,7 +225,7 @@ test("gateway retry statuses and ignored-preference explanations remain in the d
 
 test("compaction warnings keep their full reasons in the details", async () => {
   renderPanel([{ ...entry, kind: "compact", degraded: true, degradeReason: "upstream 503", missingSummarySections: ["Next Move"] }])
-  expect(within(row()).getByText("压缩")).toBeTruthy()
+  expect(within(row()).getByText("压缩 · 流式")).toBeTruthy()
   expect(within(row()).getByText("压缩降级")).toBeTruthy()
   expect(within(row()).getByText("摘要缺段")).toBeTruthy()
   const dialog = await openDetails()

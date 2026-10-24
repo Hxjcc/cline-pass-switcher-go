@@ -2,7 +2,7 @@ import { formatCost, formatTokenCount, shortDuration } from "@/lib/format"
 import type { HistoryItem, UsageStats } from "@/types"
 
 const finishLabels: Record<string, string> = {
-  stop: "正常结束", tool_calls: "调用工具", function_call: "调用工具", length: "长度截断", content_filter: "内容过滤",
+  stop: "正常结束", tool_calls: "调用工具", function_call: "调用工具", length: "长度截断", max_output_tokens: "长度截断", content_filter: "内容过滤",
 }
 
 export function finishLabel(reason?: string) {
@@ -10,6 +10,38 @@ export function finishLabel(reason?: string) {
 }
 
 export function actualProvider(item: HistoryItem) { return item.resolved || item.provider }
+
+export function requestKindLabel(kind?: string) {
+  const labels: Record<string, string> = { chat: "Chat", responses: "Responses", compact: "压缩", test: "测试", "routing-check": "路由对照", "account-test": "账号测试" }
+  return kind ? labels[kind] || kind : "请求"
+}
+
+export function reasoningEffort(item: HistoryItem) {
+  const requested = item.requestedEffort?.trim()
+  const actual = item.effort?.trim()
+  if (requested && actual && requested !== actual) {
+    return { text: `${requested} → ${actual}`, title: `客户端请求 ${requested}，实际转发给上游 ${actual}` }
+  }
+  return { text: actual || requested, title: actual ? "实际转发给上游的思考强度" : "客户端请求的思考强度；未上报上游强度" }
+}
+
+export function historyNotices(item: HistoryItem) {
+  const notices: Array<{ id: string; label: string; title?: string; error?: boolean }> = []
+  if (item.routingStatus === "mismatch") notices.push({ id: "mismatch", label: "未命中目标", title: `目标：${item.targetProviders?.join("、") || "按能力选择"}；实际：${actualProvider(item) || "未知"}`, error: true })
+  if (item.gatewayHas?.length && (!item.routingStatus || item.routingStatus === "unknown")) notices.push({ id: "unconfirmed", label: "路由未确认", title: "上游没有报告足够的路由信息，无法确认条件是否生效" })
+  if (item.fallback) notices.push({ id: "fallback", label: item.fallbackReason === "ignored" ? "忽略偏好" : "降级", title: fallbackTitle(item) })
+  const retries = Math.max(0, (item.trace?.length || item.attempts?.length || 0) - 1)
+  if (retries) notices.push({ id: "retry", label: `重试 ${retries} 次`, title: "代理在本次请求中进行了重试；完整过程见详情" })
+  // Several successful model legs are not necessarily retries. Count only
+  // reported failures that were followed by another gateway attempt.
+  const gatewayRetries = item.gatewayAttempts?.slice(0, -1).filter(attempt => attempt.success === false || (attempt.status ?? 0) >= 400).length ?? 0
+  if (gatewayRetries) notices.push({ id: "gateway-retry", label: `网关重试 ${gatewayRetries} 次`, title: "Cline 网关内部发生重试；完整过程见详情" })
+  if (item.finishReason === "length" || item.finishReason === "max_output_tokens") notices.push({ id: "length", label: "长度截断", title: "响应触及输出上限，可能未完整结束" })
+  if (item.finishReason === "content_filter") notices.push({ id: "filter", label: "内容过滤", title: "上游因内容过滤提前结束响应" })
+  if (item.degraded) notices.push({ id: "degraded", label: "压缩降级", title: item.degradeReason })
+  if (item.missingSummarySections?.length) notices.push({ id: "summary", label: "摘要缺段", title: `摘要缺 ${item.missingSummarySections.join("、")}` })
+  return notices
+}
 
 export function hasFailover(item: HistoryItem) {
   return (item.trace?.length ?? 0) > 1 || Boolean(item.trace?.some(attempt => attempt.status !== 200)) || (item.attempts?.length ?? 0) > 1
@@ -85,6 +117,8 @@ export function historyStatus(item: HistoryItem) {
   if (item.routingStatus === "mismatch") return { label: "未命中目标", tone: "error" as const }
   if (item.error) return { label: "请求失败", tone: "error" as const }
   if (item.degraded) return { label: "压缩降级", tone: "warning" as const }
+  if (item.finishReason === "length" || item.finishReason === "max_output_tokens") return { label: "长度截断", tone: "warning" as const }
+  if (item.finishReason === "content_filter") return { label: "内容过滤", tone: "warning" as const }
   if (item.routingStatus === "matched") return { label: "已命中目标", tone: "success" as const }
   if (item.gatewayHas?.length) return { label: "路由未确认", tone: "muted" as const }
   return { label: "请求成功", tone: "success" as const }
