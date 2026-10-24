@@ -25,7 +25,18 @@ export function HistoryDetailsSheet({ item, triggerRef, onClose }: {
   const cache = cacheStats(usage)
   const error = item ? historyError(item) : null
   return (
-    <Sheet open={Boolean(item)} modal={false} onOpenChange={open => { if (!open) onClose() }}>
+    <Sheet open={Boolean(item)} modal={false} onOpenChange={(open, details) => {
+      if (open) return
+      if (details.reason === "outside-press" || details.reason === "focus-out") {
+        const target = details.event instanceof FocusEvent ? details.event.relatedTarget : details.event.target
+        // Let the row click toggle or switch the selection before dismissing.
+        if (target instanceof Element && target.closest("[data-history-record]")) {
+          details.cancel()
+          return
+        }
+      }
+      onClose()
+    }}>
       <SheetContent showCloseButton={false} overlayClassName="pointer-events-none bg-transparent supports-backdrop-filter:backdrop-blur-none"
         style={{ width: "min(440px, 100%)", maxWidth: "100%" }} className="gap-0"
         finalFocus={() => triggerRef.current?.isConnected ? triggerRef.current : false}>

@@ -78,7 +78,7 @@ function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryIte
     cache: <CacheCell item={item} />,
     cost: item.usage?.cost === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={costTitle(item.usage)}>{formatCost(item.usage.cost)}</span>,
   }
-  return <TableRow data-state={selected ? "selected" : undefined} aria-selected={selected}
+  return <TableRow data-history-record data-state={selected ? "selected" : undefined} aria-selected={selected}
     className="cursor-pointer hover:bg-primary/5 data-[state=selected]:bg-primary/5" onClick={event => openFromRow(event, item, onOpen)}>
     {historyColumns.filter(column => columns.has(column.id)).map(column => <TableCell key={column.id} data-history-column={column.id} className="align-middle whitespace-nowrap">{cells[column.id]}</TableCell>)}
     <TableCell className="w-8 px-1! text-right"><OpenDetailsButton item={item} onOpen={onOpen} /></TableCell>
@@ -87,7 +87,7 @@ function HistoryTableRow({ item, columns, selected, onOpen }: { item: HistoryIte
 
 function HistoryCard({ item, columns, selected, onOpen }: { item: HistoryItem; columns: ReadonlySet<HistoryColumn>; selected: boolean; onOpen: OpenRequest }) {
   const status = historyStatus(item)
-  return <article className={cn("bg-card cursor-pointer rounded-lg p-3 ring-1 ring-foreground/10 hover:bg-primary/5", selected && "bg-primary/5")}
+  return <article data-history-record className={cn("bg-card cursor-pointer rounded-lg p-3 ring-1 ring-foreground/10 hover:bg-primary/5", selected && "bg-primary/5")}
     onClick={event => openFromRow(event, item, onOpen)}>
     <div className="mb-1 flex items-center justify-between gap-2">
       {columns.has("time") && <span className="text-muted-foreground text-2xs" title={fullHistoryTime(item.ts)}>{formatCompactTime(item.ts)}</span>}
@@ -133,8 +133,8 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
   const { viewportRef, visibleColumns: tableColumns, collapsedColumns, cards } = useHistoryLayout(visibleColumns, history, narrow)
   const refreshRef = useRef(onRefresh)
 
-  const openDetails: OpenRequest = (item, trigger) => { triggerRef.current = trigger; setSelected(item) }
   const isSelected = (item: HistoryItem) => selected !== null && (item.id ? item.id === selected.id : item.ts === selected.ts && item.model === selected.model && item.account === selected.account)
+  const openDetails: OpenRequest = (item, trigger) => { triggerRef.current = trigger; setSelected(isSelected(item) ? null : item) }
 
   useEffect(() => {
     if (search === query.q) return
