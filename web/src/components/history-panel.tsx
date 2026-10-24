@@ -16,7 +16,7 @@ import { errorMessage } from "@/lib/api"
 import { cardActionClass, chipClass, warningChipClass } from "@/lib/console-styles"
 import { formatCompactTime, formatCost, formatTokenCount, shortDuration } from "@/lib/format"
 import { historyColumns, useHistoryColumns, type HistoryColumn } from "@/lib/history-columns"
-import { actualProvider, cacheStats, costTitle, finishLabel, formatCacheRate, fullHistoryTime, historyNotices, historyStatus, latencyText, reasoningEffort, requestKindLabel, usageTitle } from "@/lib/history-display"
+import { actualProvider, cacheStats, costTitle, finishLabel, formatCacheRate, fullHistoryTime, gatewayMultiple, historyNotices, historyStatus, latencyText, reasoningEffort, requestKindLabel, usageTitle } from "@/lib/history-display"
 import { useHistoryLayout } from "@/lib/use-history-layout"
 import { useNarrowViewport } from "@/lib/use-media-query"
 import { cn } from "@/lib/utils"
@@ -31,11 +31,9 @@ function Dash() { return <span className="text-muted-foreground/50">—</span> }
 
 function UsageCell({ item }: { item: HistoryItem }) {
   if (!item.usage) return <Dash />
-  return <div className="font-mono text-xs leading-4 whitespace-nowrap tabular-nums" title={usageTitle(item.usage, item.finishReason)}>
-    <div>{formatTokenCount(item.usage.promptTokens)}<span className="text-muted-foreground"> → </span>{formatTokenCount(item.usage.completionTokens)}</div>
-    {item.usage.reasoningTokens !== undefined && <div className="text-muted-foreground mt-0.5 text-2xs leading-3.5" data-history-reasoning
-      title={`${item.usage.reasoningTokens.toLocaleString("zh-CN")} 个思考 Token，包含在输出 Token 中`}>思考 {formatTokenCount(item.usage.reasoningTokens)}</div>}
-  </div>
+  return <span className="font-mono text-xs whitespace-nowrap tabular-nums" title={usageTitle(item.usage, item.finishReason)}>
+    {formatTokenCount(item.usage.promptTokens)}<span className="text-muted-foreground"> → </span>{formatTokenCount(item.usage.completionTokens)}
+  </span>
 }
 
 function CacheCell({ item }: { item: HistoryItem }) {
@@ -65,14 +63,16 @@ function ModeCell({ item }: { item: HistoryItem }) {
   </Badge>
 }
 
-function CostCell({ item }: { item: HistoryItem }) {
+function ReasoningCell({ item }: { item: HistoryItem }) {
+  const tokens = item.usage?.reasoningTokens
+  return tokens === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={`${tokens.toLocaleString("zh-CN")} 个思考 Token，包含在输出 Token 中`}>{formatTokenCount(tokens)}</span>
+}
+
+function GatewayCostCell({ item }: { item: HistoryItem }) {
   const usage = item.usage
-  if (!usage || usage.cost === undefined && usage.gatewayCost === undefined) return <Dash />
-  const gatewayDiffers = usage.gatewayCost !== undefined && (usage.cost === undefined || Math.abs(usage.gatewayCost - usage.cost) > 1e-9)
-  return <div className="font-mono text-xs leading-4 whitespace-nowrap tabular-nums" title={costTitle(usage)}>
-    <div>{usage.cost === undefined ? <Dash /> : formatCost(usage.cost)}</div>
-    {gatewayDiffers && <div className="text-muted-foreground mt-0.5 text-2xs leading-3.5" data-history-gateway-cost>↳ 网关 {formatCost(usage.gatewayCost)}</div>}
-  </div>
+  return usage?.gatewayCost === undefined ? <Dash /> : <span className="font-mono text-xs whitespace-nowrap tabular-nums" title={costTitle(usage)}>
+    {formatCost(usage.gatewayCost)}<span className="text-muted-foreground">{gatewayMultiple(usage)}</span>
+  </span>
 }
 
 function OpenDetailsButton({ item, onOpen }: { item: HistoryItem; onOpen: OpenRequest }) {
@@ -104,8 +104,10 @@ function historyCells(item: HistoryItem, card = false) {
     mode: <ModeCell item={item} />,
     latency: <span className="font-mono text-xs tabular-nums" title={`首字 ${shortDuration(item.ttftMs)} · 总耗时 ${shortDuration(item.ms)}`}>{latencyText(item)}</span>,
     tokens: <UsageCell item={item} />,
+    reasoning: <ReasoningCell item={item} />,
     cache: <CacheCell item={item} />,
-    cost: <CostCell item={item} />,
+    cost: item.usage?.cost === undefined ? <Dash /> : <span className="font-mono text-xs tabular-nums" title={costTitle(item.usage)}>{formatCost(item.usage.cost)}</span>,
+    gatewayCost: <GatewayCostCell item={item} />,
   }
 }
 
