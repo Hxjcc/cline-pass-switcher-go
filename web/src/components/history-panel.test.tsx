@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -100,55 +100,6 @@ const reroutedEntry: HistoryItem = {
     { provider: "baseten", status: 200, success: true, ms: 1_000 },
   ],
 }
-
-const routingMismatch: HistoryItem = {
-  ...reroutedEntry,
-  kind: "routing-check",
-  provider: "openai-compatible-private",
-  resolved: "openai-compatible-private",
-  fallback: false,
-  gatewayAttempts: undefined,
-  gatewayHas: ["implicit-caching", "reasoning", "structured-output", "tool-use", "vision"],
-  targetProviders: ["deepseek"],
-  routingStatus: "mismatch",
-  error: "目标 deepseek，实际 openai-compatible-private",
-}
-
-test("routing details expand into their own row and do not repeat a generated mismatch error", () => {
-  renderPanel([routingMismatch, { ...compactEntry, model: "cline-pass/other" }])
-  const toggle = screen.getByRole("button", { name: "路由对照 · 未命中目标" })
-  expect(toggle.getAttribute("aria-expanded")).toBe("false")
-  expect(screen.queryByText("openai-compatible-private", { exact: true })).toBeNull()
-  fireEvent.click(toggle)
-  const details = screen.getByRole("region", { name: `请求详情 ${routingMismatch.model}` })
-  expect(details.closest("td")?.colSpan).toBe(11)
-  expect(within(details).getAllByText("openai-compatible-private", { exact: true })).toHaveLength(1)
-  expect(within(details).getByText("deepseek", { exact: true })).toBeTruthy()
-  expect(screen.queryByText(routingMismatch.error!, { exact: true })).toBeNull()
-  expect(screen.getAllByRole("row")).toHaveLength(4)
-  fireEvent.click(toggle)
-  expect(screen.queryByRole("region")).toBeNull()
-  expect(screen.getAllByRole("row")).toHaveLength(3)
-})
-
-test("routing details retain errors that contain additional failure information", () => {
-  const error = `${routingMismatch.error}；上游返回额度不足`
-  renderPanel([{ ...routingMismatch, error }])
-  fireEvent.click(screen.getByRole("button", { name: "路由对照 · 未命中目标" }))
-  expect(screen.getByText(error, { exact: true })).toBeTruthy()
-})
-
-test("a normal request error remains readable in the expanded details", () => {
-  renderPanel([{ ...compactEntry, error: "upstream returned 503" }])
-  fireEvent.click(screen.getByRole("button", { name: "请求失败 · 查看详情" }))
-  expect(screen.getByText("upstream returned 503")).toBeTruthy()
-})
-
-test("legacy mismatches retain their error when there are no structured routing fields to show", () => {
-  renderPanel([{ ...routingMismatch, gatewayHas: undefined }])
-  fireEvent.click(screen.getByRole("button", { name: "请求失败 · 查看详情" }))
-  expect(screen.getByText(routingMismatch.error!, { exact: true })).toBeTruthy()
-})
 
 test("flags a request the gateway rerouted", () => {
   renderPanel([reroutedEntry])

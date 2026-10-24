@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useId, useRef, useState } from "react"
-import { ChevronRight, CircleAlert, History, RefreshCw, Search, Trash2 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { CircleAlert, History, RefreshCw, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { EmptyState, ToggleChip } from "@/components/console-kit"
@@ -165,13 +165,13 @@ function UsageCell({ item }: { item: HistoryItem }) {
   // Two short lines keep the column narrow enough for the table to fit at
   // 1400px without horizontal scrolling.
   return (
-    <div className="min-w-0 font-mono text-xs whitespace-nowrap tabular-nums" title={usageTitle(usage, item.finishReason)}>
-      <div className="truncate">
+    <div className="font-mono text-xs whitespace-nowrap tabular-nums" title={usageTitle(usage, item.finishReason)}>
+      <div>
         {formatTokenCount(usage.promptTokens)}
         <span className="text-muted-foreground"> → </span>
         {formatTokenCount(usage.completionTokens)}
       </div>
-      {extras.length > 0 && <div className="text-muted-foreground truncate text-2xs">{extras.join(" · ")}</div>}
+      {extras.length > 0 && <div className="text-muted-foreground text-2xs">{extras.join(" · ")}</div>}
     </div>
   )
 }
@@ -212,10 +212,10 @@ function CostCell({ usage }: { usage?: UsageStats }) {
   }
   const gatewayDiffers = usage.gatewayCost !== undefined && Math.abs(usage.gatewayCost - usage.cost) > 1e-9
   return (
-    <div className="min-w-0 font-mono text-xs tabular-nums" title={costTitle(usage)}>
-      <div className="truncate">{formatCost(usage.cost)}</div>
+    <div className="font-mono text-xs tabular-nums" title={costTitle(usage)}>
+      <div>{formatCost(usage.cost)}</div>
       {gatewayDiffers && (
-        <div className="text-muted-foreground truncate text-2xs">
+        <div className="text-muted-foreground text-2xs">
           ↳ 网关 {formatCost(usage.gatewayCost)}
           {gatewayMultiple(usage)}
         </div>
@@ -224,66 +224,19 @@ function CostCell({ usage }: { usage?: UsageStats }) {
   )
 }
 
-function hasHistoryDetails(item: HistoryItem) {
-  return Boolean(item.gatewayHas?.length || item.error || hasFailover(item))
-}
-
-function historyError(item: HistoryItem) {
-  const actual = actualProvider(item)
-  if (item.gatewayHas?.length && item.routingStatus === "mismatch" && actual && item.targetProviders?.length) {
-    // These generated messages repeat the structured target/actual fields.
-    // Keep all other errors, including extra upstream failure information.
-    const repeated = [
-      `实际供应商不满足本次路由要求：${actual}`,
-      `实际供应商 ${actual} 不在本次允许列表中`,
-      ...(item.targetProviders.length === 1 ? [`目标 ${item.targetProviders[0]}，实际 ${actual}`] : []),
-    ]
-    if (item.error && repeated.includes(item.error.trim())) return null
-  }
-  return item.error
-}
-
-function HistoryDetailsToggle({ item, expanded, detailsID, onToggle }: { item: HistoryItem; expanded: boolean; detailsID: string; onToggle: () => void }) {
+function RoutingPolicy({ item }: { item: HistoryItem }) {
+  if (!item.gatewayHas?.length) return null
   const labels: Record<string, string> = { matched: "已命中目标", mismatch: "未命中目标", unknown: "路由未确认", rejected: "无效上游已拒绝" }
-  const label = item.gatewayHas?.length
-    ? `${item.kind === "routing-check" ? "路由对照" : "能力过滤"} · ${labels[item.routingStatus ?? "unknown"] ?? "路由未确认"}`
-    : item.error ? "请求失败 · 查看详情" : "重试详情"
-  return (
-    <button type="button" aria-expanded={expanded} aria-controls={detailsID} onClick={onToggle}
-      className={cn("text-muted-foreground flex max-w-full min-w-0 items-center gap-1 rounded-sm text-left text-2xs outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring", (item.error || item.routingStatus === "mismatch") && "text-destructive")}
-      title={expanded ? "收起请求详情" : "展开请求详情"}>
-      <ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-90")} />
-      <span className="truncate">{label}</span>
-    </button>
-  )
-}
-
-function HistoryDetails({ item, id, showModels = true }: { item: HistoryItem; id: string; showModels?: boolean }) {
-  const error = historyError(item)
-  const detailValue = "mt-1 min-w-0 font-mono text-xs whitespace-pre-wrap wrap-anywhere"
-  return (
-    <div id={id} role="region" aria-label={`请求详情 ${item.model}`} className="min-w-0 space-y-3 text-xs">
-      <dl className="grid min-w-0 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
-        {item.gatewayHas?.length ? <>
-          <div className="min-w-0"><dt className="text-muted-foreground">目标供应商</dt><dd className={detailValue}>{item.targetProviders?.join("、") || "按能力自动选择"}</dd></div>
-          <div className="min-w-0"><dt className="text-muted-foreground">实际供应商</dt><dd className={cn(detailValue, item.routingStatus === "mismatch" && "text-destructive")}>{actualProvider(item) || "未知"}</dd></div>
-        </> : null}
-        {showModels && <div className="min-w-0"><dt className="text-muted-foreground">请求模型</dt><dd className={detailValue}>{item.model}</dd></div>}
-        {showModels && item.canonical && <div className="min-w-0"><dt className="text-muted-foreground">背后模型</dt><dd className={detailValue}>{item.canonical}</dd></div>}
-        {item.gatewayHas?.length ? <div className="min-w-0 sm:col-span-2 xl:col-span-4"><dt className="text-muted-foreground">能力过滤（has）</dt><dd className="mt-1.5 flex min-w-0 flex-wrap gap-1.5">{item.gatewayHas.map(value => <Badge key={value} variant="secondary" className={cn(chipClass, "max-w-full font-mono whitespace-normal wrap-anywhere")}>{value}</Badge>)}</dd></div> : null}
-        {error && <div className="min-w-0 sm:col-span-2 xl:col-span-4"><dt className="text-muted-foreground">错误原因</dt><dd className={cn(detailValue, "text-destructive")}>{error}</dd></div>}
-      </dl>
-      {hasFailover(item) && <div className="min-w-0 space-y-1.5"><p className="text-muted-foreground">尝试记录</p><div className="min-w-0 overflow-x-auto">{item.trace?.length ? <TraceList trace={item.trace} compact /> : <span className="font-mono text-2xs wrap-anywhere">{item.attempts?.join(" → ")}</span>}</div></div>}
-    </div>
-  )
+  return <details className="text-muted-foreground mt-1 text-2xs">
+    <summary className={cn("cursor-pointer", item.routingStatus === "mismatch" && "text-destructive")}>{item.kind === "routing-check" ? "路由对照" : "能力过滤"} · {labels[item.routingStatus ?? "unknown"] ?? "路由未确认"}</summary>
+    <div className="mt-1 space-y-0.5 font-mono wrap-anywhere"><div>has: {item.gatewayHas.join(", ")}</div><div>目标：{item.targetProviders?.join(", ") || "按能力自动选择"}</div><div>实际：{actualProvider(item) || "未知"}</div></div>
+  </details>
 }
 
 // HistoryCard is the phone layout of one history row: the same facts as the
 // table, stacked so nothing is clipped off the side of the screen.
 function HistoryCard({ item }: { item: HistoryItem }) {
   const provider = actualProvider(item)
-  const [expanded, setExpanded] = useState(false)
-  const detailsID = useId()
   return (
     <article className="bg-card rounded-lg px-3 py-2.5 ring-1 ring-foreground/10">
       <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
@@ -315,6 +268,7 @@ function HistoryCard({ item }: { item: HistoryItem }) {
       </div>
 
       <div className="mt-1 font-mono text-xs wrap-anywhere">{item.model}</div>
+      <RoutingPolicy item={item} />
       {item.canonical ? (
         <div className="text-muted-foreground font-mono text-2xs wrap-anywhere">{item.canonical}</div>
       ) : null}
@@ -340,6 +294,16 @@ function HistoryCard({ item }: { item: HistoryItem }) {
         )}
       </div>
 
+      {hasFailover(item) && (
+        <div className="mt-1.5">
+          {item.trace?.length ? (
+            <TraceList trace={item.trace} compact />
+          ) : (
+            <span className="text-muted-foreground font-mono text-2xs">{item.attempts?.join(" → ")}</span>
+          )}
+        </div>
+      )}
+
       <div className="mt-2 flex flex-wrap items-start gap-x-4 gap-y-1">
         <UsageCell item={item} />
         <CostCell usage={item.usage} />
@@ -351,10 +315,11 @@ function HistoryCard({ item }: { item: HistoryItem }) {
         <span>总耗时 {shortDuration(item.ms)}</span>
       </div>
 
-      {hasHistoryDetails(item) && <div className="mt-2 space-y-3 border-t pt-2">
-        <HistoryDetailsToggle item={item} expanded={expanded} detailsID={detailsID} onToggle={() => setExpanded(value => !value)} />
-        {expanded && <HistoryDetails item={item} id={detailsID} showModels={false} />}
-      </div>}
+      {item.error && (
+        <div className="text-destructive mt-1.5 line-clamp-3 text-2xs wrap-anywhere" title={item.error}>
+          {item.error}
+        </div>
+      )}
     </article>
   )
 }
@@ -389,7 +354,7 @@ function GatewayAttemptsBadge({ attempts }: { attempts?: GatewayAttempt[] }) {
 
 // Cells mix text-sm, text-xs and badges with different line heights; only
 // middle alignment puts a single-line row on one visual midline.
-const cell = "overflow-hidden align-middle"
+const cell = "align-middle"
 
 export function HistoryPanel({
   history,
@@ -424,14 +389,6 @@ export function HistoryPanel({
   const [clearing, setClearing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState(query.q)
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set())
-  const historyID = useId()
-  const toggleRow = (key: string) => setExpandedRows(current => {
-    const next = new Set(current)
-    if (next.has(key)) next.delete(key)
-    else next.add(key)
-    return next
-  })
   // Eleven columns cannot fit a phone, so narrow viewports get a card list with
   // the same facts stacked instead of a sideways-scrolling table.
   const narrow = useNarrowViewport()
@@ -557,35 +514,31 @@ export function HistoryPanel({
           </div>
         ) : (
           <div className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
-            {/* Fixed columns keep long names and expanded details from changing
-                the layout of every other row. Small screens scroll this table. */}
-            <Table className="min-w-[1160px] table-fixed [&_td]:px-2.5 [&_th]:px-2.5">
+            {/* Eleven columns: slightly tighter cell padding keeps failover rows
+                (trace badges, wrapped errors) inside 1400px without scrolling. */}
+            <Table className="[&_td]:px-2.5 [&_th]:px-2.5">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[10%]">时间</TableHead>
-                  <TableHead className="w-[20%]">模型</TableHead>
-                  <TableHead className="w-[6%]">账号</TableHead>
-                  <TableHead className="w-[10%]">实际上游</TableHead>
-                  <TableHead className="w-[15%]">背后模型</TableHead>
-                  <TableHead className="w-[6%]" title="首个思考、正文或工具调用到达的时间">
+                  <TableHead className="w-28">时间</TableHead>
+                  <TableHead className="min-w-48">模型</TableHead>
+                  <TableHead className="w-20">账号</TableHead>
+                  <TableHead className="w-32">实际上游</TableHead>
+                  <TableHead className="min-w-44">背后模型</TableHead>
+                  <TableHead className="w-20" title="首个思考、正文或工具调用到达的时间">
                     首字
                   </TableHead>
-                  <TableHead className="w-[6%]">总耗时</TableHead>
-                  <TableHead className="w-[9%]">Token</TableHead>
-                  <TableHead className="w-[8%]">费用</TableHead>
-                  <TableHead className="w-[5%]" title="实际转发给上游的思考强度；「客户端→上游」表示强度经过映射">
+                  <TableHead className="w-20">总耗时</TableHead>
+                  <TableHead className="min-w-28">Token</TableHead>
+                  <TableHead className="w-24">费用</TableHead>
+                  <TableHead className="w-20" title="实际转发给上游的思考强度；「客户端→上游」表示强度经过映射">
                     强度
                   </TableHead>
-                  <TableHead className="w-[5%]">方式</TableHead>
+                  <TableHead className="w-20">方式</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {history.map((item, index) => {
-                  const rowKey = item.id ?? `${item.ts}-${item.model}-${index}`
-                  const expanded = expandedRows.has(rowKey)
-                  const detailsID = `${historyID}-${index}`
-                  return <Fragment key={rowKey}>
-                  <TableRow>
+                {history.map((item, index) => (
+                  <TableRow key={item.id ?? `${item.ts}-${item.model}-${index}`}>
                     <TableCell
                       className={cn(cell, "text-muted-foreground text-xs")}
                       title={item.session ? `会话 ${item.session}` : undefined}
@@ -593,8 +546,9 @@ export function HistoryPanel({
                       {formatTime(item.ts)}
                     </TableCell>
                     <TableCell className={cell}>
-                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                        <span className="min-w-0 truncate font-mono text-xs" title={item.model}>{item.model}</span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono text-xs">{item.model}</span>
+                        <RoutingPolicy item={item} />
                         {item.kind === "compact" && (
                           <Badge variant="secondary" className={chipClass}>
                             压缩
@@ -623,14 +577,24 @@ export function HistoryPanel({
                           </Badge>
                         ) : null}
                       </div>
-                      {hasHistoryDetails(item) && <div className="mt-1"><HistoryDetailsToggle item={item} expanded={expanded} detailsID={detailsID} onToggle={() => toggleRow(rowKey)} /></div>}
+                      {item.error && (
+                        // Upstream errors can be ~1k chars of JSON; unwrapped they
+                        // stretch this column and push the rest of the table out
+                        // of view.
+                        <div
+                          className="text-destructive mt-1 line-clamp-3 max-w-60 text-2xs whitespace-normal wrap-anywhere"
+                          title={item.error}
+                        >
+                          {item.error}
+                        </div>
+                      )}
                     </TableCell>
-                    <TableCell className={cell}><span className="block truncate" title={item.account}>{item.account || <Dash />}</span></TableCell>
+                    <TableCell className={cell}>{item.account || <Dash />}</TableCell>
                     <TableCell className={cn(cell, "whitespace-normal")}>
                       {actualProvider(item) && (
-                        <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1">
-                          <Badge variant="outline" className={cn(chipClass, "max-w-full")}>
-                            <ProviderName slug={actualProvider(item)} className="min-w-0 truncate" />
+                        <span className="inline-flex flex-wrap items-center gap-1">
+                          <Badge variant="outline" className={chipClass}>
+                            <ProviderName slug={actualProvider(item)} />
                           </Badge>
                           {item.fallback && (
                             <Badge
@@ -644,10 +608,24 @@ export function HistoryPanel({
                           <GatewayAttemptsBadge attempts={item.gatewayAttempts} />
                         </span>
                       )}
-                      {!actualProvider(item) && <Dash />}
+                      {/* A failed request has no winning provider; the attempt
+                          badges already say which upstream was tried. */}
+                      {hasFailover(item) ? (
+                        <div className={actualProvider(item) ? "mt-1.5" : undefined}>
+                          {item.trace?.length ? (
+                            <TraceList trace={item.trace} compact />
+                          ) : (
+                            <span className="text-muted-foreground font-mono text-2xs">
+                              {item.attempts?.join(" → ")}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        !actualProvider(item) && <Dash />
+                      )}
                     </TableCell>
                     <TableCell className={cn(cell, "text-muted-foreground font-mono text-xs")}>
-                      <span className="block truncate" title={item.canonical}>{item.canonical || <Dash />}</span>
+                      {item.canonical || <Dash />}
                     </TableCell>
                     <TableCell className={cn(cell, "font-mono text-xs tabular-nums")}>
                       {item.ttftMs === undefined || item.ttftMs === null ? <Dash /> : shortDuration(item.ttftMs)}
@@ -674,9 +652,7 @@ export function HistoryPanel({
                       </Badge>
                     </TableCell>
                   </TableRow>
-                  {expanded && <TableRow className="bg-muted/20 hover:bg-muted/20"><TableCell colSpan={11} className="px-4! py-3 whitespace-normal"><HistoryDetails item={item} id={detailsID} /></TableCell></TableRow>}
-                  </Fragment>
-                })}
+                ))}
               </TableBody>
             </Table>
           </div>
