@@ -2,7 +2,9 @@ package responses
 
 import "github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 
-// Only explicitly indexed per-provider usage can establish final context size.
+// Only explicitly indexed per-provider usage identifies a measured final-leg
+// prompt. A leg index alone gives a round count, not that leg's token usage;
+// hidden server-tool results also need not persist in the client's next turn.
 func finalLegUsage(root map[string]any) (map[string]any, int) {
 	var result map[string]any
 	best := -1

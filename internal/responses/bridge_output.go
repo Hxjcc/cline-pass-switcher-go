@@ -65,12 +65,14 @@ func textFromParts(content any) string {
 	return builder.String()
 }
 
-// reportedUsage is the usage object Codex uses to decide whether the context
-// window is full. Each gateway server tool (a search, for example) runs its own
-// internal leg and adds that leg's prompt tokens onto the final usage, so the
-// client-visible input is the reported sum divided by the number of legs.
-// Output tokens stay as reported: they are not what trips compaction. History
-// keeps the raw sum, because that is what the gateway bills.
+// reportedUsage supplies Codex's last-response token counter. A gateway can
+// sum prompt usage over several internal model legs. Without per-leg usage,
+// their average is only a reference; it is neither a measured final-leg prompt
+// nor the exact context retained by the client after hidden tool results leave
+// the turn. An explicit loop index is more reliable than counting tool calls,
+// since a single model leg can request several tools in parallel.
+// Output tokens stay as reported and contribute to the client's total too.
+// Billing and history use the unmodified upstream usage, never this estimate.
 func reportedUsage(value any, legs int, inputCap int64) any {
 	usage := jsonx.Map(value)
 	if usage == nil {
@@ -101,11 +103,11 @@ func reportedUsage(value any, legs int, inputCap int64) any {
 
 // gatewayToolCallCounts reads provider_metadata.gateway.gatewayToolCalls.
 // The gateway reports a count per server tool it ran inside its own loop, as
-// {"exa_search": 2}. Each of those calls is an extra model leg whose prompt
-// tokens are included in the same usage object, so the client-visible input has
-// to be divided by calls+1. Counts are cumulative, so per-tool maxima are what
-// merge across chunks. An array is counted by length and a bare number as
-// itself, so a payload change cannot silently zero the count.
+// {"exa_search": 2}. These counts are a fallback estimate of extra model legs:
+// parallel tools can share a leg, so explicit loop indexes take precedence.
+// Counts are cumulative, so per-tool maxima merge across chunks. An array is
+// counted by length and a bare number as itself, so a payload change cannot
+// silently zero the count.
 func gatewayToolCallCounts(root map[string]any) (map[string]int, int) {
 	byName := map[string]int{}
 	loose := 0

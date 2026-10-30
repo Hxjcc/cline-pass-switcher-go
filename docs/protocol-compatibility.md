@@ -10,7 +10,7 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 
 压缩摘要和工具摘录以带有“不可信历史材料”说明的普通消息重放，不拼接进系统指令。历史材料不能覆盖系统、开发者指令或最新用户请求。
 
-多 leg 搜索优先使用上游明确标注 `toolLoopLegIndex` 的最后一轮成功 provider attempt 的 `usage` 计算上下文输入量；缺少实际数据时仍使用平均估算，并通过 `usage.input_tokens_details.context_usage_estimated:true` 标明。实际费用和历史记账继续使用上游累计 usage，不受上下文估算影响。
+多 leg 搜索只在上游明确提供带 `toolLoopLegIndex` 的最后一轮成功 provider attempt 的独立 `usage` 时使用其输入量；轮次编号本身不等于逐轮用量。缺少独立用量时使用平均估算，并通过 `usage.input_tokens_details.context_usage_estimated:true` 标明。2026-10-31 对 Cline Pass 的实际请求只有累计 usage 和轮次编号，因此走的是估算路径。实际费用和历史记账继续使用上游累计 usage，不受上下文估算影响。详见[真实用量观测](usage-observations.md)。
 
 ## Codex 模型能力目录
 
@@ -105,7 +105,9 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 
 ### 用量
 
-返回给客户端的 `usage` 优先使用上游明确提供的最后一轮实际输入及缓存 token。缺少实际数据时，网关把累计输入和缓存 token 除以内部轮次数，并且不超过模型的上下文长度，同时标记 `input_tokens_details.context_usage_estimated:true`。该估算用于客户端的压缩判断；输出 token 不折算。
+返回给客户端的 `usage` 优先使用上游明确提供的最后一轮独立输入及缓存 token。缺少实际数据时，网关把累计输入和缓存 token 除以内部模型轮次数，并且不超过模型的上下文长度，同时标记 `input_tokens_details.context_usage_estimated:true`。一轮可并行执行多个工具，因此优先按 `toolLoopLegIndex` 判断模型轮次数，只有缺少编号时才按工具调用数回退估算。
+
+该输入量仅供客户端压缩判断参考，不是精确的客户端历史大小。上游内部搜索材料可能在本次推理结束后就不再进入客户端的下一轮请求。输出 token 保持累计值，也会进入 Codex 的本轮总 token 计数。`context_usage_estimated` 是 API 扩展标记；实测 Codex 0.166 系列的 tokenUsage 事件只保留数值，不能依赖它在界面显示“估算”。
 
 请求历史里记录的是上游的原始用量和费用，所以两边的数字可能不同。
 

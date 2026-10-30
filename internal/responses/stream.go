@@ -162,9 +162,9 @@ type StreamState struct {
 	droppedTools        int
 	toolValidationError string
 	itemStatus          string
-	// rawUsage is the upstream usage object. The gateway tool counters are the
-	// legs it ran inside its own loop; the client-facing usage divides the
-	// summed prompt by those legs plus the final answer.
+	// rawUsage stays on the upstream's cumulative basis. Client-facing input
+	// prefers explicit final-leg usage; otherwise the loop metadata supplies a
+	// leg count for an average estimate. Parallel tools can share one leg.
 	rawUsage           any
 	gatewayToolCalls   map[string]int
 	gatewayLooseCalls  int

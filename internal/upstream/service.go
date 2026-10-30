@@ -1201,12 +1201,16 @@ func (s *Service) StartStreamAttempt(ctx context.Context, modelID string, body m
 		if response.StatusCode == http.StatusOK && hasChoices(parsed) {
 			s.noteAccountStatus(account, http.StatusOK)
 			s.observeStick(ctx, account, attempt.Upstream, http.StatusOK)
+			// A buffered Cline completion can be wrapped in {success,data}.
+			// Streaming fallback consumers expect choices on the returned body,
+			// just as the non-streaming path does.
+			completion := responseBody(parsed)
 			return StreamAttemptResult{
 				Status:  response.StatusCode,
 				Header:  response.Header.Clone(),
-				Out:     parsed,
+				Out:     completion,
 				Account: account,
-				Usage:   responseBody(parsed)["usage"],
+				Usage:   completion["usage"],
 			}
 		}
 		details, found := apierr.FromBody(parsed, response.StatusCode)
