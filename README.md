@@ -42,7 +42,7 @@ docker compose up -d --build
 
 ### 源码编译运行
 
-使用 Go 1.26.10（或 1.27.3 及以上）；构建前端使用 Node.js 24.22.1 及 npm，与 CI 和 Docker 保持一致。
+使用 Go 1.26.10（或 1.27.3 及以上）；构建前端使用 Node.js 26.12.1 及 npm，与 CI 和 Docker 保持一致。
 
 ```bash
 cd web
