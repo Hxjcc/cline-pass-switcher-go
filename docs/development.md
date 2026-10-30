@@ -22,8 +22,8 @@ CI 在现有格式检查、vet、测试和 race 检查之外运行 staticcheck�
 
 ## 环境要求
 
-- Go 1.26.10（或 1.27.3 及以上）。`go.mod` 要求最低 1.26.10，CI 从该文件读取版本，Docker 使用 1.26.10。
-- Node.js 24.22.1 与 npm，仅构建、开发或测试前端时需要。CI 和 Docker 使用同一版本。
+- Go 1.26.10（或 1.27.3 及以上）。`go.mod` 要求最低 1.26.10，CI 从该文件读取版本，Docker 构建版本固定在 `Dockerfile` 中。
+- Node.js 26.12.1 与 npm，仅构建、开发或测试前端时需要。CI、前端产物同步任务和 Docker 使用同一版本。
 
 上述版本包含 eMudhra 证书信任风险（[CVE-2026-111943](https://pkg.go.dev/vuln/GO-2026-6809)）和 [Node.js 2026 年 10 月安全更新](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)的修复。Docker 运行镜像要求 `ca-certificates` 和 `ca-certificates-bundle` 至少为 `20261020-r0`。升级构建工具后需要重新编译和部署，已有二进制不会自动获得修复。
 
