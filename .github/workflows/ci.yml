@@ -82,6 +82,10 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
+      # Exercise the frontend built from this revision, including dependency
+      # PRs whose checked-in dist still belongs to the base branch.
+      - run: npm run build
+        working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
       # Boots the real binary (temporary data directory, admin key from the
