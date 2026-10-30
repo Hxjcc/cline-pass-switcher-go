@@ -4,6 +4,14 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 
 网关不在服务端保存会话：每个请求都要带上完整的对话历史，响应中的 `store` 恒为 `false`。
 
+`store:true` 仍转换为 `false`。请求中的 `truncation:auto`、不支持的 `include` 值、`max_tool_calls` 会返回 400（`unsupported_feature`，包含 `param`），不会回显为已经生效。`truncation:disabled`、空 `include` 和 `include:["reasoning.encrypted_content"]` 可用。后者把 Chat 上游实际返回的可读推理封装为本代理可重放的 AES-GCM 加密内容，支持只携带加密项的后续请求；它不是 OpenAI 私有模型状态，不能跨提供商互换。加密项绑定到签发客户端密钥的身份，代理主密钥使用独立 scope。`max_tool_calls` 对应上游托管工具预算，不是客户端函数工具的通用次数限制。
+
+`strict:true` 的函数工具会在本地编译 JSON Schema，并在返回完整工具调用前检查字段、类型、枚举等约束。错误 Schema 在请求阶段返回 400（`invalid_tool_schema`）；上游生成参数不符合 Schema 时，缓冲响应返回 502，Responses 流返回 `response.failed`（`upstream_tool_schema_validation_failed`），不会发出该调用的完成事件或参数正文。Chat 严格工具流会先缓冲校验，再返回 SSE；这会延迟首个事件。custom grammar 仍属于明确的兼容限制：原始定义作为提示传递，不承诺 grammar 约束采样或语法验证。
+
+压缩摘要和工具摘录以带有“不可信历史材料”说明的普通消息重放，不拼接进系统指令。历史材料不能覆盖系统、开发者指令或最新用户请求。
+
+多 leg 搜索优先使用上游明确标注 `toolLoopLegIndex` 的最后一轮成功 provider attempt 的 `usage` 计算上下文输入量；缺少实际数据时仍使用平均估算，并通过 `usage.input_tokens_details.context_usage_estimated:true` 标明。实际费用和历史记账继续使用上游累计 usage，不受上下文估算影响。
+
 ## Codex 模型能力目录
 
 `GET /v1/models` 同时返回 OpenAI 格式的 `data` 和 Codex 原生格式的 `models`，两者使用同一份订阅列表。Codex 配置中的 `model_providers.<id>.model_catalog_url` 应指向这个完整地址，并使用同一 provider 的代理密钥认证，示例见 [README](../README.md#codex-cli--codex-桌面版)。
@@ -97,7 +105,7 @@ Cline Pass 上游只提供 Chat Completions 接口。Codex 等客户端使用的
 
 ### 用量
 
-返回给客户端的 `usage` 会按轮次折算：当网关在一次请求内部执行了多轮搜索或工具调用时，上游账单会把每一轮的输入 token 累加起来。网关把输入 token 和缓存 token 除以内部轮次数，并且不超过模型的上下文长度，避免 Codex 误以为上下文暴涨而提前压缩。输出 token 不折算。
+返回给客户端的 `usage` 优先使用上游明确提供的最后一轮实际输入及缓存 token。缺少实际数据时，网关把累计输入和缓存 token 除以内部轮次数，并且不超过模型的上下文长度，同时标记 `input_tokens_details.context_usage_estimated:true`。该估算用于客户端的压缩判断；输出 token 不折算。
 
 请求历史里记录的是上游的原始用量和费用，所以两边的数字可能不同。
 

@@ -350,14 +350,14 @@ func TestToChatRestoresCompactionEnvelopeAndIgnoresAdditionalTools(t *testing.T)
 		t.Fatal(err)
 	}
 	messages := jsonx.Slice(chat["messages"])
-	if len(messages) != 2 {
+	if len(messages) != 3 {
 		raw, _ := json.Marshal(messages)
 		t.Fatalf("expected compaction summary and user message, got %s", raw)
 	}
-	if jsonx.Map(messages[0])["role"] != "system" || !strings.Contains(jsonx.String(jsonx.Map(messages[0])["content"]), "condensed history") {
-		t.Fatalf("compaction summary was not restored: %#v", messages[0])
+	if jsonx.Map(messages[1])["role"] != "user" || !strings.Contains(jsonx.String(jsonx.Map(messages[1])["content"]), "condensed history") {
+		t.Fatalf("compaction summary was not restored as untrusted data: %#v", messages[1])
 	}
-	if jsonx.Map(messages[1])["role"] != "user" || jsonx.Map(messages[1])["content"] != "continue" {
+	if jsonx.Map(messages[2])["role"] != "user" || jsonx.Map(messages[2])["content"] != "continue" {
 		t.Fatalf("additional_tools should not become a user message: %#v", messages)
 	}
 }
@@ -2164,11 +2164,11 @@ func TestCompactionChatTreatsPreviousSummaryAsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := jsonx.Slice(chat["messages"])
-	if len(messages) < 3 || !strings.HasPrefix(jsonx.String(jsonx.Map(messages[1])["content"]), "Create a concise handoff summary") {
+	if len(messages) < 4 || !strings.HasPrefix(jsonx.String(jsonx.Map(messages[2])["content"]), "Create a concise handoff summary") {
 		t.Fatalf("new summary instructions are not the first history boundary: %#v", messages)
 	}
 	foundOld := false
-	for _, raw := range messages[2:] {
+	for _, raw := range messages[3:] {
 		content := jsonx.String(jsonx.Map(raw)["content"])
 		if strings.Contains(content, "OLD SUMMARY") {
 			foundOld = true

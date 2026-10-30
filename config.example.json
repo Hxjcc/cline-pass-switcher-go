@@ -1,10 +1,13 @@
 {
   "port": 3123,
   "proxyKey": "",
+  "adminKey": "",
   "publicBaseUrl": "",
   "strictToolHistory": false,
   "maxConcurrentRequests": 128,
   "maxConcurrentRequestsPerKey": 8,
+  "maxRequestBytes": 16777216,
+  "maxConcurrentDecodes": 4,
   "webSearchUpstream": "",
   "webFetchUpstream": "",
   "upstreamBase": "https://api.cline.bot/api/v1",

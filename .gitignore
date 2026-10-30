@@ -3,6 +3,7 @@ config.json
 metadata.json
 store.journal
 .store.lock
+reasoning.key
 data/
 *.tmp
 .env

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { HistoryPanel } from "./history-panel"
@@ -11,6 +11,8 @@ afterEach(() => {
   localStorage.removeItem(LEGACY_HISTORY_COLUMNS_STORAGE)
   localStorage.removeItem(PREVIOUS_HISTORY_COLUMNS_STORAGE)
   localStorage.removeItem(HISTORY_COLUMN_ORDER_STORAGE)
+  localStorage.removeItem("cline-pass-switcher-history-auto-refresh")
+  vi.useRealTimers()
 })
 
 const noop = async () => {}
@@ -274,6 +276,37 @@ test("pending filtering blocks paging until the new query lands", () => {
   renderPanel([entry], { pending: true, hasMore: true })
   expect(screen.getByText("刷新中…")).toBeTruthy()
   expect((screen.getByRole("button", { name: /加载更多/ }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+test("a hidden mounted history pauses refresh and resumes its unfinished search", async () => {
+  vi.useFakeTimers()
+  localStorage.setItem("cline-pass-switcher-history-auto-refresh", "1")
+  const onRefresh = vi.fn(noop)
+  const onQueryChange = vi.fn()
+  const panel = (active: boolean) => <TooltipProvider><HistoryPanel active={active} history={[entry]} total={1} hasMore={false}
+    query={{ q: "", onlyErrors: false }} onQueryChange={onQueryChange} onRefresh={onRefresh} onLoadMore={noop} onClear={noop} /></TooltipProvider>
+  const view = render(panel(true))
+  await act(() => vi.advanceTimersByTimeAsync(5000))
+  expect(onRefresh).toHaveBeenCalledTimes(1)
+  fireEvent.change(screen.getByRole("textbox", { name: "筛选请求历史" }), { target: { value: "unfinished filter" } })
+  view.rerender(panel(false))
+  await act(() => vi.advanceTimersByTimeAsync(10_000))
+  expect(onRefresh).toHaveBeenCalledTimes(1)
+  expect(onQueryChange).not.toHaveBeenCalled()
+  view.rerender(panel(true))
+  expect((screen.getByRole("textbox", { name: "筛选请求历史" }) as HTMLInputElement).value).toBe("unfinished filter")
+  await act(() => vi.advanceTimersByTimeAsync(5000))
+  expect(onRefresh).toHaveBeenCalledTimes(2)
+  expect(onQueryChange).toHaveBeenCalledWith({ q: "unfinished filter", onlyErrors: false })
+})
+
+test("a hidden mounted history removes its details overlay", async () => {
+  const panel = (active: boolean) => <TooltipProvider><HistoryPanel active={active} history={[entry]} total={1} hasMore={false}
+    query={{ q: "", onlyErrors: false }} onQueryChange={() => {}} onRefresh={noop} onLoadMore={noop} onClear={noop} /></TooltipProvider>
+  const view = render(panel(true))
+  await openDetails()
+  view.rerender(panel(false))
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "请求详情" })).toBeNull())
 })
 
 test("phone cards respect selected fields and open the same details", async () => {

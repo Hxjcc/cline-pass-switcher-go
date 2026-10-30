@@ -48,8 +48,8 @@
 | 环境变量 | `config.json` 字段 | 默认值 | 说明 |
 |---|---|---|---|
 | `PORT` | `port` | `3123` | 监听端口，取值 1–65535，超出范围时回到 `3123`。控制台不能修改。 |
-| `PROXY_KEY` | `proxyKey` | 空 | 代理主密钥。设置后，模型接口要求 `Authorization: Bearer <密钥>`。未设置 `ADMIN_KEY` 时，它同时是控制台的登录密钥。 |
-| `ADMIN_KEY` | `adminKey` | 空 | 管理密钥。设置后，控制台和 `/api/*` 只接受这个密钥，`PROXY_KEY` 和签发的代理密钥都不能再打开控制台。留空时沿用 `PROXY_KEY`。 |
+| `PROXY_KEY` | `proxyKey` | 空 | 代理主密钥。模型接口接受 `Authorization: Bearer <密钥>`。未设置独立 `ADMIN_KEY` 时，仅本机控制台允许回退到此密钥。 |
+| `ADMIN_KEY` | `adminKey` | 空 | 公网管理必须设置独立管理密钥，且与代理主密钥和签发密钥不同。设置公开地址或签发共享客户端密钥时，管理接口强制检查独立性。旧配置缺少独立密钥时，可以通过本机控制台或环境变量修复。 |
 | `PUBLIC_BASE_URL` | `publicBaseUrl` | 空 | 对外访问地址，例如 `https://cline.example.com`，末尾的 `/` 会被去掉。控制台显示的接入地址和启动日志都以它为准。放在做 HTTPS 终结的反向代理后面时**必须设置**，否则控制台的保存操作会被拒绝（HTTP 403），原因见[访问控制](operations.md#访问控制)。 |
 | `TRUSTED_PROXIES` | `trustedProxies` | 空 | 可信反向代理的 IP 或 CIDR，逗号分隔。来自这些地址的 `X-Forwarded-For` / `X-Real-IP` 会被采信，用于两件事：没有设置密钥时判断请求是否来自本机；认证失败限流按真实客户端 IP 分别计数。只填反代实际使用的地址，不要填整段私网网段。控制台不能修改。 |
 | `TRUST_LOCAL_PORT_FORWARD` | `trustLocalPortForward` | `false`（Compose 中为 `1`） | 声明"非回环地址的连接只可能来自宿主机回环端口映射"。只在某个接口没有设置密钥时起作用：这类连接会被当作本机访问，但仍要求 Host 头是 `localhost` 或回环 IP。端口一旦对外暴露，就必须关闭它并设置密钥。控制台不能修改。 |
@@ -92,8 +92,12 @@
 |---|---|---|---|
 | `MAX_CONCURRENT_REQUESTS` | `maxConcurrentRequests` | `128` | 所有客户端同时在途的生成请求上限，取值 1–4096。 |
 | `MAX_CONCURRENT_REQUESTS_PER_KEY` | `maxConcurrentRequestsPerKey` | `8` | 单个签发密钥同时在途的生成请求上限；主密钥共享一个桶，取值 1–1024。 |
+| `MAX_REQUEST_BYTES` | `maxRequestBytes` | `16777216` | 请求体字节上限，默认 16 MiB，最大 64 MiB；同时检查 Content-Length 和实际读取字节数，超限返回 413。 |
+| `MAX_CONCURRENT_DECODES` | `maxConcurrentDecodes` | `4` | 解码并发上限，取值 1–32；Responses 和 Chat 工具 Schema 编译、Responses 转换也计入，超限立即返回 429（`decode_concurrency_limit`）。 |
 
 模型列表和只读管理接口不计入生成并发。两层上限在启动时读取，修改后需要重启。
+
+请求体与解码上限也在启动时读取，修改后需要重启。模型 ID、`prompt_cache_key`、`safety_identifier` 最多 256 个字符；严格函数工具的单份 Schema 最多 256 KiB，禁止外部引用。
 
 共享 Responses 流按上游生成任务计数：重复订阅和断线重连复用同一名额；客户端断线后，名额保留到上游任务结束。缓冲响应、严格结构化输出和压缩请求分别占用名额。
 
@@ -174,7 +178,7 @@ Compose 与程序默认值不同的地方：
 | `WEB_FETCH_UPSTREAM` | `browserbase_fetch` | 同上。 |
 | `SHELL_COMPAT_ENFORCE` | `false` | 总会传入，所以运行参数表中它的来源显示为 `env`。 |
 
-Compose 只把以下变量从 `.env` 传进容器：`PROXY_KEY`、`ADMIN_KEY`、`PUBLIC_BASE_URL`、`TRUSTED_PROXIES`、`WEB_SEARCH_UPSTREAM`、`WEB_FETCH_UPSTREAM`、`STICK_TTL`、`SCHEMA_FAIL_DUMP`、`SHELL_COMPAT`、`SHELL_COMPAT_ENFORCE`、`COMPACTION_RECENT_TOKENS`、`COMPACTION_REASONING_EFFORT`、`COMPACTION_MIN_OUTPUT_TOKENS`、`MAX_CONCURRENT_REQUESTS`、`MAX_CONCURRENT_REQUESTS_PER_KEY`，外加入口脚本读取的 `PUID`、`PGID`。`PORT`、`CLINE_PASS_KEY`、`STRICT_TOOL_HISTORY` 写在 `.env` 里不会生效；需要时请停止容器，改 `data/config.json` 里的对应字段。
+Compose 只把以下变量从 `.env` 传进容器：`PROXY_KEY`、`ADMIN_KEY`、`PUBLIC_BASE_URL`、`TRUSTED_PROXIES`、`WEB_SEARCH_UPSTREAM`、`WEB_FETCH_UPSTREAM`、`STICK_TTL`、`SCHEMA_FAIL_DUMP`、`SHELL_COMPAT`、`SHELL_COMPAT_ENFORCE`、`COMPACTION_RECENT_TOKENS`、`COMPACTION_REASONING_EFFORT`、`COMPACTION_MIN_OUTPUT_TOKENS`、`MAX_CONCURRENT_REQUESTS`、`MAX_CONCURRENT_REQUESTS_PER_KEY`、`MAX_REQUEST_BYTES`、`MAX_CONCURRENT_DECODES`，外加入口脚本读取的 `PUID`、`PGID`。`PORT`、`CLINE_PASS_KEY`、`STRICT_TOOL_HISTORY` 写在 `.env` 里不会生效；需要时请停止容器，改 `data/config.json` 里的对应字段。
 
 `VERSION` 是构建参数，不会进入运行环境；设置后 Compose 会把它注入二进制，启动日志和上游 `User-Agent` 会显示该版本。
 

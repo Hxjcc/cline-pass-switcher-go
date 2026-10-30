@@ -22,6 +22,23 @@ func unsupported(param, capability string) error {
 }
 
 func validateRequestCapabilities(body map[string]any) error {
+	if value := body["truncation"]; value != nil && value != "disabled" {
+		return unsupported("truncation", "automatic input truncation; use truncation:disabled and compact the conversation explicitly")
+	}
+	if body["max_tool_calls"] != nil {
+		return unsupported("max_tool_calls", "a built-in tool execution limit controlled by the upstream gateway")
+	}
+	if value := body["include"]; value != nil {
+		items, ok := value.([]any)
+		if !ok {
+			return unsupported("include", "additional response data selection")
+		}
+		for _, item := range items {
+			if item != "reasoning.encrypted_content" {
+				return unsupported("include", "requested additional response data")
+			}
+		}
+	}
 	if body["conversation"] != nil {
 		return unsupported("conversation", "server-side conversation state; send the full conversation in input")
 	}
@@ -115,6 +132,9 @@ func validateToolDefinitions(value any, path string, depth int) error {
 	if depth > 16 {
 		return unsupported(path, "tool namespace nesting deeper than 16 levels")
 	}
+	if len(jsonx.Slice(value)) > 256 {
+		return unsupported(path, "more than 256 tools per namespace")
+	}
 	for index, raw := range jsonx.Slice(value) {
 		tool := jsonx.Map(raw)
 		if tool == nil {
@@ -124,6 +144,11 @@ func validateToolDefinitions(value any, path string, depth int) error {
 			continue
 		}
 		field := fmt.Sprintf("%s[%d]", path, index)
+		if strict, found := tool["strict"]; found {
+			if _, ok := strict.(bool); !ok {
+				return &RequestError{Param: field + ".strict", Message: "tool strict must be a boolean"}
+			}
+		}
 		switch kind := jsonx.String(tool["type"]); kind {
 		case "", "function", "custom", "local_shell":
 		case "namespace":

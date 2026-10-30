@@ -4,7 +4,7 @@ import type { HistoryItem } from "@/types"
 
 // Measure real cell widths rather than shortening values or estimating model
 // names. Responsive omissions are local to this layout, never saved preferences.
-export function useHistoryLayout(preferred: ReadonlySet<HistoryColumn>, history: HistoryItem[], narrow: boolean) {
+export function useHistoryLayout(preferred: ReadonlySet<HistoryColumn>, history: HistoryItem[], narrow: boolean, active = true) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   const key = [...preferred].join(",")
@@ -16,17 +16,17 @@ export function useHistoryLayout(preferred: ReadonlySet<HistoryColumn>, history:
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
-    if (!viewport) return
-    const measure = () => setWidth(viewport.clientWidth)
+    if (!viewport || !active) return
+    const measure = () => { if (viewport.clientWidth > 0) setWidth(viewport.clientWidth) }
     measure()
     if (typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver(measure)
     observer.observe(viewport)
     return () => observer.disconnect()
-  }, [])
+  }, [active])
 
   useLayoutEffect(() => {
-    if (narrow || width <= 0 || cards) return
+    if (!active || narrow || width <= 0 || cards) return
     const table = viewportRef.current?.querySelector("table")
     if (!table) return
     const next = current ? [...layout.collapsed] : []
@@ -42,7 +42,7 @@ export function useHistoryLayout(preferred: ReadonlySet<HistoryColumn>, history:
     if (!current || next.join(",") !== layout.collapsed.join(",") || useCards !== layout.cards) {
       setLayout({ key, width, collapsed: next, cards: useCards })
     }
-  }, [preferred, history, narrow, width, key, current, layout, cards])
+  }, [preferred, history, narrow, width, key, current, layout, cards, active])
 
   return { viewportRef, visibleColumns, collapsedColumns, cards }
 }

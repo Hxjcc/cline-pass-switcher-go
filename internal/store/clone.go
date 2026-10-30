@@ -119,6 +119,11 @@ func cloneModelMeta(meta model.ModelMeta) model.ModelMeta {
 }
 
 func cloneHistoryEntry(entry model.HistoryEntry) model.HistoryEntry {
+	if entry.Tools != nil {
+		v := *entry.Tools
+		v.Names = maps.Clone(v.Names)
+		entry.Tools = &v
+	}
 	entry.GatewayHas = slices.Clone(entry.GatewayHas)
 	entry.TargetProviders = slices.Clone(entry.TargetProviders)
 	entry.Attempts = slices.Clone(entry.Attempts)

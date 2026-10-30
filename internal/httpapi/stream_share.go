@@ -43,6 +43,12 @@ func newStreamShareHub() *streamShareHub {
 	return &streamShareHub{jobs: map[string]*sharedResponsesStream{}, budget: &replayBudget{limits: defaultReplayLimits()}}
 }
 
+func newStreamShareHubInDirectory(dir string) *streamShareHub {
+	h := newStreamShareHub()
+	h.budget.limits.tempDir = dir
+	return h
+}
+
 // close cancels every run and makes later runs start cancelled, so a
 // shutdown only waits for the runs to record what they have.
 func (h *streamShareHub) close() {

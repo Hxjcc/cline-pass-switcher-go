@@ -26,7 +26,7 @@ func sendKey(t *testing.T, server *Server, remote, key string) *httptest.Respons
 func newThrottleServer(t *testing.T) (*Server, *time.Time) {
 	t.Helper()
 	st, server := newTestServer(t)
-	if err := st.UpdateConfig(func(c *model.Config) { c.ProxyKey = "correct-key" }); err != nil {
+	if err := st.UpdateConfig(func(c *model.Config) { c.ProxyKey = "correct-key"; c.AdminKey = "admin-key" }); err != nil {
 		t.Fatal(err)
 	}
 	clock := time.Now()
@@ -53,7 +53,7 @@ func TestProxyKeyGuessingIsThrottled(t *testing.T) {
 
 	// Once the budget is spent the address is refused *before* the key is
 	// compared, so guessing cannot continue at full speed.
-	blocked := sendKey(t, server, remote, "correct-key")
+	blocked := sendKey(t, server, remote, "admin-key")
 	if blocked.Code != http.StatusTooManyRequests {
 		t.Fatalf("throttled attempt: got %d, want 429", blocked.Code)
 	}
@@ -63,13 +63,13 @@ func TestProxyKeyGuessingIsThrottled(t *testing.T) {
 	}
 
 	// Another source address keeps its own budget.
-	if other := sendKey(t, server, "198.51.100.9:4444", "correct-key"); other.Code != http.StatusOK {
+	if other := sendKey(t, server, "198.51.100.9:4444", "admin-key"); other.Code != http.StatusOK {
 		t.Fatalf("unrelated address: got %d, want 200", other.Code)
 	}
 
 	// After the cooldown the right key works again and clears the counter.
 	*clock = clock.Add(authInitialBlock + time.Second)
-	if recovered := sendKey(t, server, remote, "correct-key"); recovered.Code != http.StatusOK {
+	if recovered := sendKey(t, server, remote, "admin-key"); recovered.Code != http.StatusOK {
 		t.Fatalf("after cooldown: got %d, want 200", recovered.Code)
 	}
 	if again := sendKey(t, server, remote, "wrong-key"); again.Code != http.StatusUnauthorized {
@@ -86,7 +86,7 @@ func TestCorrectKeyClearsFailureCounter(t *testing.T) {
 			t.Fatalf("attempt %d: got %d", attempt, response.Code)
 		}
 	}
-	if response := sendKey(t, server, remote, "correct-key"); response.Code != http.StatusOK {
+	if response := sendKey(t, server, remote, "admin-key"); response.Code != http.StatusOK {
 		t.Fatalf("correct key should still be accepted below the limit: %d", response.Code)
 	}
 	// The successful call reset the counter, so the budget starts over instead
@@ -96,7 +96,7 @@ func TestCorrectKeyClearsFailureCounter(t *testing.T) {
 			t.Fatalf("attempt %d after reset: got %d, want 401", attempt, response.Code)
 		}
 	}
-	if response := sendKey(t, server, remote, "correct-key"); response.Code != http.StatusOK {
+	if response := sendKey(t, server, remote, "admin-key"); response.Code != http.StatusOK {
 		t.Fatalf("the reset counter should not have blocked yet: %d", response.Code)
 	}
 }
@@ -157,7 +157,7 @@ func TestMissingCredentialDoesNotSpendTheThrottleBudget(t *testing.T) {
 			t.Fatalf("attempt %d: got %d, want 401", attempt, response.Code)
 		}
 	}
-	if allowed := sendKey(t, server, remote, "correct-key"); allowed.Code != http.StatusOK {
+	if allowed := sendKey(t, server, remote, "admin-key"); allowed.Code != http.StatusOK {
 		t.Fatalf("logging in must still work after empty probes: %d %s", allowed.Code, allowed.Body)
 	}
 
@@ -165,7 +165,7 @@ func TestMissingCredentialDoesNotSpendTheThrottleBudget(t *testing.T) {
 	for attempt := 0; attempt < authFailureLimit; attempt++ {
 		sendKey(t, server, remote, "still-wrong")
 	}
-	if blocked := sendKey(t, server, remote, "correct-key"); blocked.Code != http.StatusTooManyRequests {
+	if blocked := sendKey(t, server, remote, "admin-key"); blocked.Code != http.StatusTooManyRequests {
 		t.Fatalf("wrong credentials must still trigger the cooldown: %d", blocked.Code)
 	}
 }
@@ -232,7 +232,7 @@ func TestAdminLoginCannotResetClientThrottle(t *testing.T) {
 		if response := sendClientKey(server, remote, "wrong-key"); response.Code != want {
 			t.Fatalf("client guess %d: got %d, want %d", attempt, response.Code, want)
 		}
-		if response := sendKey(t, server, remote, "correct-key"); response.Code != http.StatusOK {
+		if response := sendKey(t, server, remote, "admin-key"); response.Code != http.StatusOK {
 			t.Fatalf("client guessing locked out the console: %d", response.Code)
 		}
 	}

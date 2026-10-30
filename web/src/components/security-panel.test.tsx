@@ -63,3 +63,15 @@ test("copies either key while it is masked", async () => {
   expect((screen.getByLabelText("管理密钥（控制台）") as HTMLInputElement).type).toBe("password")
   expect((screen.getByLabelText("代理主密钥（客户端）") as HTMLInputElement).type).toBe("password")
 })
+
+test.each(["管理密钥（控制台）","代理主密钥（客户端）"])("confirms clearing %s",async (label) => {
+  const {onSave}=renderPanel()
+  fireEvent.change(screen.getByLabelText(label),{target:{value:""}})
+  fireEvent.click(screen.getByRole("button",{name:"保存设置"}))
+  expect(onSave).not.toHaveBeenCalled()
+  fireEvent.click(await screen.findByRole("button",{name:"取消"}))
+  expect(onSave).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button",{name:"保存设置"}))
+  fireEvent.click(await screen.findByRole("button",{name:"确认保存"}))
+  await vi.waitFor(()=>expect(onSave).toHaveBeenCalledTimes(1))
+})

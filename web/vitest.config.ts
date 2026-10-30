@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
   test: {
+    // vmThreads was benchmarked; forks was faster on the current suite.
+    // Recheck with --pool=vmThreads when the suite or runtime changes.
+    pool: "forks",
     environment: "jsdom",
     restoreMocks: true,
     clearMocks: true,

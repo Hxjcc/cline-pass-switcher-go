@@ -164,15 +164,20 @@ func ToCompactionChatWithOptions(body map[string]any, options Options) (map[stri
 	context.compactionRecent = tail
 
 	summaryInstructions := compactionInstructions
+	var toolTranscript string
 	if tailSelected {
 		if transcript := compactionToolTranscript(history[summaryEnd:]); transcript != "" {
-			summaryInstructions += "\n\nTool activity transcript (use it for Work State; exact excerpts):\n" + transcript
+			toolTranscript = transcript
 		}
 	}
+	summaryInstructions += "\n\n" + untrustedHistoryPolicy
 	prepared := make([]any, 0, len(messages)+2)
 	prepared = append(prepared, messages[:leading]...)
 	prepared = append(prepared, map[string]any{"role": "system", "content": summaryInstructions})
 	prepared = append(prepared, history[:summaryEnd]...)
+	if toolTranscript != "" {
+		prepared = append(prepared, untrustedToolTranscript(toolTranscript))
+	}
 	prepared = append(prepared, map[string]any{"role": "user", "content": compactionInstructions})
 	chat["messages"] = prepared
 	// Compaction inherits the session's maximum reasoning by default: a capped
@@ -882,7 +887,7 @@ func CompactionEnvelope(summary string) string {
 }
 
 func encodeCompactionPayload(payload CompactionPayload) string {
-	if len(payload.Recent) == 0 && !payload.Degraded {
+	if len(payload.Recent) == 0 && !payload.Degraded && strings.TrimSpace(payload.Summary) == payload.Summary && !strings.HasPrefix(payload.Summary, "{") {
 		// Keep the historical shape for plain summaries: other tooling that
 		// decodes the envelope as base64 text keeps working.
 		return compactionEnvelopePrefix + base64.StdEncoding.EncodeToString([]byte(payload.Summary))

@@ -37,6 +37,7 @@ type effectiveSettingView struct {
 // built-in default, which is exactly the question the console could not answer
 // before.
 func (s *Server) effectiveSettings() []effectiveSettingView {
+	cfg := s.store.Config()
 	fileKeys := s.store.ConfigFileKeys()
 	rows := make([]effectiveSettingView, 0, 13)
 
@@ -75,6 +76,8 @@ func (s *Server) effectiveSettings() []effectiveSettingView {
 		"MAX_CONCURRENT_REQUESTS", strconv.Itoa(s.store.MaxConcurrentRequests()))
 	add("maxConcurrentRequestsPerKey", "单密钥生成并发上限", "maxConcurrentRequestsPerKey",
 		"MAX_CONCURRENT_REQUESTS_PER_KEY", strconv.Itoa(s.store.MaxConcurrentRequestsPerKey()))
+	add("maxRequestBytes", "请求体上限（字节）", "maxRequestBytes", "MAX_REQUEST_BYTES", strconv.FormatInt(cfg.MaxRequestBytes, 10))
+	add("maxConcurrentDecodes", "解码与转换并发上限", "maxConcurrentDecodes", "MAX_CONCURRENT_DECODES", strconv.Itoa(cfg.MaxConcurrentDecodes))
 
 	// Credentials are reported as presence only: the console shows which layer
 	// supplied them without ever echoing the secret.

@@ -165,9 +165,8 @@ func (s *Store) ProxyKey() string {
 	return s.config.ProxyKey
 }
 
-// AdminKey is the console key. An empty value means the console keeps working
-// with the proxy key, which is how single-machine deployments have always
-// behaved.
+// AdminKey is the console credential. The HTTP guard restricts the proxy-key
+// fallback to local connections; remote access requires an independent key.
 func (s *Store) AdminKey() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -227,6 +226,7 @@ func (s *Store) KeyUsage() map[string]model.KeyUsage {
 // proxy key, the optional public console URL, and the explicit trust the
 // operator declared for unauthenticated local access.
 type AccessPolicy struct {
+	IndependentAdmin      bool
 	ProxyKey              string
 	AdminKey              string
 	AuthEnabled           bool
@@ -317,6 +317,7 @@ func (s *Store) AccessPolicy() AccessPolicy {
 		}
 	}
 	return AccessPolicy{
+		IndependentAdmin:      s.config.IndependentAdminKey(),
 		ProxyKey:              s.config.ProxyKey,
 		AdminKey:              admin,
 		AuthEnabled:           authenticated,

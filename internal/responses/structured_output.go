@@ -46,6 +46,9 @@ func compileOutputSchema(text any) (*jsonschema.Schema, error) {
 	if err != nil {
 		return invalid("text.format.schema is not valid JSON")
 	}
+	if len(raw) > 256<<10 {
+		return invalid("text.format.schema must be at most 256 KiB")
+	}
 	// Normalize Go numeric types without rounding large integer constraints.
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {

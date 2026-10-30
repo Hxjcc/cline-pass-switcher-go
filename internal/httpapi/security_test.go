@@ -56,7 +56,11 @@ func TestLocalOnboardingAndNativeAuthentication(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatal("DNS rebinding host accepted")
 	}
-	if err := st.UpdateConfig(func(c *model.Config) { c.ProxyKey = "test-key"; c.PublicBaseURL = "https://console.example" }); err != nil {
+	if err := st.UpdateConfig(func(c *model.Config) {
+		c.ProxyKey = "client-key"
+		c.AdminKey = "test-key"
+		c.PublicBaseURL = "https://console.example"
+	}); err != nil {
 		t.Fatal(err)
 	}
 	r = httptest.NewRequest("GET", "http://console.example/api/accounts", nil)

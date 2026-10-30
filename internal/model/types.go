@@ -9,8 +9,10 @@ import (
 const DefaultUpstreamBase = "https://api.cline.bot/api/v1"
 
 const (
-	DefaultMaxConcurrentRequests       = 128
-	DefaultMaxConcurrentRequestsPerKey = 8
+	DefaultMaxConcurrentRequests             = 128
+	DefaultMaxConcurrentRequestsPerKey       = 8
+	DefaultMaxRequestBytes             int64 = 16 << 20
+	DefaultMaxConcurrentDecodes              = 4
 )
 
 // HistoryLimit is how many request records a data directory keeps. The console
@@ -58,11 +60,10 @@ type Config struct {
 	Port   int    `json:"port"`
 	APIKey string `json:"apiKey,omitempty"`
 	// ProxyKey is the master client key: it opens the OpenAI-compatible
-	// endpoints. It also opens the console until AdminKey is set, so a single
-	// machine keeps working exactly as before.
+	// endpoints. It opens the console locally until AdminKey is set.
 	ProxyKey string `json:"proxyKey"`
 	// AdminKey protects the console and the management API. Leaving it empty
-	// falls back to ProxyKey; setting it takes the client key out of the
+	// falls back to ProxyKey for local access only; setting it takes the client key out of the
 	// console entirely, which is what a shared deployment wants.
 	AdminKey string `json:"adminKey,omitempty"`
 	// ProxyKeys are additional client keys issued from the console. Each may be
@@ -119,6 +120,8 @@ type Config struct {
 	// master-key bucket). Zero resolves to the built-in default at startup.
 	MaxConcurrentRequests       int       `json:"maxConcurrentRequests,omitempty"`
 	MaxConcurrentRequestsPerKey int       `json:"maxConcurrentRequestsPerKey,omitempty"`
+	MaxRequestBytes             int64     `json:"maxRequestBytes,omitempty"`
+	MaxConcurrentDecodes        int       `json:"maxConcurrentDecodes,omitempty"`
 	UpstreamBase                string    `json:"upstreamBase"`
 	Accounts                    []Account `json:"accounts"`
 	AccountMode                 string    `json:"accountMode"`
@@ -260,6 +263,7 @@ const (
 )
 
 type HistoryEntry struct {
+	Tools *ToolSummary `json:"tools,omitempty"`
 	// ID identifies a stored row across pagination, checkpoints and restarts.
 	ID        string `json:"id,omitempty"`
 	TS        int64  `json:"ts"`
@@ -324,6 +328,14 @@ type HistoryEntry struct {
 	DegradeReason string `json:"degradeReason,omitempty"`
 }
 
+// MaxBatchCalls describes calls requested together, not client execution concurrency.
+type ToolSummary struct {
+	Names            map[string]int `json:"names,omitempty"`
+	Calls            int            `json:"calls,omitempty"`
+	MaxBatchCalls    int            `json:"maxBatchCalls,omitempty"`
+	ReportedFailures int            `json:"reportedFailures,omitempty"`
+}
+
 type AccountStats struct {
 	Requests  int64   `json:"requests"`
 	LastUsed  int64   `json:"lastUsed"`
@@ -364,6 +376,8 @@ func DefaultConfig() Config {
 		CompactionMinOutputTokens:   DefaultCompactionMinOutputTokens,
 		MaxConcurrentRequests:       DefaultMaxConcurrentRequests,
 		MaxConcurrentRequestsPerKey: DefaultMaxConcurrentRequestsPerKey,
+		MaxRequestBytes:             DefaultMaxRequestBytes,
+		MaxConcurrentDecodes:        DefaultMaxConcurrentDecodes,
 		UpstreamBase:                DefaultUpstreamBase,
 		Accounts:                    []Account{},
 		AccountMode:                 "single",

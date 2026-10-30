@@ -9,6 +9,7 @@ import (
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/jsonx"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/sse"
+	"github.com/Hxjcc/cline-pass-switcher-go/internal/strx"
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/upstream"
 )
 
@@ -24,10 +25,11 @@ type streamStats struct {
 	finishReason string
 	done         bool
 	streamError  string
+	toolNames    map[int]string
 }
 
 func newStreamStats(started time.Time) *streamStats {
-	return &streamStats{started: started}
+	return &streamStats{started: started, toolNames: map[int]string{}}
 }
 
 func (stats *streamStats) Observe(data []byte) {
@@ -146,6 +148,20 @@ func (stats *streamStats) consumeBlock(block string) {
 }
 
 func (stats *streamStats) consumeChunk(chunk map[string]any) {
+	for _, rawChoice := range jsonx.Slice(chunk["choices"]) {
+		choice := jsonx.Map(rawChoice)
+		for _, raw := range jsonx.Slice(jsonx.Map(choice["delta"])["tool_calls"]) {
+			call := jsonx.Map(raw)
+			index := int(int64Value(call["index"]))
+			name := jsonx.String(jsonx.Map(call["function"])["name"])
+			if name != "" && index >= 0 && index < 256 {
+				if stats.toolNames == nil {
+					stats.toolNames = map[int]string{}
+				}
+				stats.toolNames[index] = strx.Truncate(name, 128)
+			}
+		}
+	}
 	if stats.streamError == "" {
 		stats.streamError = chatStreamErrorText(chunk)
 	}
@@ -213,6 +229,10 @@ func applyChatStats(entry *model.HistoryEntry, chatOut map[string]any, ttftMs in
 		return
 	}
 	if chatOut != nil {
+		choices := jsonx.Slice(chatOut["choices"])
+		if len(choices) > 0 {
+			entry.Tools = toolSummaryFromCalls(jsonx.Slice(jsonx.Map(jsonx.Map(choices[0])["message"])["tool_calls"]))
+		}
 		entry.Usage = usageFromValue(chatOut["usage"])
 		entry.FinishReason = finishReasonFromChat(chatOut)
 	}
@@ -226,6 +246,13 @@ func applyStreamStats(entry *model.HistoryEntry, stats *streamStats) {
 		return
 	}
 	entry.Usage = stats.Usage()
+	stats.mu.Lock()
+	calls := make([]any, 0, len(stats.toolNames))
+	for _, name := range stats.toolNames {
+		calls = append(calls, map[string]any{"function": map[string]any{"name": name}})
+	}
+	entry.Tools = toolSummaryFromCalls(calls)
+	stats.mu.Unlock()
 	entry.FinishReason = stats.FinishReason()
 	if ttft := stats.TTFTMs(); ttft > 0 {
 		entry.TTFTMs = ttft

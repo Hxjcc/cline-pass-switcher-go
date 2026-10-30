@@ -18,16 +18,16 @@ import (
 )
 
 func setResponsesHeaders(writer http.ResponseWriter, targets []string, result chainResult, effort string) {
-	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
+	setSafeHeader(writer, "X-Cline-Target-Upstream", targetHeader(targets))
 	// Streaming responses are released before the gateway's routing tail
 	// arrives, so the actual channel is unknown at this point. Omit the header
 	// instead of advertising "unknown": the history row still records the real
 	// provider once the stream ends, and honestly absent beats a placeholder.
 	if actual := firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider); actual != "" {
-		writer.Header().Set("X-Cline-Actual-Upstream", actual)
+		setSafeHeader(writer, "X-Cline-Actual-Upstream", actual)
 	}
 	if canonical := strings.TrimSpace(result.Routing.CanonicalSlug); canonical != "" {
-		writer.Header().Set("X-Cline-Canonical-Model", canonical)
+		setSafeHeader(writer, "X-Cline-Canonical-Model", canonical)
 	}
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(result.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
@@ -39,10 +39,8 @@ func setResponsesHeaders(writer http.ResponseWriter, targets []string, result ch
 func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Request) {
 	request = withSessionHint(request)
 	var body map[string]any
-	if err := readJSON(request, &body); err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"error": map[string]any{"message": "invalid JSON body", "type": "invalid_request_error"},
-		})
+	if err := s.readJSON(request, &body); err != nil {
+		writeRequestError(writer, err)
 		return
 	}
 	// Remote compaction v2 arrives as an ordinary /responses request that
@@ -60,6 +58,7 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 	requestedModel, _ := body["model"].(string)
 	requestedMeta := s.store.ModelMeta(requestedModel)
 	chatBody, bridgeContext, err := responsesbridge.ToChatWithOptions(body, responsesbridge.Options{
+		ReasoningCodec:              s.requestReasoningCodec(request.Context()),
 		ReplayReasoning:             responsesbridge.ShouldReplayReasoning(requestedModel),
 		ReasoningEfforts:            requestedMeta.ReasoningEfforts,
 		SupportsImageDetailOriginal: requestedMeta.SupportsOriginalImageDetail(),
@@ -73,10 +72,12 @@ func (s *Server) handleResponses(writer http.ResponseWriter, request *http.Reque
 		RecentCompactionTokens:      s.store.CompactionRecentTokens(),
 		CompactionReasoningEffort:   s.store.CompactionReasoningEffort(),
 	})
+	releaseDecoding(request.Context())
 	if err != nil {
 		writeResponsesRequestError(writer, err)
 		return
 	}
+	request = request.WithContext(context.WithValue(request.Context(), clientToolNamesKey{}, bridgeContext.ClientToolNames()))
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
 	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))
@@ -335,15 +336,14 @@ func writeResponsesRequestError(writer http.ResponseWriter, err error) {
 func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *http.Request) {
 	request = withSessionHint(request)
 	var body map[string]any
-	if err := readJSON(request, &body); err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"error": map[string]any{"message": "invalid JSON body", "type": "invalid_request_error"},
-		})
+	if err := s.readJSON(request, &body); err != nil {
+		writeRequestError(writer, err)
 		return
 	}
 	requestedModel, _ := body["model"].(string)
 	requestedMeta := s.store.ModelMeta(requestedModel)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
+		ReasoningCodec:              s.requestReasoningCodec(request.Context()),
 		ReplayReasoning:             responsesbridge.ShouldReplayReasoning(requestedModel),
 		ReasoningEfforts:            requestedMeta.ReasoningEfforts,
 		SupportsImageDetailOriginal: requestedMeta.SupportsOriginalImageDetail(),
@@ -355,10 +355,12 @@ func (s *Server) handleResponsesCompact(writer http.ResponseWriter, request *htt
 		RecentCompactionTokens:      s.store.CompactionRecentTokens(),
 		CompactionReasoningEffort:   s.store.CompactionReasoningEffort(),
 	})
+	releaseDecoding(request.Context())
 	if err != nil {
 		writeResponsesRequestError(writer, err)
 		return
 	}
+	request = request.WithContext(context.WithValue(request.Context(), clientToolNamesKey{}, bridgeContext.ClientToolNames()))
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
 	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))
@@ -639,6 +641,7 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 	requestedModel, _ := body["model"].(string)
 	requestedMeta := s.store.ModelMeta(requestedModel)
 	chatBody, bridgeContext, err := responsesbridge.ToCompactionChatWithOptions(body, responsesbridge.Options{
+		ReasoningCodec:              s.requestReasoningCodec(request.Context()),
 		ReplayReasoning:             responsesbridge.ShouldReplayReasoning(requestedModel),
 		ReasoningEfforts:            requestedMeta.ReasoningEfforts,
 		SupportsImageDetailOriginal: requestedMeta.SupportsOriginalImageDetail(),
@@ -652,10 +655,12 @@ func (s *Server) handleResponsesCompactionTrigger(writer http.ResponseWriter, re
 		RecentCompactionTokens:      s.store.CompactionRecentTokens(),
 		CompactionReasoningEffort:   s.store.CompactionReasoningEffort(),
 	})
+	releaseDecoding(request.Context())
 	if err != nil {
 		writeResponsesRequestError(writer, err)
 		return
 	}
+	request = request.WithContext(context.WithValue(request.Context(), clientToolNamesKey{}, bridgeContext.ClientToolNames()))
 	modelID := bridgeContext.Model
 	modelConfig := s.store.ModelConfig(modelID)
 	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, chatBody))

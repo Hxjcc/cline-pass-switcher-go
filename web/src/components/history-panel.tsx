@@ -137,7 +137,8 @@ function HistoryCard({ item, columns, selected, onOpen }: { item: HistoryItem; c
   </article>
 }
 
-export function HistoryPanel({ history, total, hasMore, pending, query, onQueryChange, onRefresh, onLoadMore, onClear }: {
+export function HistoryPanel({ history, total, hasMore, pending, query, onQueryChange, onRefresh, onLoadMore, onClear, active = true }: {
+  active?: boolean
   history: HistoryItem[]
   total: number
   hasMore: boolean
@@ -159,27 +160,27 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const { visibleColumns, orderedColumns, toggleColumn, reorderColumns, resetColumns } = useHistoryColumns()
   const narrow = useNarrowViewport()
-  const { viewportRef, visibleColumns: tableColumns, collapsedColumns, cards } = useHistoryLayout(visibleColumns, history, narrow)
+  const { viewportRef, visibleColumns: tableColumns, collapsedColumns, cards } = useHistoryLayout(visibleColumns, history, narrow, active)
   const refreshRef = useRef(onRefresh)
 
   const isSelected = (item: HistoryItem) => selected !== null && (item.id ? item.id === selected.id : item.ts === selected.ts && item.model === selected.model && item.account === selected.account)
   const openDetails: OpenRequest = (item, trigger) => { triggerRef.current = trigger; setSelected(isSelected(item) ? null : item) }
 
   useEffect(() => {
-    if (search === query.q) return
+    if (!active || search === query.q) return
     const timer = window.setTimeout(() => onQueryChange({ q: search, onlyErrors: query.onlyErrors }), 300)
     return () => window.clearTimeout(timer)
-  }, [search, query.q, query.onlyErrors, onQueryChange])
+  }, [active, search, query.q, query.onlyErrors, onQueryChange])
 
   useEffect(() => { refreshRef.current = onRefresh }, [onRefresh])
   useEffect(() => {
     try { localStorage.setItem(AUTO_REFRESH_STORAGE, autoRefresh ? "1" : "0") } catch { /* Optional storage. */ }
-    if (!autoRefresh) return
+    if (!active || !autoRefresh) return
     const timer = window.setInterval(() => {
       if (!document.hidden) void refreshRef.current()
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [autoRefresh])
+  }, [active, autoRefresh])
 
   const refresh = async () => {
     setRefreshing(true)
@@ -210,7 +211,7 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
         </div>
         <ToggleChip pressed={query.onlyErrors} onPressedChange={pressed => onQueryChange({ ...query, onlyErrors: pressed })} icon={CircleAlert}>只看失败</ToggleChip>
         <ToggleChip pressed={autoRefresh} onPressedChange={setAutoRefresh} icon={RefreshCw}>自动刷新</ToggleChip>
-        <HistoryColumnsMenu columns={orderedColumns} visibleColumns={visibleColumns} collapsedColumns={collapsedColumns} onToggle={toggleColumn} onReorder={reorderColumns} onReset={resetColumns} />
+        {active && <HistoryColumnsMenu columns={orderedColumns} visibleColumns={visibleColumns} collapsedColumns={collapsedColumns} onToggle={toggleColumn} onReorder={reorderColumns} onReset={resetColumns} />}
         <span className="text-muted-foreground ml-auto text-xs tabular-nums">已显示 {history.length} / {total} 条{pending && <span className="ml-2">刷新中…</span>}</span>
       </div>
       <div ref={viewportRef} className="min-w-0">
@@ -231,7 +232,7 @@ export function HistoryPanel({ history, total, hasMore, pending, query, onQueryC
         {loadingMore ? "加载中…" : `加载更多（还有 ${Math.max(total - history.length, 0)} 条）`}
       </Button></div>}
     </CardContent>
-    <HistoryDetailsSheet item={selected} triggerRef={triggerRef} onClose={() => setSelected(null)} />
-    <ConfirmDialog open={clearing} onOpenChange={setClearing} title="清空请求历史" description="将删除全部请求记录，账号的累计请求数不受影响。" confirmLabel="清空" destructive onConfirm={clear} />
+    <HistoryDetailsSheet item={active ? selected : null} triggerRef={triggerRef} onClose={() => setSelected(null)} />
+    <ConfirmDialog open={active && clearing} onOpenChange={setClearing} title="清空请求历史" description="将删除全部请求记录，账号的累计请求数不受影响。" confirmLabel="清空" destructive onConfirm={clear} />
   </Card>
 }

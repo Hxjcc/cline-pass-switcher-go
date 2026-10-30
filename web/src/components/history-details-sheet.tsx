@@ -53,6 +53,12 @@ export function HistoryDetailsSheet({ item, triggerRef, onClose }: {
               <Field label="原始请求模型">{item.model}</Field>
               <Field label="背后模型">{item.canonical}</Field>
             </div>
+            {item.tools && <div className="space-y-3 border-t pt-4">
+              <Field label="客户端工具调用">{Object.entries(item.tools.names ?? {}).map(([name,n]) => `${name} × ${n}`).join("、") || "无新调用"}</Field>
+              <Field label="调用总数 / 同批调用数">{item.tools.calls ?? 0} / {item.tools.maxBatchCalls ?? 0}</Field>
+              <Field label="本轮回传的工具错误">{item.tools.reportedFailures ?? 0}</Field>
+              <p className="text-muted-foreground">仅记录摘要。调用数来自模型请求；工具实际执行并发与未明确上报的错误不可观测。</p>
+            </div>}
             <div className="grid grid-cols-2 gap-4 border-t pt-4">
               <Field label="账号">{item.account}</Field>
               <Field label="实际供应商">{actualProvider(item) || "未知"}</Field>

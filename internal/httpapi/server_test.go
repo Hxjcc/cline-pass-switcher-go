@@ -646,7 +646,7 @@ func TestResponsesCompactEndpointWrapsChatSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages, _ := replayed["messages"].([]any)
-	if len(messages) != 2 || messages[1].(map[string]any)["content"] != "summarize the conversation" {
+	if len(messages) != 3 || messages[2].(map[string]any)["content"] != "summarize the conversation" {
 		t.Fatalf("retained user turn was duplicated or lost during replay: %#v", messages)
 	}
 }

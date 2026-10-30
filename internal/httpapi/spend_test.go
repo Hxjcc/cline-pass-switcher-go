@@ -320,10 +320,10 @@ func TestThrottleBucketsForwardedClients(t *testing.T) {
 		{"127.0.0.1:4444", "198.51.100.3", "198.51.100.4"},
 	} {
 		exhaust(tc.proxy, func(int) string { return tc.guesser })
-		if code := send(tc.proxy, tc.guesser, "correct-key"); code != http.StatusTooManyRequests {
+		if code := send(tc.proxy, tc.guesser, "admin-key"); code != http.StatusTooManyRequests {
 			t.Fatalf("%s: the guessing client must be blocked: %d", tc.proxy, code)
 		}
-		if code := send(tc.proxy, tc.neighbour, "correct-key"); code != http.StatusOK {
+		if code := send(tc.proxy, tc.neighbour, "admin-key"); code != http.StatusOK {
 			t.Fatalf("%s: another client behind the proxy was blocked: %d", tc.proxy, code)
 		}
 	}
@@ -332,7 +332,7 @@ func TestThrottleBucketsForwardedClients(t *testing.T) {
 	// is charged and rotating the header buys no fresh budget.
 	const direct = "203.0.113.5:4444"
 	exhaust(direct, func(attempt int) string { return "198.51.100." + strconv.Itoa(10+attempt) })
-	if code := send(direct, "198.51.100.99", "correct-key"); code != http.StatusTooManyRequests {
+	if code := send(direct, "198.51.100.99", "admin-key"); code != http.StatusTooManyRequests {
 		t.Fatalf("a spoofed forwarding header escaped the throttle: %d", code)
 	}
 }

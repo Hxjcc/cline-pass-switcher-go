@@ -191,7 +191,7 @@ func TestCompactionPreservesUsersAndOnlyVisibleSummary(t *testing.T) {
 		t.Fatalf("streaming compaction describes the wrong generation: %#v", completed)
 	}
 	replay, _, err := ToChat(map[string]any{"model": "test", "input": output})
-	if err != nil || len(jsonx.Slice(replay["messages"])) != 3 {
+	if err != nil || len(jsonx.Slice(replay["messages"])) != 4 {
 		t.Fatalf("compaction cannot be replayed: %#v, %v", replay, err)
 	}
 	after, _ := json.Marshal(body)

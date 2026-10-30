@@ -41,6 +41,27 @@ func (s *Server) record(ctx context.Context, entry model.HistoryEntry) {
 		}
 	}
 	entry = stampCallerKey(ctx, entry)
+	if names, ok := ctx.Value(clientToolNamesKey{}).(map[string]string); ok && entry.Tools != nil {
+		summary := &model.ToolSummary{Names: map[string]int{}, MaxBatchCalls: entry.Tools.MaxBatchCalls}
+		for name, n := range entry.Tools.Names {
+			if original, found := names[name]; found {
+				name = original
+			}
+			if name != "" {
+				summary.Names[name] += n
+				summary.Calls += n
+			}
+		}
+		entry.Tools = summary
+		entry.Tools.MaxBatchCalls = min(entry.Tools.MaxBatchCalls, entry.Tools.Calls)
+	}
+	if n, ok := ctx.Value(toolFailuresKey{}).(int); ok && n > 0 {
+		entry.Tools = cloneToolSummary(entry.Tools)
+		if entry.Tools == nil {
+			entry.Tools = &model.ToolSummary{}
+		}
+		entry.Tools.ReportedFailures = n
+	}
 	if entry.Session == "" {
 		entry.Session = recordedSession(ctx)
 	}

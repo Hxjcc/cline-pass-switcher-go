@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -87,13 +88,17 @@ func (s *Server) handleSaveKeys(writer http.ResponseWriter, request *http.Reques
 	var body struct {
 		Keys []proxyKeyInput `json:"keys"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
 	if len(body.Keys) > maxProxyKeys {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{
 			"message": "代理密钥数量超出上限", "type": "invalid_request_error"}})
+		return
+	}
+	if len(body.Keys) > 0 && !s.store.Config().IndependentAdminKey() {
+		writeRequestError(writer, errors.New("签发共享客户端密钥前必须先设置独立管理密钥"))
 		return
 	}
 	current := s.store.ProxyKeys()
@@ -146,6 +151,10 @@ func (s *Server) handleSaveKeys(writer http.ResponseWriter, request *http.Reques
 				"message": "第 " + itoa(index+1) + " 行缺少密钥", "type": "invalid_request_error"}})
 			return
 		}
+		if grant.Key == s.store.ProxyKey() || grant.Key == s.store.AdminKey() {
+			writeRequestError(writer, errors.New("客户端密钥必须与管理密钥、代理主密钥不同"))
+			return
+		}
 		if grant.SpendLimitUSD < 0 {
 			grant.SpendLimitUSD = 0
 		}
@@ -194,7 +203,7 @@ func (s *Server) handleResetKeyUsage(writer http.ResponseWriter, request *http.R
 		ID  string `json:"id"`
 		All bool   `json:"all"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}

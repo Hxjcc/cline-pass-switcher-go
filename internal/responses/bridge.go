@@ -23,25 +23,27 @@ const (
 // Context keeps the parts of a Responses request needed to translate the
 // upstream Chat Completions response back to the Responses wire format.
 type Context struct {
-	Model                    string
-	Instructions             any
-	ResponseTools            []any
-	ResponseToolChoice       any
-	ResponseText             any
-	Reasoning                any
-	MaxOutputTokens          any
-	ParallelToolCalls        bool
-	Temperature              any
-	TopP                     any
-	Metadata                 map[string]any
-	Truncation               any
-	ServiceTier              any
-	PromptCacheKey           string
-	SafetyIdentifier         any
-	MaxToolCalls             any
-	RequestedReasoningEffort string
-	MappedReasoningEffort    string
-	RawReasoning             bool
+	ReasoningCodec            *ReasoningCodec
+	IncludeEncryptedReasoning bool
+	Model                     string
+	Instructions              any
+	ResponseTools             []any
+	ResponseToolChoice        any
+	ResponseText              any
+	Reasoning                 any
+	MaxOutputTokens           any
+	ParallelToolCalls         bool
+	Temperature               any
+	TopP                      any
+	Metadata                  map[string]any
+	Truncation                any
+	ServiceTier               any
+	PromptCacheKey            string
+	SafetyIdentifier          any
+	MaxToolCalls              any
+	RequestedReasoningEffort  string
+	MappedReasoningEffort     string
+	RawReasoning              bool
 	// webSearchTool and webFetchTool are gateway provider tools (for example
 	// vercel:exa_search and vercel:browserbase_fetch) that stand in for the
 	// client's hosted web_search and for reading a link the user pasted.
@@ -72,6 +74,7 @@ type Context struct {
 	toolNames         map[string]struct{}
 	compactionUsers   []any
 	outputSchema      *jsonschema.Schema
+	toolSchemas       map[string]*jsonschema.Schema
 	// InputTokenCap is the model's context window. Reported input tokens are
 	// clamped to it so a summed upstream usage cannot look larger than the
 	// window. Zero leaves the number uncapped.
@@ -80,6 +83,7 @@ type Context struct {
 
 // Options controls optional Responses to Chat compatibility behavior.
 type Options struct {
+	ReasoningCodec   *ReasoningCodec
 	ReplayReasoning  bool
 	ReasoningEfforts []string
 	RawReasoning     bool
@@ -143,6 +147,14 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	if body == nil {
 		return nil, nil, errors.New("invalid Responses request body")
 	}
+	var replayErr error
+	body, replayErr = replayEncryptedReasoning(body, options.ReasoningCodec)
+	if replayErr != nil {
+		return nil, nil, replayErr
+	}
+	if requestsEncryptedReasoning(body) && options.ReasoningCodec == nil {
+		return nil, nil, unsupported("include", "encrypted reasoning without a configured local codec")
+	}
 	modelID := strings.TrimSpace(jsonx.String(body["model"]))
 	if modelID == "" {
 		return nil, nil, errors.New("model is required")
@@ -165,33 +177,35 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		metadata = map[string]any{}
 	}
 	context := &Context{
-		Model:              modelID,
-		Instructions:       body["instructions"],
-		ResponseTools:      responseTools,
-		ResponseToolChoice: body["tool_choice"],
-		ResponseText:       body["text"],
-		Reasoning:          body["reasoning"],
-		MaxOutputTokens:    body["max_output_tokens"],
-		ParallelToolCalls:  boolValue(body["parallel_tool_calls"], true),
-		Temperature:        body["temperature"],
-		TopP:               body["top_p"],
-		Metadata:           metadata,
-		Truncation:         body["truncation"],
-		ServiceTier:        body["service_tier"],
-		PromptCacheKey:     strings.TrimSpace(jsonx.String(body["prompt_cache_key"])),
-		SafetyIdentifier:   body["safety_identifier"],
-		MaxToolCalls:       body["max_tool_calls"],
-		RawReasoning:       options.RawReasoning,
-		webSearchTool:      NormaliseWebSearchTool(options.WebSearchUpstream),
-		webFetchTool:       normaliseWebFetchTool(options.WebFetchUpstream),
-		modelPipeline:      strings.TrimSpace(options.ModelPipeline),
-		shellCompat:        normaliseShellCompat(options.ShellCompat),
-		shellCompatEnforce: options.ShellCompatEnforce,
-		providerTools:      map[string]struct{}{},
-		bindings:           map[string]toolBinding{},
-		originalToChat:     map[string]string{},
-		chatTools:          []any{},
-		toolNames:          map[string]struct{}{},
+		ReasoningCodec:            options.ReasoningCodec,
+		IncludeEncryptedReasoning: requestsEncryptedReasoning(body),
+		Model:                     modelID,
+		Instructions:              body["instructions"],
+		ResponseTools:             responseTools,
+		ResponseToolChoice:        body["tool_choice"],
+		ResponseText:              body["text"],
+		Reasoning:                 body["reasoning"],
+		MaxOutputTokens:           body["max_output_tokens"],
+		ParallelToolCalls:         boolValue(body["parallel_tool_calls"], true),
+		Temperature:               body["temperature"],
+		TopP:                      body["top_p"],
+		Metadata:                  metadata,
+		Truncation:                body["truncation"],
+		ServiceTier:               body["service_tier"],
+		PromptCacheKey:            strings.TrimSpace(jsonx.String(body["prompt_cache_key"])),
+		SafetyIdentifier:          body["safety_identifier"],
+		MaxToolCalls:              body["max_tool_calls"],
+		RawReasoning:              options.RawReasoning,
+		webSearchTool:             NormaliseWebSearchTool(options.WebSearchUpstream),
+		webFetchTool:              normaliseWebFetchTool(options.WebFetchUpstream),
+		modelPipeline:             strings.TrimSpace(options.ModelPipeline),
+		shellCompat:               normaliseShellCompat(options.ShellCompat),
+		shellCompatEnforce:        options.ShellCompatEnforce,
+		providerTools:             map[string]struct{}{},
+		bindings:                  map[string]toolBinding{},
+		originalToChat:            map[string]string{},
+		chatTools:                 []any{},
+		toolNames:                 map[string]struct{}{},
 	}
 	if context.ResponseText == nil {
 		context.ResponseText = map[string]any{"format": map[string]any{"type": "text"}}
@@ -208,6 +222,9 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 		context.addResponseTool(tool, "")
 	}
 	context.collectDeclaredInputTools(body["input"])
+	if err := context.compileToolSchemas(); err != nil {
+		return nil, nil, err
+	}
 	if err := context.validateToolChoice(); err != nil {
 		return nil, nil, err
 	}
@@ -553,9 +570,10 @@ func ToChatWithOptions(body map[string]any, options Options) (map[string]any, *C
 	compactionPrefix := make([]any, 0, 1)
 	if len(compactionSummaries) > 0 {
 		compactionPrefix = append(compactionPrefix, map[string]any{
-			"role":    "system",
-			"content": "Earlier conversation was compacted. Summary:\n" + strings.Join(compactionSummaries, "\n\n"),
+			"role":    "user",
+			"content": untrustedSummary(compactionSummaries),
 		})
+		instructionMessages = append(instructionMessages, map[string]any{"role": "system", "content": untrustedHistoryPolicy})
 	}
 	if len(instructionMessages) > 0 || len(compactionPrefix) > 0 {
 		leading := 0

@@ -25,16 +25,19 @@ import (
 )
 
 type Server struct {
-	store          *store.Store
-	upstream       *upstream.Service
-	assets         fs.FS
-	file           http.Handler
-	index          []byte
-	csp            string
-	shares         *streamShareHub
-	adminThrottle  *authThrottle
-	clientThrottle *authThrottle
-	limiter        *concurrencyLimiter
+	reasoningCodec  *responsesbridge.ReasoningCodec
+	store           *store.Store
+	upstream        *upstream.Service
+	assets          fs.FS
+	file            http.Handler
+	index           []byte
+	csp             string
+	shares          *streamShareHub
+	adminThrottle   *authThrottle
+	clientThrottle  *authThrottle
+	limiter         *concurrencyLimiter
+	decodeSlots     chan struct{}
+	maxRequestBytes int64
 	// requests counts running handlers, so Shutdown can wait for their
 	// history records before the store closes.
 	requests sync.WaitGroup
@@ -60,21 +63,33 @@ type chainResult struct {
 }
 
 func New(st *store.Store, service *upstream.Service, assets fs.FS) (*Server, error) {
+	codec, err := loadReasoningCodec(st.DataDirectory())
+	if err != nil {
+		return nil, fmt.Errorf("load reasoning key: %w", err)
+	}
+	cfg := st.Config()
+	replayDir, err := prepareReplayDirectory(st.DataDirectory())
+	if err != nil {
+		return nil, fmt.Errorf("prepare replay directory: %w", err)
+	}
 	index, err := fs.ReadFile(assets, "index.html")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded index.html: %w", err)
 	}
 	return &Server{
-		store:          st,
-		upstream:       service,
-		assets:         assets,
-		file:           http.FileServer(http.FS(assets)),
-		index:          index,
-		csp:            contentSecurityPolicy(index),
-		shares:         newStreamShareHub(),
-		adminThrottle:  newAuthThrottle(),
-		clientThrottle: newAuthThrottle(),
-		limiter:        newConcurrencyLimiter(st.MaxConcurrentRequests(), st.MaxConcurrentRequestsPerKey()),
+		reasoningCodec:  codec,
+		store:           st,
+		upstream:        service,
+		assets:          assets,
+		file:            http.FileServer(http.FS(assets)),
+		index:           index,
+		csp:             contentSecurityPolicy(index),
+		shares:          newStreamShareHubInDirectory(replayDir),
+		decodeSlots:     make(chan struct{}, cfg.MaxConcurrentDecodes),
+		maxRequestBytes: cfg.MaxRequestBytes,
+		adminThrottle:   newAuthThrottle(),
+		clientThrottle:  newAuthThrottle(),
+		limiter:         newConcurrencyLimiter(st.MaxConcurrentRequests(), st.MaxConcurrentRequestsPerKey()),
 	}, nil
 }
 
@@ -127,7 +142,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{"message": "untrusted request origin or host; non-local access requires PROXY_KEY", "type": "access_error"}})
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBytes)
+	if request.ContentLength > s.maxRequestBytes {
+		writeRequestError(writer, &http.MaxBytesError{Limit: s.maxRequestBytes})
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, s.maxRequestBytes)
 	if request.Method == http.MethodOptions {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -162,6 +181,15 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		defer spendHoldFrom(request.Context()).Release()
+		if isGenerationRequest(request) {
+			release, err := s.reserveDecode()
+			if err != nil {
+				writeRequestError(writer, err)
+				return
+			}
+			request = request.WithContext(context.WithValue(request.Context(), decodeLeaseKey{}, &decodeLease{release: release}))
+			defer releaseDecoding(request.Context())
+		}
 		// Responses admits work after conversion so reconnects can join an
 		// existing shared run without reserving a second generation slot.
 		if isGenerationRequest(request) && !isResponsesPath(path) {
@@ -294,7 +322,7 @@ func (s *Server) handleProbe(writer http.ResponseWriter, request *http.Request) 
 		Model string `json:"model"`
 		Force bool   `json:"force"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -328,7 +356,7 @@ func (s *Server) handleSaveAccounts(writer http.ResponseWriter, request *http.Re
 		Mode     string          `json:"mode"`
 		Active   int             `json:"active"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -369,7 +397,7 @@ func (s *Server) handleTestAccount(writer http.ResponseWriter, request *http.Req
 		// cannot test a stale cached copy after the key changed.
 		ID string `json:"id"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -415,8 +443,26 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 		AdminKey      *string `json:"adminKey"`
 		PublicBaseURL *string `json:"publicBaseUrl"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
+		return
+	}
+	next := s.store.Config()
+	if body.ProxyKey != nil {
+		next.ProxyKey = strings.TrimSpace(*body.ProxyKey)
+	}
+	if body.AdminKey != nil {
+		next.AdminKey = strings.TrimSpace(*body.AdminKey)
+	}
+	if body.PublicBaseURL != nil {
+		next.PublicBaseURL = strings.TrimSpace(*body.PublicBaseURL)
+	}
+	if err := model.ValidateConfig(next); err != nil {
+		writeRequestError(writer, err)
+		return
+	}
+	if (next.PublicBaseURL != "" || len(next.ProxyKeys) > 0) && !next.IndependentAdminKey() {
+		writeRequestError(writer, errors.New("公网或共享部署必须设置与客户端密钥不同的独立管理密钥"))
 		return
 	}
 	if err := s.store.UpdateConfig(func(cfg *model.Config) {
@@ -427,7 +473,7 @@ func (s *Server) handleSaveSecurity(writer http.ResponseWriter, request *http.Re
 			cfg.AdminKey = strings.TrimSpace(*body.AdminKey)
 		}
 		if body.PublicBaseURL != nil {
-			cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(*body.PublicBaseURL), "/")
+			cfg.PublicBaseURL = strings.TrimSpace(*body.PublicBaseURL)
 		}
 	}); err != nil {
 		writeInternalError(writer, err)
@@ -448,7 +494,7 @@ func (s *Server) handleValidate(writer http.ResponseWriter, request *http.Reques
 	var body struct {
 		Model string `json:"model"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -481,7 +527,7 @@ func (s *Server) handleRemoveModel(writer http.ResponseWriter, request *http.Req
 	var body struct {
 		Model string `json:"model"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -615,7 +661,7 @@ func (s *Server) handleSaveConfig(writer http.ResponseWriter, request *http.Requ
 	var body struct {
 		PerModel map[string]model.PerModelConfig `json:"perModel"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -684,7 +730,7 @@ func (s *Server) handleTest(writer http.ResponseWriter, request *http.Request) {
 		Upstreams *[]string `json:"upstreams"`
 		Exclude   *[]string `json:"exclude"`
 	}
-	if err := readJSON(request, &body); err != nil {
+	if err := s.readJSON(request, &body); err != nil {
 		writeRequestError(writer, err)
 		return
 	}
@@ -932,8 +978,8 @@ func (s *Server) accountRetryAllowed(status, accountsUsed int, budget *attemptBu
 func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 	request = withSessionHint(request)
 	var body map[string]any
-	if err := readJSON(request, &body); err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "invalid JSON body"}})
+	if err := s.readJSON(request, &body); err != nil {
+		writeRequestError(writer, err)
 		return
 	}
 	modelID, _ := body["model"].(string)
@@ -942,12 +988,22 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.mapChatSearch(modelID, body)
+	toolContext, err := responsesbridge.CompileChatToolContext(body["tools"])
+	releaseDecoding(request.Context())
+	if err != nil {
+		writeResponsesRequestError(writer, err)
+		return
+	}
 	modelConfig := s.store.ModelConfig(modelID)
 	request = request.WithContext(s.withRoutingRecord(request.Context(), modelID, modelConfig, body))
 	stream, _ := body["stream"].(bool)
-	if stream {
+	if stream && !toolContext.HasStrictTools() {
 		s.handleStreamingChat(writer, request, modelID, body, modelConfig)
 		return
+	}
+	if stream {
+		delete(body, "stream")
+		delete(body, "stream_options")
 	}
 	result := s.runNonStreamChain(request.Context(), modelID, body, modelConfig, s.upstream.NonStreamTimeout())
 	if result.Out == nil {
@@ -955,6 +1011,12 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	errorMessage := (*string)(nil)
+	if result.Status == http.StatusOK {
+		if err := toolContext.ValidateChatTools(result.Out); err != nil {
+			result.Status = http.StatusBadGateway
+			result.Out = map[string]any{"error": map[string]any{"message": err.Error(), "type": "upstream_error", "code": "upstream_tool_schema_validation_failed"}}
+		}
+	}
 	if result.Status != http.StatusOK {
 		message := chainErrorMessage(result)
 		errorMessage = &message
@@ -966,7 +1028,7 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 		Provider:  firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider),
 		Canonical: result.Routing.CanonicalSlug,
 		MS:        time.Since(result.Started).Milliseconds(),
-		Stream:    false,
+		Stream:    stream,
 		Kind:      "chat",
 		Effort:    effortFromChatBody(body),
 		Error:     errorMessage,
@@ -985,11 +1047,19 @@ func (s *Server) handleChat(writer http.ResponseWriter, request *http.Request) {
 
 	targets := attemptTargets(s.requestAttempts(request.Context(), modelID, modelConfig, body))
 	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("X-Cline-Target-Upstream", targetHeader(targets))
-	writer.Header().Set("X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))
-	writer.Header().Set("X-Cline-Canonical-Model", result.Routing.CanonicalSlug)
+	setSafeHeader(writer, "X-Cline-Target-Upstream", targetHeader(targets))
+	setSafeHeader(writer, "X-Cline-Actual-Upstream", firstNonEmpty(result.Routing.ResolvedProvider, result.Routing.FinalProvider, "unknown"))
+	setSafeHeader(writer, "X-Cline-Canonical-Model", result.Routing.CanonicalSlug)
 	writer.Header().Set("X-Cline-Attempts", strconv.Itoa(len(result.Trace)))
 	writer.Header().Set("X-Cline-Account", headerSafe(result.Account.Name))
+	if stream && result.Status == http.StatusOK {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache")
+		responsesbridge.AliasChatReasoning(result.Out)
+		raw, _ := json.Marshal(responsesbridge.ChatCompletionAsChunk(result.Out))
+		_, _ = writeStreamChunk(writer, append(append([]byte("data: "), raw...), []byte("\n\ndata: [DONE]\n\n")...))
+		return
+	}
 	writer.WriteHeader(result.Status)
 	if result.Status == http.StatusOK && result.Out != nil {
 		responsesbridge.AliasChatReasoning(result.Out)
@@ -1111,11 +1181,15 @@ func modelConfigView(config model.PerModelConfig) model.PerModelConfig {
 	return config
 }
 
-const maxRequestBytes = 50 << 20
+const maxRequestBytes = model.DefaultMaxRequestBytes
 
 func readJSON(request *http.Request, target any) error {
+	return readJSONLimit(request, target, maxRequestBytes)
+}
+
+func readJSONLimit(request *http.Request, target any, limit int64) error {
 	defer request.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(nil, request.Body, maxRequestBytes))
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, request.Body, limit))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -1131,6 +1205,11 @@ func readJSON(request *http.Request, target any) error {
 }
 
 func writeRequestError(writer http.ResponseWriter, err error) {
+	if errors.Is(err, errDecodeConcurrency) {
+		writer.Header().Set("Retry-After", "1")
+		writeJSON(writer, http.StatusTooManyRequests, map[string]any{"error": map[string]any{"type": "rate_limit_error", "code": "decode_concurrency_limit", "message": err.Error()}})
+		return
+	}
 	status := http.StatusBadRequest
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -1307,6 +1386,10 @@ func headerSafe(value string) string {
 		return "-"
 	}
 	return result
+}
+
+func setSafeHeader(writer http.ResponseWriter, name, value string) {
+	writer.Header().Set(name, headerSafe(value))
 }
 
 var inlineScriptRE = regexp.MustCompile(`(?is)<script(\s[^>]*)?>(.*?)</script>`)

@@ -299,6 +299,11 @@ func (s *Store) recoverJournal() error {
 			return fmt.Errorf("invalid store journal operation at byte %d", offset)
 		}
 		if entry.Sequence > s.meta.StoreSequence {
+			if entry.Kind == "config" {
+				if err := model.ValidateConfig(*entry.Config); err != nil {
+					return fmt.Errorf("invalid configuration in store journal: %w", err)
+				}
+			}
 			if entry.Sequence != s.meta.StoreSequence+1 {
 				return fmt.Errorf("store journal sequence gap at byte %d", offset)
 			}

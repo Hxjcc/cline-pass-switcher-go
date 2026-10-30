@@ -1,5 +1,9 @@
 # 开发说明
 
+CI 在现有格式检查、vet、测试和 race 检查之外运行 staticcheck、govulncheck，并要求 Go 总语句覆盖率至少 75%。SSE、Responses 转换及压缩 envelope 各运行 15 秒 fuzz；本地可使用 `go test ./internal/responses -run '^$' -fuzz '^FuzzResponsesConversion$' -fuzztime=30s`，另两个目标为 `FuzzParser` 和 `FuzzCompactionEnvelope`。
+
+前端显式开启 TypeScript strict。Vitest 对比过 `vmThreads`，当前测试集在本机使用 `forks` 更快，因此保留 `forks`；可通过 `npm test -- --pool=vmThreads` 重新评估。页签代码分包后在登录界面起按浏览器空闲时间预加载，悬停或聚焦标签时优先加载目标页；预加载只导入代码，不挂载页面或读取管理数据。已访问页保留组件状态，隐藏的请求历史页暂停自动刷新，代码尚未就绪时保留当前页面直到切换完成。构建后需要一并提交 `internal/webassets/dist/`。入口、上游服务和流式状态机保持现有职责，新增入口限制、工具 Schema、上下文 usage 与历史边界逻辑分别放在独立文件中。
+
 ## 目录结构
 
 | 路径 | 内容 |

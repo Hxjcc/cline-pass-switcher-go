@@ -140,34 +140,37 @@ type outputEntry struct {
 }
 
 type StreamState struct {
-	context           *Context
-	responseID        string
-	model             string
-	createdAt         int64
-	identityLocked    bool
-	started           bool
-	completed         bool
-	finishReason      string
-	usage             any
-	output            []outputEntry
-	nextOutputIndex   int
-	reasoning         *textState
-	message           *messageState
-	inlineThinkMode   inlineThinkMode
-	inlineThinkRaw    string
-	inlineThinkSeen   bool
-	inlineTrimLeading bool
-	tools             map[int]*toolState
-	lastToolIndex     int
-	droppedTools      int
-	itemStatus        string
+	context             *Context
+	responseID          string
+	model               string
+	createdAt           int64
+	identityLocked      bool
+	started             bool
+	completed           bool
+	finishReason        string
+	usage               any
+	output              []outputEntry
+	nextOutputIndex     int
+	reasoning           *textState
+	message             *messageState
+	inlineThinkMode     inlineThinkMode
+	inlineThinkRaw      string
+	inlineThinkSeen     bool
+	inlineTrimLeading   bool
+	tools               map[int]*toolState
+	lastToolIndex       int
+	droppedTools        int
+	toolValidationError string
+	itemStatus          string
 	// rawUsage is the upstream usage object. The gateway tool counters are the
 	// legs it ran inside its own loop; the client-facing usage divides the
 	// summed prompt by those legs plus the final answer.
-	rawUsage          any
-	gatewayToolCalls  map[string]int
-	gatewayLooseCalls int
-	gatewayLegIndex   int
+	rawUsage           any
+	gatewayToolCalls   map[string]int
+	gatewayLooseCalls  int
+	gatewayLegIndex    int
+	finalLegUsage      map[string]any
+	finalLegUsageIndex int
 }
 
 func NewStreamState(context *Context) *StreamState {
@@ -286,6 +289,9 @@ func (state *StreamState) closeReasoning() []Event {
 	item := map[string]any{
 		"id": state.reasoning.ItemID, "type": "reasoning",
 		"summary": []any{map[string]any{"type": "summary_text", "text": text}},
+	}
+	if text != "" && state.context.IncludeEncryptedReasoning && state.context.ReasoningCodec != nil {
+		item["encrypted_content"] = state.context.ReasoningCodec.Encode(text)
 	}
 	if state.context != nil && state.context.RawReasoning {
 		item["content"] = []any{map[string]any{"type": "reasoning_text", "text": text}}
@@ -600,7 +606,7 @@ func (state *StreamState) pushToolCall(raw map[string]any) []Event {
 	function := jsonx.Map(raw["function"])
 	argumentDelta := jsonx.String(function["arguments"])
 	current.Arguments.WriteString(argumentDelta)
-	bufferShell := state.context != nil && state.context.enforcesShell(current.ChatName)
+	bufferShell := state.context != nil && (state.context.enforcesShell(current.ChatName) || state.context.strictTool(current.ChatName))
 	events := []Event{}
 	if !current.Added && current.ChatName != "" {
 		current.OutputIndex = state.nextOutputIndex
@@ -650,7 +656,7 @@ func (state *StreamState) closeTools() []Event {
 			state.droppedTools++
 			continue
 		}
-		bufferShell := state.context != nil && state.context.enforcesShell(current.ChatName)
+		bufferShell := state.context != nil && (state.context.enforcesShell(current.ChatName) || state.context.strictTool(current.ChatName))
 		arguments, valid := canonicalToolArguments(current.Arguments.String())
 		if !valid {
 			state.droppedTools++
@@ -660,6 +666,10 @@ func (state *StreamState) closeTools() []Event {
 			if rewritten, ok := state.context.rewriteToolShell(current.ChatName, arguments); ok {
 				arguments = rewritten
 			}
+		}
+		if err := state.context.validateToolArguments(current.ChatName, arguments); err != nil {
+			state.toolValidationError = err.Error()
+			continue
 		}
 		status := state.itemStatus
 		if status == "" {
@@ -791,10 +801,14 @@ func (state *StreamState) HandleChunk(chunk map[string]any) []Event {
 	if index := gatewayLegIndex(chunk); index > state.gatewayLegIndex {
 		state.gatewayLegIndex = index
 	}
+	if usage, index := finalLegUsage(chunk); usage != nil && index >= state.finalLegUsageIndex {
+		state.finalLegUsage = usage
+		state.finalLegUsageIndex = index
+	}
 	if chunk["usage"] != nil {
 		state.rawUsage = chunk["usage"]
 	}
-	state.usage = reportedUsage(state.rawUsage, state.usageLegs(), state.context.InputTokenCap)
+	state.usage = state.reportedUsage()
 	choices := jsonx.Slice(chunk["choices"])
 	if len(choices) == 0 {
 		return nil
@@ -923,6 +937,9 @@ func (state *StreamState) Finalize(sawDone bool, readErr error) []Event {
 	events = append(events, state.closeMessage()...)
 	events = append(events, state.closeTools()...)
 
+	if state.toolValidationError != "" {
+		return append(events, state.Fail(state.toolValidationError, "upstream_tool_schema_validation_failed")...)
+	}
 	if state.droppedTools > 0 {
 		return append(events, state.Fail(
 			fmt.Sprintf("upstream returned %d structurally incomplete tool call(s)", state.droppedTools),
@@ -1002,7 +1019,7 @@ func (state *StreamState) usageLegs() int {
 }
 
 func (state *StreamState) finish(events []Event, status, incompleteReason string) []Event {
-	state.usage = reportedUsage(state.rawUsage, state.usageLegs(), state.context.InputTokenCap)
+	state.usage = state.reportedUsage()
 	if status == "completed" {
 		if err := state.validateStructuredOutput(); err != nil {
 			state.dumpStructuredFailure(err)

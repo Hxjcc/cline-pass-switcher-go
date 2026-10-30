@@ -13,7 +13,7 @@ func compactionReplayMessages(chat map[string]any) []string {
 	for _, raw := range jsonx.Slice(chat["messages"]) {
 		message := jsonx.Map(raw)
 		role := jsonx.String(message["role"])
-		if role != "system" {
+		if role != "system" && !strings.HasPrefix(jsonx.String(message["content"]), untrustedSummaryPrefix) {
 			result = append(result, role+":"+strings.TrimSpace(collectPartText(message["content"])))
 		}
 	}
@@ -107,7 +107,7 @@ func TestCompactionReplayKeepsOriginalMultimodalUser(t *testing.T) {
 		t.Fatalf("multimodal user was duplicated or reordered: %v", got)
 	}
 	messages := jsonx.Slice(chat["messages"])
-	parts := jsonx.Slice(jsonx.Map(messages[1])["content"])
+	parts := jsonx.Slice(jsonx.Map(messages[2])["content"])
 	if len(parts) != 2 || jsonx.String(jsonx.Map(jsonx.Map(parts[1])["image_url"])["url"]) != imageURL {
 		t.Fatalf("matching the tail replaced the original image with text: %#v", messages)
 	}
@@ -179,7 +179,7 @@ func TestCompactionLongUserRoundTripPreservesOccurrencesAndImages(t *testing.T) 
 				t.Fatalf("long turns duplicated or reordered: got %d messages, want %d", len(got), len(want))
 			}
 			messages := jsonx.Slice(chat["messages"])
-			parts := jsonx.Slice(jsonx.Map(messages[1])["content"])
+			parts := jsonx.Slice(jsonx.Map(messages[2])["content"])
 			if len(parts) != 2 || jsonx.String(jsonx.Map(jsonx.Map(parts[1])["image_url"])["url"]) != imageURL {
 				t.Fatal("original image lost during long-message deduplication")
 			}

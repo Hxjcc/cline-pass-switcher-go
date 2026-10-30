@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { snapshotHtml } from '@/lib/root-snapshot'
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/error-boundary'
 
 const ROOT_SNAPSHOT_STORAGE = 'cline-pass-switcher-root-snapshot-v1'
 // Must match the pre-paint script in index.html so the boot frame and React
@@ -31,6 +32,7 @@ rootElement.removeAttribute('data-boot-snapshot')
 
 createRoot(rootElement).render(
   <StrictMode>
+    <ErrorBoundary>
     <ThemeProvider
       attribute="class"
       defaultTheme="system"
@@ -46,6 +48,7 @@ createRoot(rootElement).render(
         />
       </TooltipProvider>
     </ThemeProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )
 

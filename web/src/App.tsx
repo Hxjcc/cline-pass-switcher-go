@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   BarChart3,
@@ -16,17 +16,10 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AccountsPanel } from "@/components/accounts-panel"
 import { BrandMark } from "@/components/brand-mark"
-import { HistoryPanel } from "@/components/history-panel"
-import { UsagePanel } from "@/components/usage-panel"
-import { KeysPanel } from "@/components/keys-panel"
 import { LoginDialog } from "@/components/login-dialog"
 import { MetricCard } from "@/components/metric-card"
-import { ModelsPanel } from "@/components/models-panel"
-import { SecurityPanel } from "@/components/security-panel"
 import { StorageAlert } from "@/components/storage-alert"
-import { TestBench } from "@/components/test-bench"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -38,6 +31,7 @@ import { fetchSnapshot, readSnapshot, writeSnapshot, type ConsoleSnapshot } from
 import { useHistory } from "@/lib/use-history"
 import { runProbeBatch, type ProbeBatchResult } from "@/lib/probe-batch"
 import { cn } from "@/lib/utils"
+import { cachedPanelLoader, preloadPanelsWhenIdle } from "@/lib/panel-preload"
 import type {
   AccountTestResponse,
   AccountsResponse,
@@ -55,6 +49,28 @@ import type {
   TestResponse,
   ValidationResponse,
 } from "@/types"
+
+const panelLoaders = {
+  overview: cachedPanelLoader(() => import("@/components/models-panel").then(module => ({ default: module.ModelsPanel }))),
+  accounts: cachedPanelLoader(() => import("@/components/accounts-panel").then(module => ({ default: module.AccountsPanel }))),
+  keys: cachedPanelLoader(() => import("@/components/keys-panel").then(module => ({ default: module.KeysPanel }))),
+  security: cachedPanelLoader(() => import("@/components/security-panel").then(module => ({ default: module.SecurityPanel }))),
+  test: cachedPanelLoader(() => import("@/components/test-bench").then(module => ({ default: module.TestBench }))),
+  history: cachedPanelLoader(() => import("@/components/history-panel").then(module => ({ default: module.HistoryPanel }))),
+  usage: cachedPanelLoader(() => import("@/components/usage-panel").then(module => ({ default: module.UsagePanel }))),
+}
+const ModelsPanel = lazy(panelLoaders.overview)
+const AccountsPanel = lazy(panelLoaders.accounts)
+const KeysPanel = lazy(panelLoaders.keys)
+const SecurityPanel = lazy(panelLoaders.security)
+const TestBench = lazy(panelLoaders.test)
+const HistoryPanel = lazy(panelLoaders.history)
+const UsagePanel = lazy(panelLoaders.usage)
+
+function preloadPanel(value: string) {
+  const load = panelLoaders[value as keyof typeof panelLoaders]
+  if (load) void load().catch(() => {})
+}
 
 const TAB_STORAGE = "cline-pass-switcher-tab"
 
@@ -101,6 +117,11 @@ function App() {
   // A storage snapshot proves the admin surface was readable without a key
   // (local onboarding), so the background poll can keep using /api/status.
   const statusAvailable = Boolean(meta?.storage)
+
+  // Warm the visible code before its data arrives; other modules can load
+  // while the browser is idle, including during sign-in. No panels mount here.
+  useEffect(() => { preloadPanel(tab) }, [tab])
+  useEffect(() => preloadPanelsWhenIdle(Object.values(panelLoaders)), [])
 
   const handleError = useCallback((error: unknown) => {
     if (error instanceof UnauthorizedError) {
@@ -587,6 +608,11 @@ function App() {
 
       <main className="mx-auto max-w-[1400px] space-y-4 px-4 py-5">
         <StorageAlert health={meta?.storage} />
+        {security && (!security.adminKey || security.adminKey === security.proxyKey) && <Alert>
+          <ShieldOff />
+          <AlertTitle>请设置独立管理密钥</AlertTitle>
+          <AlertDescription>代理主密钥回退仅限本机。公网管理或多人共享前，请在「访问与安全」设置独立管理密钥。</AlertDescription>
+        </Alert>}
         {meta && !meta.configured && (
           <Alert variant="destructive">
             <KeyRound />
@@ -602,8 +628,11 @@ function App() {
             // past the end of a shorter one. Start it from the top instead.
             window.scrollTo({ top: 0 })
           }
-          setTab(value)
-          setVisitedTabs((current) => new Set([...current, value]))
+          preloadPanel(value)
+          startTransition(() => {
+            setTab(value)
+            setVisitedTabs((current) => new Set([...current, value]))
+          })
         }}>
           <div className="overflow-x-auto pb-1">
             <TabsList className="relative w-max gap-0.5">
@@ -612,6 +641,8 @@ function App() {
                 <TabsTrigger
                   key={value}
                   value={value}
+                  onPointerEnter={() => preloadPanel(value)}
+                  onFocus={() => preloadPanel(value)}
                   className="px-3"
                 >
                   <Icon data-icon="inline-start" />
@@ -621,7 +652,8 @@ function App() {
             </TabsList>
           </div>
 
-          <TabsContent value="overview" className="space-y-4">
+          <Suspense fallback={<p role="status" className="p-4 text-sm text-muted-foreground">正在加载页面…</p>}>
+          <TabsContent value="overview" keepMounted={visitedTabs.has("overview")} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard
                 label="订阅模型"
@@ -709,8 +741,9 @@ function App() {
             {models && <TestBench models={models.subscription} onTest={testModel} />}
           </TabsContent>
 
-          <TabsContent value="history">
+          <TabsContent value="history" keepMounted={visitedTabs.has("history")}>
             <HistoryPanel
+              active={tab === "history"}
               history={history}
               total={historyTotal}
               hasMore={historyHasMore}
@@ -737,6 +770,7 @@ function App() {
           <TabsContent value="usage" keepMounted={visitedTabs.has("usage")}>
             <UsagePanel authKey={authKey} active={tab === "usage" && Boolean(authKey || meta && !meta.authRequired)} refreshKey={usageRevision} onError={handleError} />
           </TabsContent>
+          </Suspense>
         </Tabs>
       </main>
 

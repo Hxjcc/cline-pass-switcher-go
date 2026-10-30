@@ -331,6 +331,7 @@ export interface UsageStats {
 }
 
 export interface HistoryItem {
+  tools?: { names?: Record<string, number>; calls?: number; maxBatchCalls?: number; reportedFailures?: number }
   id?: string
   ts: number
   model: string

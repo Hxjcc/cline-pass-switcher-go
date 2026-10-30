@@ -260,6 +260,8 @@ test("resetting usage updates counters without discarding any unsaved rows", asy
   const minted = (screen.getAllByLabelText("客户端密钥")[1] as HTMLInputElement).value
   expect(minted).toMatch(/^sk-[0-9a-f]{48}$/)
   fireEvent.click(within(screen.getByRole("article", { name: "renamed" })).getByRole("button", { name: "重置用量" }))
+  expect(onReset).not.toHaveBeenCalled()
+  fireEvent.click(await screen.findByRole("button", {name:"确认重置"}))
   await vi.waitFor(() => expect(onReset).toHaveBeenCalled())
   await vi.waitFor(() => expect(screen.getByRole("article", { name: "renamed" })).toBeTruthy())
   expect(screen.queryByRole("article", { name: "removed" })).toBeNull()
@@ -280,6 +282,16 @@ test("shows spend against the limit with readable amounts", () => {
   expect(card.getByText("$0.0018")).toBeTruthy()
   expect(card.getByText(/\$0\.50/)).toBeTruthy()
   expect(card.getByRole("progressbar", { name: "额度用量" }).getAttribute("aria-valuenow")).toBe("0")
+})
+
+test("keeps reset confirmation open when the server refuses the reset", async () => {
+  const {onReset}=renderPanel([{id:"key_retry",name:"retry",hasKey:true,enabled:true,requests:2,spentUsd:1}])
+  onReset.mockRejectedValueOnce(new Error("temporarily unavailable"))
+  fireEvent.click(screen.getByRole("button",{name:"重置用量"}))
+  fireEvent.click(await screen.findByRole("button",{name:"确认重置"}))
+  await vi.waitFor(()=>expect(onReset).toHaveBeenCalledTimes(1))
+  expect(screen.getByRole("dialog")).toBeTruthy()
+  expect(screen.getByRole("button",{name:"确认重置"})).toBeTruthy()
 })
 
 test("an empty list offers a single way to add a key", () => {

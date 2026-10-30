@@ -21,7 +21,13 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	ApplyEnvironment(&cfg)
+	if err := ValidateConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	NormalizeConfig(&cfg)
+	if err := ValidateConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -59,7 +65,7 @@ func ApplyEnvironment(cfg *Config) {
 		cfg.AdminKey = key
 	}
 	if baseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); baseURL != "" {
-		cfg.PublicBaseURL = strings.TrimRight(baseURL, "/")
+		cfg.PublicBaseURL = baseURL
 	}
 	if rawPort := strings.TrimSpace(os.Getenv("PORT")); rawPort != "" {
 		if port, err := strconv.Atoi(rawPort); err == nil && port > 0 && port <= 65535 {
@@ -116,6 +122,16 @@ func ApplyEnvironment(cfg *Config) {
 			cfg.MaxConcurrentRequestsPerKey = value
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("MAX_REQUEST_BYTES")); raw != "" {
+		if value, err := strconv.ParseInt(raw, 10, 64); err == nil && value > 0 {
+			cfg.MaxRequestBytes = value
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("MAX_CONCURRENT_DECODES")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			cfg.MaxConcurrentDecodes = value
+		}
+	}
 	// How long a conversation keeps its account (and channel order). It should
 	// roughly match the provider's prompt-cache lifetime: a shorter value drops
 	// a warm account, a longer one only costs a few bytes per conversation.
@@ -134,9 +150,24 @@ func NormalizeConfig(cfg *Config) {
 		cfg.UpstreamBase = DefaultUpstreamBase
 	}
 	cfg.UpstreamBase = strings.TrimRight(strings.TrimSpace(cfg.UpstreamBase), "/")
-	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	cfg.PublicBaseURL = strings.TrimSpace(cfg.PublicBaseURL)
+	if origin, err := PublicOrigin(cfg.PublicBaseURL); err == nil {
+		cfg.PublicBaseURL = origin
+	}
 	cfg.ProxyKey = strings.TrimSpace(cfg.ProxyKey)
 	cfg.AdminKey = strings.TrimSpace(cfg.AdminKey)
+	if cfg.MaxRequestBytes <= 0 {
+		cfg.MaxRequestBytes = DefaultMaxRequestBytes
+	}
+	if cfg.MaxRequestBytes > 64<<20 {
+		cfg.MaxRequestBytes = 64 << 20
+	}
+	if cfg.MaxConcurrentDecodes <= 0 {
+		cfg.MaxConcurrentDecodes = DefaultMaxConcurrentDecodes
+	}
+	if cfg.MaxConcurrentDecodes > 32 {
+		cfg.MaxConcurrentDecodes = 32
+	}
 	cfg.ProxyKeys = normalizeProxyKeys(cfg.ProxyKeys, cfg.ProxyKey, cfg.AdminKey)
 	cfg.ShellCompat = strings.TrimSpace(cfg.ShellCompat)
 	if cfg.CompactionRecentTokens < 0 {
@@ -281,6 +312,9 @@ func NormalizeMetadata(meta *Metadata) {
 	if len(meta.History) > HistoryLimit {
 		meta.History = meta.History[:HistoryLimit]
 	}
+	for i := range meta.History {
+		meta.History[i] = BoundedHistory(meta.History[i])
+	}
 	if meta.OfficialModelsFetch != nil && meta.OfficialModelsFetch.Added == nil {
 		meta.OfficialModelsFetch.Added = []string{}
 	}
@@ -299,5 +333,9 @@ func EnsureDataDir(dataDir string) error {
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = "."
 	}
-	return os.MkdirAll(filepath.Clean(dataDir), 0o755)
+	path := filepath.Clean(dataDir)
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
 }

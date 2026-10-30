@@ -3,6 +3,7 @@ import { Check, Copy, Dices, Eye, EyeOff, Globe2, RefreshCw, Save } from "lucide
 import { toast } from "sonner"
 
 import { Field, IconAction, NoteList } from "@/components/console-kit"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -91,8 +92,9 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
   const [showKey, setShowKey] = useState(false)
   const [showAdminKey, setShowAdminKey] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirmSave, setConfirmSave] = useState(false)
   const [copied, setCopied] = useState(false)
-  const adminKeyConfigured = draft.adminKey.trim() !== ""
+  const adminKeyConfigured = draft.adminKey.trim() !== "" && draft.adminKey.trim() !== draft.proxyKey.trim()
 
   const copyProxyBase = async () => {
     try {
@@ -132,20 +134,27 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
       toast.success(saved.authRequired ? "访问设置已保存，鉴权已开启" : "访问设置已保存，鉴权已关闭")
     } catch (error) {
       toast.error(errorMessage(error))
+      throw error
     } finally {
       setSaving(false)
     }
   }
 
+  const requestSave = () => {
+    if ((data.adminKey.trim() && !draft.adminKey.trim()) || (data.proxyKey.trim() && !draft.proxyKey.trim())) setConfirmSave(true)
+    else void save().catch(() => {})
+  }
+
   return (
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <ConfirmDialog open={confirmSave} onOpenChange={setConfirmSave} title="确认清空访问密钥？" description="清空管理密钥将移除独立管理保护；清空代理主密钥会改变客户端访问权限。已有客户端密钥仍按各自设置鉴权。" confirmLabel="确认保存" destructive onConfirm={save} />
       <div className="min-w-0 space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>访问凭据</CardTitle>
             <CardDescription>设置控制台与客户端使用的密钥，以及服务对外公开的访问地址。</CardDescription>
             <CardAction className={cardActionClass}>
-              <Button size="sm" onClick={save} disabled={saving}>
+              <Button size="sm" onClick={requestSave} disabled={saving}>
                 {saving ? (
                   <RefreshCw className="animate-spin" data-icon="inline-start" />
                 ) : (
@@ -156,6 +165,7 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
             </CardAction>
           </CardHeader>
           <CardContent className="space-y-5">
+            {(!adminKeyConfigured || draft.adminKey.trim() === draft.proxyKey.trim()) && <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">管理密钥尚未独立。公网访问控制台、设置公开地址或签发共享客户端密钥前，必须设置与客户端密钥不同的管理密钥。主密钥回退仅限本机。</p>}
             <Field
               label="管理密钥（控制台）"
               htmlFor="admin-key"
@@ -169,7 +179,7 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
                   type={showAdminKey ? "text" : "password"}
                   value={draft.adminKey}
                   onChange={(event) => setDraft((current) => ({ ...current, adminKey: event.target.value }))}
-                  placeholder="留空则使用代理主密钥登录"
+                  placeholder="留空时仅本机可使用代理主密钥登录"
                   className="font-mono"
                   autoComplete="new-password"
                 />
@@ -289,6 +299,8 @@ export function SecurityPanel({ data, proxyBase, onSave }: SecurityPanelProps) {
             {copied ? "已复制" : "复制代理地址"}
           </Button>
           <NoteList title="接入参数">
+            <li>Responses 无服务端会话状态：store 恒为 false，每次请求需要携带完整历史。支持 include 的 reasoning.encrypted_content；不支持 previous_response_id、truncation:auto、其他 include 值和 max_tool_calls。</li>
+            <li>strict 函数工具参数会在返回客户端前按 Schema 校验；custom grammar 作为提示传递，上游不提供约束采样保证。</li>
             <li>API Key：代理主密钥，或在「代理密钥」中签发的客户端密钥。</li>
             <li>协议：OpenAI Chat Completions 与 Responses 接口。</li>
             <li>模型：「模型与上游」中已订阅的模型 ID。</li>

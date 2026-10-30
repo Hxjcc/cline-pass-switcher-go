@@ -49,6 +49,8 @@ services:
       # 生成请求的并发上限；留空 = 全局 128、单密钥 8。
       - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-}
       - MAX_CONCURRENT_REQUESTS_PER_KEY=${MAX_CONCURRENT_REQUESTS_PER_KEY:-}
+      - MAX_REQUEST_BYTES=${MAX_REQUEST_BYTES:-}
+      - MAX_CONCURRENT_DECODES=${MAX_CONCURRENT_DECODES:-}
     volumes:
       - ./data:/data
     ports:

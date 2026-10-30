@@ -76,7 +76,13 @@ func Open(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	model.ApplyEnvironment(&store.config)
+	if err := model.ValidateConfig(store.config); err != nil {
+		return nil, err
+	}
 	model.NormalizeConfig(&store.config)
+	if err := model.ValidateConfig(store.config); err != nil {
+		return nil, err
+	}
 	historyMigrated := ensureHistoryIDs(&store.meta)
 	usageMigrated := store.initializeUsageLedger(time.Now())
 	if migrateStatsToIDs(store.config, &store.meta) || historyMigrated || usageMigrated {
@@ -105,6 +111,8 @@ func (s *Store) Config() model.Config {
 	return cloneConfig(s.config)
 }
 
+func (s *Store) DataDirectory() string { return filepath.Dir(s.configPath) }
+
 func (s *Store) Metadata() model.Metadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -116,7 +124,13 @@ func (s *Store) UpdateConfig(update func(*model.Config)) error {
 	defer s.mu.Unlock()
 	next := cloneConfig(s.config)
 	update(&next)
+	if err := model.ValidateConfig(next); err != nil {
+		return err
+	}
 	model.NormalizeConfig(&next)
+	if err := model.ValidateConfig(next); err != nil {
+		return err
+	}
 	return s.commitLocked(journalEntry{Kind: "config", Config: &next})
 }
 
@@ -152,6 +166,7 @@ func (s *Store) Record(entry model.HistoryEntry) error {
 	defer s.mu.Unlock()
 
 	entry.ID = newHistoryID()
+	entry = model.BoundedHistory(entry)
 	err := s.commitLocked(journalEntry{Kind: "record", Record: &entry})
 	if err != nil {
 		// Even an unserializable record leaves accounting incomplete. Do not

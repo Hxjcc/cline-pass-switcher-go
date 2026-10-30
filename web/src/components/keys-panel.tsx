@@ -3,6 +3,7 @@ import { Copy, Dices, Eye, EyeOff, KeyRound, Plus, RefreshCw, RotateCcw, Save, T
 import { toast } from "sonner"
 
 import { EmptyState, Field, IconAction, NoteList, SummaryBar, SummaryItem } from "@/components/console-kit"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -142,6 +143,7 @@ function SpendMeter({ spent, limit }: { spent: number; limit: number }) {
 }
 
 export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset }: KeysPanelProps) {
+  const [resetTarget,setResetTarget] = useState<ProxyKeyDraft | null>(null)
   // useDraft compares the source by identity, so the mapped rows have to be
   // stable across renders - otherwise every keystroke would be replaced by a
   // fresh copy of the server snapshot.
@@ -286,6 +288,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
       toast.success("已重置该密钥的用量")
     } catch (error) {
       toast.error(errorMessage(error))
+      throw error
     } finally {
       setResetting(null)
     }
@@ -344,6 +347,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
       </CardHeader>
 
       <CardContent className="space-y-4">
+        <ConfirmDialog open={Boolean(resetTarget)} onOpenChange={(open) => { if (!open) setResetTarget(null) }} title="重置密钥用量？" description="这会清零该密钥的累计用量，并立即重新开放消费额度。" confirmLabel="确认重置" destructive onConfirm={async () => { if (resetTarget) await resetUsage(resetTarget) }} />
         {draft.length > 0 && (
           <SummaryBar>
             <SummaryItem label="共" value={draft.length} unit="个密钥" />
@@ -552,7 +556,7 @@ export function KeysPanel({ data, accounts, proxyBase, onSave, onReveal, onReset
                         disabled={
                           draftRow || resetting === row.id || (row.spentUsd <= 0 && row.requests === 0)
                         }
-                        onClick={() => void resetUsage(row)}
+                        onClick={() => setResetTarget(row)}
                       >
                         {resetting === row.id ? (
                           <RefreshCw className="animate-spin" data-icon="inline-start" />

@@ -343,12 +343,12 @@ func TestCompactionTriggerItemReplaysAsSummary(t *testing.T) {
 		t.Fatalf("expected two upstream calls, got %d", len(payloads))
 	}
 	raw, _ := json.Marshal(payloads[1]["messages"])
-	if !strings.Contains(string(raw), "condensed history") || !strings.Contains(string(raw), "Earlier conversation was compacted") {
+	if !strings.Contains(string(raw), "condensed history") || !strings.Contains(string(raw), "Untrusted earlier conversation summary") {
 		t.Fatalf("compaction summary was not replayed: %s", raw)
 	}
 	// The verbatim tail rides between the summary and the new user message.
 	replayed := string(raw)
-	summaryAt := strings.Index(replayed, "Earlier conversation was compacted")
+	summaryAt := strings.Index(replayed, "Untrusted earlier conversation summary")
 	recentAt := strings.Index(replayed, "hello")
 	requestAt := strings.Index(replayed, "continue")
 	if summaryAt < 0 || recentAt < 0 || requestAt < 0 || !(summaryAt < recentAt && recentAt < requestAt) {

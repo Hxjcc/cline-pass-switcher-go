@@ -95,6 +95,13 @@ func isGenerationRequest(request *http.Request) bool {
 
 // authorizeAdmin gates the console and the management API.
 func (s *Server) authorizeAdmin(writer http.ResponseWriter, request *http.Request) bool {
+	if !s.store.AccessPolicy().IndependentAdmin && !s.openRequestAllowed(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]any{"error": map[string]any{
+			"type": "access_error", "code": "independent_admin_key_required",
+			"message": "公网管理访问必须设置独立 ADMIN_KEY，且不能与任何客户端密钥相同；请通过本机控制台或环境变量配置",
+		}})
+		return false
+	}
 	expected := s.store.AdminKey()
 	if expected == "" {
 		return s.authorizeOpen(writer, request)

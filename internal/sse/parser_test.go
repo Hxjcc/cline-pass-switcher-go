@@ -2,6 +2,7 @@ package sse
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,5 +91,21 @@ func FuzzParser(f *testing.F) {
 			t.Fatalf("unexpected parser error: %v", err)
 		}
 		_ = parser.Finish()
+		if len(data) <= 64<<10 {
+			collect := func(width int) string {
+				var p Parser
+				var output strings.Builder
+				for start := 0; start < len(data); start += width {
+					if err := p.Feed(data[start:min(start+width, len(data))], func(s string) bool { output.WriteString(fmt.Sprintf("%d:%s", len(s), s)); return true }); err != nil {
+						t.Fatal(err)
+					}
+				}
+				output.WriteString("tail:" + p.Finish())
+				return output.String()
+			}
+			if collect(max(1, len(data))) != collect(7) {
+				t.Fatal("SSE framing depends on transport chunk boundaries")
+			}
+		}
 	})
 }

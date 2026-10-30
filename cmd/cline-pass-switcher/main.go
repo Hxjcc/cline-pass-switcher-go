@@ -106,6 +106,9 @@ func stringsOrDefault(value, fallback string) string {
 // the remaining check - the Host header - is client-controlled. Silence would
 // make "publish the port by mistake" look like a working setup.
 func warnUnauthenticatedAccess(cfg model.Config) {
+	if !cfg.IndependentAdminKey() && (cfg.ProxyKey != "" || cfg.PublicBaseURL != "" || len(cfg.ProxyKeys) > 0) {
+		log.Print("[警告] 尚未设置独立 ADMIN_KEY：代理主密钥回退仅限本机管理，公网控制台访问将被拒绝。公开地址或共享客户端密钥必须使用独立管理密钥。")
+	}
 	// Mirrors the request guards: the console falls back to the proxy key, and
 	// the model API opens to the proxy key or any issued key.
 	var open []string

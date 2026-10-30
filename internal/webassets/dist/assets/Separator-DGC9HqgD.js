@@ -1,0 +1,1 @@
+import{Cr as e,It as t,Tr as n}from"./card-CCF6r7Au.js";var r=n(e(),1).forwardRef(function(e,n){let{className:r,render:i,orientation:a=`horizontal`,style:o,...s}=e;return t(`div`,e,{state:{orientation:a},ref:n,props:[{role:`separator`,"aria-orientation":a},s]})});export{r as t};

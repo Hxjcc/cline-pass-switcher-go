@@ -201,5 +201,6 @@ func routedRequirements(service *upstream.Service, modelID string, cfg model.Per
 }
 
 func (s *Server) withRoutingRecord(ctx context.Context, modelID string, cfg model.PerModelConfig, body map[string]any) context.Context {
+	ctx = withToolFailures(ctx, body)
 	return context.WithValue(ctx, recordedRoutingKey{}, routedRequirements(s.upstream, modelID, cfg, body))
 }

@@ -343,8 +343,11 @@ func TestUnauthenticatedTrustWarnings(t *testing.T) {
 			TrustedProxies:        []string{"10.0.0.1"},
 		})
 	})
-	if secured != "" {
-		t.Fatalf("a configured key should silence both warnings: %q", secured)
+	if !strings.Contains(secured, "独立 ADMIN_KEY") || strings.Contains(secured, "TRUST_LOCAL_PORT_FORWARD") || strings.Contains(secured, "信任反向代理") {
+		t.Fatalf("a master key must still warn about admin isolation: %q", secured)
+	}
+	if output := captureLog(t, func() { warnUnauthenticatedAccess(model.Config{ProxyKey: "client", AdminKey: "console"}) }); output != "" {
+		t.Fatalf("isolated keys should be quiet: %q", output)
 	}
 
 	forwarded := captureLog(t, func() {
