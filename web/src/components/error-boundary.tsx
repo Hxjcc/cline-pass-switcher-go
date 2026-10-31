@@ -1,9 +1,12 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+export class ErrorBoundary extends Component<{ children: ReactNode; onError?: () => void }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError() { return { failed: true } }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Console render failed", error, info.componentStack) }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Console render failed", error, info.componentStack)
+    this.props.onError?.()
+  }
   render() {
     if (this.state.failed) return (
       <main className="mx-auto max-w-xl space-y-4 p-8" role="alert">

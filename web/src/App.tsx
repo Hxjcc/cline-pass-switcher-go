@@ -94,8 +94,14 @@ function initialTab() {
   }
 }
 
-function App() {
+function InitialPageReady({ ready, onReady }: { ready: boolean; onReady?: () => void }) {
+  useEffect(() => { if (ready) onReady?.() }, [ready, onReady])
+  return null
+}
+
+function App({ onReady }: { onReady?: () => void }) {
   const [initialSnapshot] = useState(readSnapshot)
+  const [bootReady, setBootReady] = useState(initialSnapshot !== null)
   const [authKey, setAuthKey] = useState(readAdminKey)
   const [meta, setMeta] = useState<MetaResponse | null>(initialSnapshot?.meta ?? null)
   const [models, setModels] = useState<ModelsResponse | null>(initialSnapshot?.models ?? null)
@@ -169,17 +175,24 @@ function App() {
       // server and locked the operator out of his own console for a while.
       if (!authKey) {
         const probe = await api<MetaResponse>("/api/meta")
+        if (!active) return
         if (probe.authRequired) {
           setLoginOpen(true)
+          setBootReady(true)
           return
         }
       }
       const snapshot = await fetchSnapshot(authKey)
       if (!active) return
       applySnapshot(snapshot)
+      setBootReady(true)
       await refreshHistory()
     }
-    void load().catch((error: unknown) => { if (active) handleError(error) })
+    void load().catch((error: unknown) => {
+      if (!active) return
+      handleError(error)
+      setBootReady(true)
+    })
     return () => { active = false }
   }, [authKey, applySnapshot, handleError, refreshHistory])
 
@@ -770,6 +783,7 @@ function App() {
           <TabsContent value="usage" keepMounted={visitedTabs.has("usage")}>
             <UsagePanel authKey={authKey} active={tab === "usage" && Boolean(authKey || meta && !meta.authRequired)} refreshKey={usageRevision} onError={handleError} />
           </TabsContent>
+          <InitialPageReady ready={bootReady} onReady={onReady} />
           </Suspense>
         </Tabs>
       </main>

@@ -48,6 +48,19 @@
         pointer-events: none;
       }
 
+      #root[data-boot-pending] {
+        visibility: hidden;
+      }
+
+      #app-boot-snapshot {
+        position: absolute;
+        inset: 0 0 auto;
+        z-index: 9998;
+        min-height: 100vh;
+        pointer-events: none;
+        background: var(--boot-bg);
+      }
+
       @keyframes app-first-load-in {
         from {
           opacity: 0;
@@ -120,10 +133,6 @@
           opacity: 1;
           transform: none;
           animation: none;
-        }
-
-        #root[data-first-load] + #app-entry-cover {
-          display: none;
         }
       }
     </style>

@@ -4,6 +4,7 @@ import { ThemeProvider } from 'next-themes'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { snapshotHtml } from '@/lib/root-snapshot'
+import { prepareBoot } from '@/lib/boot'
 import './index.css'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/error-boundary'
@@ -15,7 +16,9 @@ const THEME_STORAGE = 'cline-pass-switcher-theme'
 const rootElement = document.getElementById('root')!
 
 function saveRootSnapshot() {
-  if (!rootElement.firstElementChild) return
+  // A reload during boot must keep the last complete cached frame rather
+  // than replace it with React's hidden placeholder or Suspense fallback.
+  if (!rootElement.firstElementChild || rootElement.hasAttribute('data-boot-pending')) return
 
   try {
     sessionStorage.setItem(ROOT_SNAPSHOT_STORAGE, snapshotHtml(rootElement))
@@ -27,12 +30,11 @@ function saveRootSnapshot() {
 window.addEventListener('pagehide', saveRootSnapshot)
 window.addEventListener('beforeunload', saveRootSnapshot)
 
-rootElement.removeAttribute('inert')
-rootElement.removeAttribute('data-boot-snapshot')
+const finishBoot = prepareBoot(rootElement)
 
 createRoot(rootElement).render(
   <StrictMode>
-    <ErrorBoundary>
+    <ErrorBoundary onError={() => finishBoot({ immediate: true })}>
     <ThemeProvider
       attribute="class"
       defaultTheme="system"
@@ -40,7 +42,7 @@ createRoot(rootElement).render(
         storageKey={THEME_STORAGE}
       >
       <TooltipProvider>
-        <App />
+        <App onReady={finishBoot} />
         <Toaster
           position="top-right"
           offset={{ top: 'var(--toast-top-offset)', right: 24 }}
@@ -51,18 +53,3 @@ createRoot(rootElement).render(
     </ErrorBoundary>
   </StrictMode>,
 )
-
-if (rootElement.hasAttribute('data-first-load')) {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        document.documentElement.setAttribute('data-app-ready', '')
-        window.setTimeout(() => {
-          rootElement.removeAttribute('data-first-load')
-          document.documentElement.removeAttribute('data-app-ready')
-          document.getElementById('app-entry-cover')?.remove()
-        }, 520)
-      }, 60)
-    })
-  })
-}
