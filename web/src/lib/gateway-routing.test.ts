@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { expect, test } from "vitest"
 import { normalizeHas, providerMatches, recommendationProviders, recommendedHas, routingConfigKey } from "./gateway-routing"
 import type { GatewayCatalog } from "@/types"

@@ -5,7 +5,16 @@ on:
     branches:
       - main
     paths:
-      - "web/**"
+      - "web/src/**"
+      - "!web/src/**/*.test.*"
+      - "!web/src/**/*.spec.*"
+      - "web/public/**"
+      - "web/index.html"
+      - "web/package.json"
+      - "web/package-lock.json"
+      - "web/vite.config.ts"
+      - "web/tsconfig*.json"
+      - ".github/workflows/sync-dist.yml"
   workflow_dispatch:
 
 permissions:

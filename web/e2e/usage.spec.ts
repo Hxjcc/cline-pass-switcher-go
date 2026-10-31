@@ -32,7 +32,6 @@ test("statistics follow history, support combined filters, and stay within phone
   expect(tabs.indexOf("Token 统计")).toBe(tabs.indexOf("请求历史") + 1)
   await expect(page.getByRole("img", { name: "每日输入与输出 Token 用量趋势" })).toBeVisible()
   await expect(page.getByText("25.6M", { exact: true }).first()).toBeVisible()
-  await page.screenshot({ path: test.info().outputPath("token-statistics-desktop.png"), fullPage: true })
   for (const [label, value] of [["模型", "cline-pass/deepseek-v4.1-flash-1017"], ["账号", "主账号"], ["代理密钥", "Codex"]]) {
     await page.getByRole("combobox", { name: label, exact: true }).click()
     await page.getByRole("option", { name: value, exact: true }).click()
@@ -51,11 +50,11 @@ test("statistics follow history, support combined filters, and stay within phone
   await expect.poll(() => lastQuery.get("model")).toBeNull()
   await page.getByRole("button", { name: "切换到暗色", exact: true }).click()
   await page.mouse.move(10, 1000)
-  await page.screenshot({ path: test.info().outputPath("token-statistics-dark.png"), fullPage: true, animations: "disabled" })
   await page.setViewportSize({ width: 390, height: 844 })
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
+  // ResizeObserver updates the chart after the viewport change. Wait for
+  // that layout condition instead of relying on a screenshot's delay.
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
   await expect(page.getByRole("button", { name: "应用筛选", exact: true })).toBeVisible()
-  await page.screenshot({ path: test.info().outputPath("token-statistics-mobile.png"), fullPage: true })
 })
 
 test("invalid dates do not replace the statistics and empty results remain understandable", async ({ page }) => {

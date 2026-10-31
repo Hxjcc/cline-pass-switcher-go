@@ -35,17 +35,6 @@ async function openDetails() {
   return screen.findByRole("dialog", { name: "请求详情" })
 }
 
-test("the main row keeps the raw model, one-line token pair, and a dedicated cache percentage", () => {
-  renderPanel()
-  expect(screen.getByRole("columnheader", { name: "原始请求模型" })).toBeTruthy()
-  expect(screen.getByRole("columnheader", { name: "首字 / 总耗时" })).toBeTruthy()
-  expect(within(row()).getByText("94.0%")).toBeTruthy()
-  expect(within(row()).getByText("4.2s / 18.2s")).toBeTruthy()
-  expect(screen.queryByText(entry.canonical!)).toBeNull()
-  expect(screen.queryByText("思考 5.7k")).toBeNull()
-  expect(screen.queryByText(/网关 \$/)).toBeNull()
-})
-
 test("clicking a cache cell opens full details, and Escape closes them", async () => {
   renderPanel()
   fireEvent.click(within(row()).getByText("94.0%"))
@@ -113,8 +102,16 @@ test("unknown column keys are ignored and the model cannot be removed by saved p
   expect(screen.getAllByRole("columnheader")).toHaveLength(3)
 })
 
-test("restored common fields show requested-to-upstream effort and the request type", () => {
-  renderPanel([{ ...entry, kind: "responses", requestedEffort: "xhigh", effort: "max" }])
+test("request summary keeps common fields and persists optional details", async () => {
+  const routed = { ...entry, kind: "responses", requestedEffort: "xhigh", effort: "max" }
+  renderPanel([routed])
+  expect(screen.getByRole("columnheader", { name: "原始请求模型" })).toBeTruthy()
+  expect(screen.getByRole("columnheader", { name: "首字 / 总耗时" })).toBeTruthy()
+  expect(within(row()).getByText("94.0%")).toBeTruthy()
+  expect(within(row()).getByText("4.2s / 18.2s")).toBeTruthy()
+  expect(screen.queryByText(entry.canonical!)).toBeNull()
+  expect(screen.queryByText("思考 5.7k")).toBeNull()
+  expect(screen.queryByText(/网关 \$/)).toBeNull()
   expect(screen.getByRole("columnheader", { name: "思考强度" })).toBeTruthy()
   expect(screen.getByRole("columnheader", { name: "类型 / 方式" })).toBeTruthy()
   expect(within(row()).getByText("xhigh → max").title).toContain("实际转发给上游 max")
@@ -122,10 +119,6 @@ test("restored common fields show requested-to-upstream effort and the request t
   expect(screen.queryByRole("columnheader", { name: "思考 Token" })).toBeNull()
   expect(screen.queryByRole("columnheader", { name: "背后模型" })).toBeNull()
   expect(screen.queryByRole("columnheader", { name: "网关市价" })).toBeNull()
-})
-
-test("optional columns expose full model, reasoning usage, and gateway price and persist", async () => {
-  renderPanel()
   fireEvent.click(screen.getByRole("button", { name: "显示列" }))
   for (const label of ["思考 Token", "背后模型", "网关市价"]) {
     fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: label }))
@@ -136,7 +129,7 @@ test("optional columns expose full model, reasoning usage, and gateway price and
   expect(row().querySelector('[data-history-column="gatewayCost"]')?.textContent).toBe("$0.0085 ×5.0")
   await waitFor(() => expect(JSON.parse(localStorage.getItem(HISTORY_COLUMNS_STORAGE)!)).toContain("gatewayCost"))
   cleanup()
-  renderPanel()
+  renderPanel([routed])
   expect(screen.getByRole("columnheader", { name: "网关市价" })).toBeTruthy()
   expect(within(row()).getByText(entry.canonical!)).toBeTruthy()
 })

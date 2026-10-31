@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,33 +99,6 @@ func TestUnknownAPIRoutesNeverServeSPA(t *testing.T) {
 	server.ServeHTTP(w, localRequest("GET", "/dashboard", nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "<!doctype") {
 		t.Fatal("SPA navigation broken")
-	}
-}
-
-type repeatedByte struct{ value byte }
-
-func (r repeatedByte) Read(p []byte) (int, error) {
-	for i := range p {
-		p[i] = r.value
-	}
-	return len(p), nil
-}
-
-func TestOversizeJSONReturns413(t *testing.T) {
-	_, server := newTestServer(t)
-	for _, prefix := range []string{`{"model":"`, `{}`} {
-		value := byte('x')
-		if prefix == `{}` {
-			value = ' '
-		}
-		body := io.MultiReader(strings.NewReader(prefix), io.LimitReader(repeatedByte{value}, maxRequestBytes+1))
-		r := localRequest(http.MethodPost, "/api/probe", body)
-		r.ContentLength = -1 // Also cover chunked bodies without a trustworthy length.
-		w := httptest.NewRecorder()
-		server.ServeHTTP(w, r)
-		if w.Code != 413 {
-			t.Fatalf("prefix %q: %d %s", prefix, w.Code, w.Body.String())
-		}
 	}
 }
 

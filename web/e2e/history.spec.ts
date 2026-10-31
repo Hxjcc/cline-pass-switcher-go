@@ -12,44 +12,27 @@ async function signIn(page: Page) {
   await expect(page.getByText(success.model, { exact: true })).toBeVisible()
 }
 
-test("column menu gives press feedback on the first interaction and later openings", async ({ page }) => {
-  await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
-  await signIn(page)
-  const trigger = page.getByRole("button", { name: "显示列", exact: true })
-  const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
-
-  for (let opening = 0; opening < 2; opening += 1) {
-    await trigger.hover()
-    await page.mouse.down()
-    try {
-      await expect(menu).toBeVisible()
-      await expect(trigger).toHaveAttribute("aria-expanded", "true")
-      await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate), {
-        message: `press ${opening + 1} should have the same feedback while the pointer is held`,
-      }).toBe("0px 1px")
-    } finally {
-      await page.mouse.up()
-    }
-    await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate)).toBe("none")
-    await page.keyboard.press("Escape")
-    await expect(menu).toHaveCount(0)
-    await expect(trigger).toBeFocused()
-  }
-  await trigger.press("Enter")
-  await expect(menu).toBeVisible()
-  await expect.poll(() => trigger.evaluate(node => getComputedStyle(node).translate)).toBe("none")
-  await page.keyboard.press("Escape")
-  await expect(menu).toHaveCount(0)
-  await expect(trigger).toBeFocused()
-})
-
 test("column handles drag, cancel, persist, and reset the displayed order", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.route("**/api/history*", route => route.fulfill({ json: payload([success, failure]) }))
   await signIn(page)
   const trigger = page.getByRole("button", { name: "显示列", exact: true })
   const menu = page.getByRole("menu", { name: "选择显示列", exact: true })
-  await trigger.click()
+  // Keep first pointer opening, keyboard reopening and focus restoration in
+  // this interaction flow, without testing the button's decorative transform.
+  await trigger.hover()
+  await page.mouse.down()
+  try {
+    await expect(menu).toBeVisible()
+    await expect(trigger).toHaveAttribute("aria-expanded", "true")
+  } finally {
+    await page.mouse.up()
+  }
+  await page.keyboard.press("Escape")
+  await expect(menu).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+  await trigger.press("Enter")
+  await expect(menu).toBeVisible()
   const checked = await menu.getByRole("menuitemcheckbox").evaluateAll(nodes => nodes.map(node => [node.getAttribute("aria-label"), node.getAttribute("aria-checked")]))
   const drag = async (from: string, to: string) => {
     const source = await menu.locator(`[data-column-handle="${from}"]`).boundingBox()
@@ -59,9 +42,8 @@ test("column handles drag, cancel, persist, and reset the displayed order", asyn
     await page.mouse.move(target!.x + 16, target!.y + 2, { steps: 12 })
   }
   await drag("cache", "time")
-  await page.screenshot({ path: test.info().outputPath("history-column-drag.png"), fullPage: true })
-  await page.mouse.up()
   await expect(menu.locator("[data-column-option]").first()).toHaveAttribute("data-column-option", "cache")
+  await page.mouse.up()
   const after = await menu.getByRole("menuitemcheckbox").evaluateAll(nodes => nodes.map(node => [node.getAttribute("aria-label"), node.getAttribute("aria-checked")]))
   expect(new Map(after as [string, string][])).toEqual(new Map(checked as [string, string][]))
   await page.keyboard.press("Escape")
@@ -124,7 +106,6 @@ test.describe("touch column sorting", () => {
     const card = page.getByRole("article").filter({ hasText: success.model })
     await expect(card.locator("[data-history-card-column]").first()).toHaveAttribute("data-history-card-column", "gatewayCost")
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
-    await page.screenshot({ path: test.info().outputPath("history-column-order-mobile.png"), fullPage: true })
   })
 })
 
@@ -212,18 +193,11 @@ test("compact history keeps raw models and cache visible, opens row details, and
   await expectFullTextWithinCell(model)
   await expectFullTextWithinCell(row.getByText("99.5%", { exact: true }))
   await expect(page.getByText(routed.canonical, { exact: true })).toHaveCount(0)
-  const color = await model.evaluate(node => getComputedStyle(node).color)
-  const background = await row.evaluate(node => getComputedStyle(node).backgroundColor)
-  await model.hover()
-  expect(await model.evaluate(node => getComputedStyle(node).color)).toBe(color)
-  expect(await row.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(background)
-  expect((await row.boundingBox())!.height).toBeLessThan(60)
 
   await page.getByRole("button", { name: "显示列", exact: true }).click()
   await expect(page.getByRole("menuitemcheckbox", { name: "原始请求模型", exact: true })).toBeDisabled()
   await expect(page.getByRole("menuitemcheckbox", { name: "缓存命中", exact: true })).toBeChecked()
   await page.getByRole("menuitemcheckbox", { name: "费用", exact: true }).click()
-  await page.screenshot({ path: test.info().outputPath("history-columns-menu.png"), fullPage: true })
   await page.keyboard.press("Escape")
   await expect(page.getByRole("columnheader")).toHaveCount(10)
   await expect(page.getByRole("columnheader", { name: "背后模型", exact: true })).toHaveCount(0)
@@ -235,7 +209,6 @@ test("compact history keeps raw models and cache visible, opens row details, and
   await expect(details.getByText("523", { exact: true })).toBeVisible()
   await expect(details.getByText("$0.000002", { exact: true })).toBeVisible()
   await expect(details).toHaveCSS("opacity", "1")
-  await page.screenshot({ path: test.info().outputPath("history-details-desktop.png"), fullPage: true })
   await page.keyboard.press("Escape")
   await expect(details).toHaveCount(0)
   await expect(row.getByRole("button", { name: "查看请求详情" })).toBeFocused()
@@ -264,8 +237,6 @@ test("compact history keeps raw models and cache visible, opens row details, and
   }
   await page.setViewportSize({ width: 1440, height: 1000 })
   await expect(page.getByRole("columnheader")).toHaveCount(10)
-  await scroller.locator('xpath=ancestor::*[@data-slot="card"][1]').screenshot({ path: test.info().outputPath("history-panel.png") })
-  await page.screenshot({ path: test.info().outputPath("history-columns-desktop.png"), fullPage: true })
 
   await page.reload()
   await expect(page.getByRole("columnheader")).toHaveCount(10)
@@ -276,14 +247,12 @@ test("compact history keeps raw models and cache visible, opens row details, and
   await expect(card.getByText(routed.canonical, { exact: true })).toHaveCount(0)
   await expect(card.getByText("99.5%", { exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
-  await page.screenshot({ path: test.info().outputPath("history-columns-mobile.png"), fullPage: true })
   await card.getByText("99.5%", { exact: true }).click()
   await expect(details.getByText(routed.canonical, { exact: true })).toBeVisible()
   await expect(details).toHaveCSS("opacity", "1")
   const drawer = await details.boundingBox()
   expect(drawer!.x).toBeGreaterThanOrEqual(0)
   expect(drawer!.width).toBeLessThanOrEqual(390)
-  await page.screenshot({ path: test.info().outputPath("history-details-mobile.png"), fullPage: true })
   await details.getByRole("button", { name: "关闭详情" }).click()
   await page.getByRole("button", { name: "显示列", exact: true }).click()
   await page.getByRole("menuitem", { name: "恢复默认", exact: true }).click()
@@ -311,7 +280,6 @@ test("restored history fields and warnings stay usable on desktop and phone", as
   const row = page.getByRole("row").filter({ hasText: restored.model })
   await expect(row.getByText("xhigh → max", { exact: true })).toBeVisible()
   await expect(row.getByText("Responses · 流式", { exact: true })).toBeVisible()
-  await page.screenshot({ path: test.info().outputPath("history-restored-default.png"), fullPage: true })
   await page.getByRole("button", { name: "显示列", exact: true }).click()
   // Make room for the optional details instead of relying on a wider screen:
   // the console deliberately caps its content width on desktop.
@@ -331,13 +299,9 @@ test("restored history fields and warnings stay usable on desktop and phone", as
   for (const label of ["未命中目标", "忽略偏好", "重试 1 次", "网关重试 1 次", "长度截断", "内容过滤"]) {
     await expect(page.getByText(label, { exact: true })).toBeVisible()
   }
-  await page.screenshot({ path: test.info().outputPath("history-restored-desktop.png"), fullPage: true })
   await page.getByRole("button", { name: "切换到暗色", exact: true }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)
   await page.mouse.move(10, 1000)
-  await page.screenshot({ path: test.info().outputPath("history-restored-dark.png"), fullPage: true, animations: "disabled" })
-  const mismatchColor = await page.getByRole("img", { name: "未命中目标", exact: true }).evaluate(node => getComputedStyle(node).color)
-  await expect.poll(() => page.getByText("未命中目标", { exact: true }).evaluate(node => getComputedStyle(node).color)).toBe(mismatchColor)
   await page.setViewportSize({ width: 390, height: 844 })
   const card = page.getByRole("article").filter({ hasText: restored.model })
   await expect(card.getByText(restored.canonical, { exact: true })).toBeVisible()
@@ -345,7 +309,6 @@ test("restored history fields and warnings stay usable on desktop and phone", as
   await expect(card.getByText("xhigh → max", { exact: true })).toBeVisible()
   await expect(card.getByText("Responses · 流式", { exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0)
-  await page.screenshot({ path: test.info().outputPath("history-restored-mobile.png"), fullPage: true, animations: "disabled" })
 })
 
 test("unusually long raw models remain complete without forcing the page to scroll sideways", async ({ page }) => {

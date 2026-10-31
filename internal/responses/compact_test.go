@@ -50,8 +50,12 @@ internal/parse.go`
 	}
 }
 
-func TestCompactionInstructionsListTheAnchoredSections(t *testing.T) {
-	for _, section := range compactionSections {
+func TestCompactionInstructionsKeepTheFourRequiredSections(t *testing.T) {
+	want := []string{"Objective", "Work State", "Next Move", "Relevant Files"}
+	if !slices.Equal(compactionSections, want) {
+		t.Fatalf("compaction sections changed: %#v", compactionSections)
+	}
+	for _, section := range want {
 		if !strings.Contains(compactionInstructions, "## "+section) {
 			t.Fatalf("compaction instructions omit the %q heading", section)
 		}

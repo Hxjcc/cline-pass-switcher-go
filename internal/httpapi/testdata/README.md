@@ -26,7 +26,17 @@ sent, instead of against a stream somebody imagined.
 `internal/httpapi/stream_fixture_test.go` replays the body at four chunk sizes
 (the captured split, one write, one byte per write, seven bytes per write) and
 asserts the emitted Responses event sequence, the assembled text and the usage
-are identical across all of them. A second test walks **every** byte offset as a
-split point - about 8700 of them - because that is the property a stream reader
-has to hold. A third corrupts one event and expects the turn to fail with a
-recorded reason.
+are identical across all of them. The adapter also gets a bytewise replay and
+two-chunk replays around SSE markers, delimiters, usage metadata and UTF-8
+continuation bytes. These checks remain in the normal test suite.
+
+The full sweep of **every** byte offset (about 8700 split points) runs in the
+`Protocol fuzz` workflow on protocol changes, weekly, or by manual dispatch.
+It can also be run locally without any upstream calls:
+
+```bash
+CLINE_EXHAUSTIVE_STREAM_SPLITS=1 go test ./internal/httpapi -run '^TestCapturedStreamExhaustiveSplitPoints$' -count=1
+```
+
+The corrupted-event test remains in the normal suite and expects the turn to
+fail with a recorded reason.

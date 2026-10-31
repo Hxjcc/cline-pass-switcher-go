@@ -1,0 +1,68 @@
+name: Protocol fuzz
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "internal/sse/**"
+      - "internal/responses/**"
+      - "internal/httpapi/stream*.go"
+      - "internal/httpapi/responses*.go"
+      - "internal/httpapi/testdata/**"
+      - "internal/upstream/service.go"
+      - "internal/upstream/helpers.go"
+      - "internal/upstream/idle.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/protocol-fuzz.yml"
+  pull_request:
+    paths:
+      - "internal/sse/**"
+      - "internal/responses/**"
+      - "internal/httpapi/stream*.go"
+      - "internal/httpapi/responses*.go"
+      - "internal/httpapi/testdata/**"
+      - "internal/upstream/service.go"
+      - "internal/upstream/helpers.go"
+      - "internal/upstream/idle.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/protocol-fuzz.yml"
+  schedule:
+    # Monday 03:00 in Asia/Shanghai.
+    - cron: "0 19 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-fuzz-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Exhaustive captured-stream split points
+        env:
+          CLINE_EXHAUSTIVE_STREAM_SPLITS: "1"
+        run: go test ./internal/httpapi -run '^TestCapturedStreamExhaustiveSplitPoints$' -count=1
+      - name: Fuzz protocol boundaries
+        run: |
+          go test ./internal/sse -run '^$' -fuzz '^FuzzParser$' -fuzztime=15s -parallel=2
+          go test ./internal/responses -run '^$' -fuzz '^FuzzResponsesConversion$' -fuzztime=15s -parallel=2
+          go test ./internal/responses -run '^$' -fuzz '^FuzzCompactionEnvelope$' -fuzztime=15s -parallel=2
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: protocol-fuzz-failures
+          path: |
+            internal/sse/testdata/fuzz
+            internal/responses/testdata/fuzz
+          if-no-files-found: ignore

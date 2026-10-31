@@ -9,6 +9,8 @@ export default defineConfig({
     // vmThreads was benchmarked; forks was faster on the current suite.
     // Recheck with --pool=vmThreads when the suite or runtime changes.
     pool: "forks",
+    // Pure logic tests opt into node per file; components and browser helpers
+    // retain jsdom without sharing globals or turning off isolation.
     environment: "jsdom",
     restoreMocks: true,
     clearMocks: true,

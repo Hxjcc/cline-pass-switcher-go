@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,9 +27,12 @@ jobs:
         if: runner.os == 'Linux'
         run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
-      - run: go test ./...
-      - if: runner.os == 'Linux'
-        run: go test -race ./...
+      - name: Windows tests
+        if: runner.os == 'Windows'
+        run: go test ./...
+      - name: Linux tests, race and coverage
+        if: runner.os == 'Linux'
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
       - name: Static analysis
         if: runner.os == 'Linux'
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
@@ -34,15 +42,8 @@ jobs:
       - name: Coverage (minimum 75 percent)
         if: runner.os == 'Linux'
         run: |
-          go test ./... -coverprofile=coverage.out
           go tool cover -func=coverage.out | tee coverage.txt
           awk '/^total:/ { found=1; if ($3+0 < 75) exit 1 } END { if (!found) exit 1 }' coverage.txt
-      - name: Fuzz protocol boundaries
-        if: runner.os == 'Linux'
-        run: |
-          go test ./internal/sse -run '^$' -fuzz '^FuzzParser$' -fuzztime=15s -parallel=2
-          go test ./internal/responses -run '^$' -fuzz '^FuzzResponsesConversion$' -fuzztime=15s -parallel=2
-          go test ./internal/responses -run '^$' -fuzz '^FuzzCompactionEnvelope$' -fuzztime=15s -parallel=2
 
   frontend:
     runs-on: ubuntu-latest

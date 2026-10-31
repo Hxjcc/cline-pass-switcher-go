@@ -1,8 +1,10 @@
 # 开发说明
 
-CI 在现有格式检查、vet、测试和 race 检查之外运行 staticcheck、govulncheck，并要求 Go 总语句覆盖率至少 75%。SSE、Responses 转换及压缩 envelope 各运行 15 秒 fuzz；本地可使用 `go test ./internal/responses -run '^$' -fuzz '^FuzzResponsesConversion$' -fuzztime=30s`，另两个目标为 `FuzzParser` 和 `FuzzCompactionEnvelope`。
+常规 CI 保留格式检查、vet、staticcheck、govulncheck 和 Go 总语句覆盖率至少 75% 的门槛。Linux 在一次测试执行中同时检查 race 和 coverage，Windows 保留普通测试。SSE、Responses 转换及压缩 envelope 的完整 fuzz 放在独立的 `Protocol fuzz` workflow，仅在相关协议文件变更、每周一北京时间 03:00 或手动触发时运行；普通 Go 测试仍检查 fuzz 种子。本地可使用 `go test ./internal/responses -run '^$' -fuzz '^FuzzResponsesConversion$' -fuzztime=30s`，另两个目标为 `FuzzParser` 和 `FuzzCompactionEnvelope`。
 
 前端显式开启 TypeScript strict。Vitest 对比过 `vmThreads`，当前测试集在本机使用 `forks` 更快，因此保留 `forks`；可通过 `npm test -- --pool=vmThreads` 重新评估。页签代码分包后在登录界面起按浏览器空闲时间预加载，悬停或聚焦标签时优先加载目标页；预加载只导入代码，不挂载页面或读取管理数据。已访问页保留组件状态，隐藏的请求历史页暂停自动刷新，代码尚未就绪时保留当前页面直到切换完成。构建后需要一并提交 `internal/webassets/dist/`。入口、上游服务和流式状态机保持现有职责，新增入口限制、工具 Schema、上下文 usage 与历史边界逻辑分别放在独立文件中。
+
+纯逻辑测试逐文件使用 `@vitest-environment node`；组件、存储和浏览器调度相关测试保留 jsdom，并继续隔离全局变量。Playwright 仅在失败时自动截图并保留 trace，常规用例不生成没有图像比对断言的截图。
 
 首屏进入动画等首次数据读取结束或登录界面就绪，并且当前页的 Suspense 内容已提交后再启动。刷新时保留只读的旧画面，直到新页面就绪；启动期间再次刷新也不会把隐藏的占位内容写入画面缓存。渲染失败会立即释放启动遮罩，显示错误恢复页。
 
@@ -72,6 +74,14 @@ Vite 开发服务器把 `/api` 和 `/v1` 转发到 `http://127.0.0.1:3123`，所
 | `npm test` | `web` | Vitest 单元测试 |
 | `npm run test:e2e` | `web` | Playwright 端到端测试：用临时数据目录和固定密钥启动真实的网关，在 Chromium 中操作控制台。首次运行前需要 `npx playwright install chromium`。 |
 
+本地修改优先只运行受影响的用例，例如 `go test ./internal/httpapi -run '^TestIngress'`、`npm test -- src/components/history-panel.test.tsx` 或 `npm run test:e2e -- e2e/history.spec.ts`。不相关的全量检查交给 CI，避免为每次小改动重复构建、跑全套及录屏。
+
+真实 SSE 样本在常规测试中检查整块、逐字节和关键协议/UTF-8 断点；遍历全部切分点由 `Protocol fuzz` workflow 执行，也可单独开启，不访问真实上游：
+
+```bash
+CLINE_EXHAUSTIVE_STREAM_SPLITS=1 go test ./internal/httpapi -run '^TestCapturedStreamExhaustiveSplitPoints$' -count=1
+```
+
 有两个默认跳过的长时间测试，只在设置了环境变量时运行，也不访问真实上游：
 
 ```bash
@@ -112,13 +122,13 @@ Remove-Item Env:CLINE_LIVE_LONG_COMPACTION, Env:CLINE_TEST_TIMEOUT_SECONDS, Env:
 
 ## CI
 
-每次推送和拉取请求都会运行 `.github/workflows/ci.yml` 中的四个任务：
+主分支推送和拉取请求运行 `.github/workflows/ci.yml` 中的四个任务。功能分支不再同时运行 push 和 PR 两套相同检查；同一分支或 PR 的新提交会取消旧运行。PR 检查仍验证合并结果。
 
 | 任务 | 内容 |
 |---|---|
-| `go` | 在 Ubuntu 和 Windows 上运行 `go vet` 和 `go test`；Ubuntu 上额外运行 `go test -race`。 |
+| `go` | 两个平台运行 vet；Ubuntu 用一次 `go test -race -covermode=atomic -coverprofile=coverage.out ./...` 完成测试、竞态和覆盖率检查，再检查 75% 门槛；Windows 运行普通测试。 |
 | `frontend` | `npm run lint`、`npm test`、`npm run build`，然后检查 `internal/webassets/dist` 与提交的内容一致。 |
-| `e2e` | Playwright 端到端测试。 |
+| `e2e` | 先构建当前提交的前端，再运行 Playwright，确保依赖 PR 不会测到旧 dist。 |
 | `container` | 构建 Docker 镜像，检查容器以 UID 10001 运行且 `/data` 可写。 |
 
 ## 依赖更新
@@ -130,6 +140,8 @@ Dependabot 每月检查一次 Go、npm 和 GitHub Actions 依赖；`minor` / `pa
 人工提交的前端改动如果改变了打包结果，合并前必须在 `web` 目录执行
 `npm ci` 和 `npm run build`，并把 `internal/webassets/dist` 一起提交；
 `frontend` 任务会检查内嵌产物是否与源码一致。
+
+只修改测试或 Playwright/Vitest 配置不会改变生产前端，不需要为此重建 dist。`Sync embedded frontend` 也只监听生产源码、静态资源、依赖和构建配置，测试、E2E 与文档改动不会单独触发同步。
 
 Dependabot 的 npm PR 只要求构建和测试通过，不要求分支里预先提交 dist；
 合并到 `main` 后，`Sync embedded frontend` workflow 会自动重建并提交

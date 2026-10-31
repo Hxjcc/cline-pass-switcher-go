@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Hxjcc/cline-pass-switcher-go/internal/model"
 	responsesbridge "github.com/Hxjcc/cline-pass-switcher-go/internal/responses"
@@ -303,11 +306,8 @@ func feedCapturedBody(t *testing.T, context *responsesbridge.Context, body []byt
 	return adapterFingerprint{types: strings.Join(types, ","), text: text.String(), usage: usage}
 }
 
-// The replay test covers the chunk sizes an operator can reproduce; this walks
-// every boundary the network could have produced. A stream reader that keeps
-// state where it should (buffered partial events, half a multi-byte character)
-// gives the identical turn at all 8700 of them.
-func TestCapturedStreamIsStableAtEverySplitPoint(t *testing.T) {
+func capturedStreamReference(t *testing.T) (*responsesbridge.Context, []byte, adapterFingerprint) {
+	t.Helper()
 	fixture := loadUpstreamStreamFixture(t)
 	body := []byte(fixture.Text)
 	_, context, err := responsesbridge.ToChat(map[string]any{
@@ -322,6 +322,71 @@ func TestCapturedStreamIsStableAtEverySplitPoint(t *testing.T) {
 	if reference.text != "ok" || reference.usage != "37/19/17" {
 		t.Fatalf("whole-body run is not the capture: %+v", reference)
 	}
+	return context, body, reference
+}
+
+// Daily checks cover bytewise delivery and meaningful SSE/UTF-8 boundaries
+// without replaying the complete adapter at every byte offset. The full
+// two-chunk split sweep lives in Protocol fuzz CI.
+func TestCapturedStreamIsStableAtKeyBoundaries(t *testing.T) {
+	context, body, reference := capturedStreamReference(t)
+	bytewise := make([]int, 0, len(body)-1)
+	for cut := 1; cut < len(body); cut++ {
+		bytewise = append(bytewise, cut)
+	}
+	if got := feedCapturedBody(t, context, body, bytewise); got != reference {
+		t.Fatalf("bytewise delivery changed the turn:\n got %+v\nwant %+v", got, reference)
+	}
+	positions := map[int]bool{}
+	mark := func(cut int) {
+		if cut >= 0 && cut <= len(body) {
+			positions[cut] = true
+		}
+	}
+	mark(0)
+	mark(len(body))
+	for _, marker := range []string{"data:", "\n\n", "\r\n\r\n", "[DONE]", `"usage"`, `"provider_metadata"`} {
+		for from := 0; from < len(body); {
+			index := bytes.Index(body[from:], []byte(marker))
+			if index < 0 {
+				break
+			}
+			start := from + index
+			for _, cut := range []int{start - 1, start, start + 1, start + len(marker) - 1, start + len(marker), start + len(marker) + 1} {
+				mark(cut)
+			}
+			from = start + len(marker)
+		}
+	}
+	seenWidths := map[int]bool{}
+	for offset := 0; offset < len(body); {
+		_, width := utf8.DecodeRune(body[offset:])
+		if width > 1 && !seenWidths[width] {
+			for part := 1; part < width; part++ {
+				mark(offset + part)
+			}
+			seenWidths[width] = true
+		}
+		offset += width
+	}
+	cuts := make([]int, 0, len(positions))
+	for cut := range positions {
+		cuts = append(cuts, cut)
+	}
+	slices.Sort(cuts)
+	for _, cut := range cuts {
+		if got := feedCapturedBody(t, context, body, []int{cut}); got != reference {
+			t.Fatalf("splitting at byte %d changed the turn:\n got %+v\nwant %+v", cut, got, reference)
+		}
+	}
+	t.Logf("checked bytewise delivery and %d key cut positions", len(cuts))
+}
+
+func TestCapturedStreamExhaustiveSplitPoints(t *testing.T) {
+	if os.Getenv("CLINE_EXHAUSTIVE_STREAM_SPLITS") != "1" {
+		t.Skip("set CLINE_EXHAUSTIVE_STREAM_SPLITS=1 to traverse every captured-stream split point")
+	}
+	context, body, reference := capturedStreamReference(t)
 	for split := 0; split <= len(body); split++ {
 		got := feedCapturedBody(t, context, body, []int{split})
 		if got != reference {

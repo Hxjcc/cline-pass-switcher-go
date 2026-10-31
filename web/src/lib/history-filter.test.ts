@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { expect, test } from "vitest"
 
 import { historyEntryMatches, historyQueryKey } from "@/lib/history-filter"

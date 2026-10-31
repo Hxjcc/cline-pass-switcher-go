@@ -1959,14 +1959,6 @@ func TestCompactionTriggerResponseHoldsOneCompactionItem(t *testing.T) {
 	}
 }
 
-func TestCompactionInstructionsAnchorTheFourSections(t *testing.T) {
-	for _, heading := range []string{"## Objective", "## Work State", "## Next Move", "## Relevant Files"} {
-		if !strings.Contains(compactionInstructions, heading) {
-			t.Fatalf("compaction template lost %q:\n%s", heading, compactionInstructions)
-		}
-	}
-}
-
 func TestCompactionEnvelopeKeepsRecentAndReadsLegacyText(t *testing.T) {
 	legacy := "ocx1:" + base64.StdEncoding.EncodeToString([]byte("plain summary"))
 	payload, ok := DecodeCompactionEnvelope(legacy)

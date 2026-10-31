@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { expect, test } from "vitest"
 import { formatUsageTokens, usageDate, usagePath, validateUsageFilter } from "./usage-statistics"
 

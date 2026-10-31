@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { expect, test } from "vitest"
 import { canExploreGateway, discoveryLabel } from "./smart-routing"
 import type { DefaultRouteProbe, RoutingDiscovery, SubscriptionModel } from "@/types"

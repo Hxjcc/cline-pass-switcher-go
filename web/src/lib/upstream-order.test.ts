@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { expect, test } from "vitest"
 import { orderedUpstreams } from "./upstream-order"
 import type { ModelConfig, ModelMeta, SubscriptionModel } from "@/types"

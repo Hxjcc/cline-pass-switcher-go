@@ -43,7 +43,7 @@ func limitedTestServer(t *testing.T) *Server {
 }
 
 func TestIngressRejectsOversizedKnownAndChunkedBodies(t *testing.T) {
-	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/responses/compact"} {
+	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/responses/compact", "/api/probe"} {
 		server := limitedTestServer(t)
 		r := localRequest("POST", path, nil)
 		r.Body = io.NopCloser(unreadableBody{})
@@ -53,12 +53,16 @@ func TestIngressRejectsOversizedKnownAndChunkedBodies(t *testing.T) {
 		if w.Code != 413 {
 			t.Fatalf("%s Content-Length: %d", path, w.Code)
 		}
-		r = localRequest("POST", path, strings.NewReader(`{"model":"test","input":"`+strings.Repeat("x", 256)+`"}`))
-		r.ContentLength = -1
-		w = httptest.NewRecorder()
-		server.ServeHTTP(w, r)
-		if w.Code != 413 {
-			t.Fatalf("%s chunked: %d %s", path, w.Code, w.Body)
+		// Include an unterminated field and valid JSON with excessive trailing
+		// whitespace. The second case catches decoders that stop after {}.
+		for _, body := range []string{`{"model":"` + strings.Repeat("x", 256), `{}` + strings.Repeat(" ", 256)} {
+			r = localRequest("POST", path, strings.NewReader(body))
+			r.ContentLength = -1
+			w = httptest.NewRecorder()
+			server.ServeHTTP(w, r)
+			if w.Code != 413 {
+				t.Fatalf("%s chunked: %d %s", path, w.Code, w.Body)
+			}
 		}
 	}
 }
